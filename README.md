@@ -15,9 +15,9 @@
 
 </div>
 
-Estuary is a data pipeline platform that combines batch and real-time data. It offers hundreds of low- and no-code connectors, transforms and aggregates data, and powers real-time applications.
-
 The Estuary Terraform provider manages your Estuary captures (sources) and materializations (destinations) as code.
+
+Estuary is a data pipeline platform that combines batch and real-time data. It offers hundreds of low- and no-code connectors, transforms and aggregates data, and powers real-time applications.
 
 ## Table of Contents
 
@@ -34,7 +34,7 @@ The Estuary Terraform provider manages your Estuary captures (sources) and mater
 - [Multi-Environment Best Practices](#multi-environment-best-practices)
   - [Define Pipelines Once](#define-pipelines-once)
   - [Give Each Environment Its Own State](#give-each-environment-its-own-state)
-  - [Isolate Catalogs with `tenant`](#isolate-catalogs-with-tenant)
+  - [Separate Environments with `tenant`](#separate-environments-with-tenant)
   - [Keep Secrets Out of Code](#keep-secrets-out-of-code)
   - [Share Pipelines with Modules](#share-pipelines-with-modules)
 
@@ -86,7 +86,7 @@ Every attribute but `flowctl_path` can also be set through an environment variab
 | Attribute | Environment Variable | Description |
 |---|---|---|
 | `token` | `FLOW_AUTH_TOKEN` | **Required.** Estuary refresh token, generated in the dashboard under Admin > [CLI-API](https://dashboard.estuary.dev/admin/api). Access tokens also work but expire, so use a refresh token in CI/CD. |
-| `tenant` | `ESTUARY_TENANT` | Prefix added to every capture and materialization name that doesn't already start with it (e.g., `acmeCo/`). Collection names, such as a binding `target` or `source`, aren't prefixed. |
+| `tenant` | `ESTUARY_TENANT` | Prefix added to every capture and materialization name that doesn't already start with it, such as `acmeCo/` or `acmeCo/dev/`. A missing trailing slash is added. Collection names you write in a binding `target` or `source` aren't prefixed, see [Separate Environments with `tenant`](#separate-environments-with-tenant). |
 | `data_plane` | `ESTUARY_DATA_PLANE` | Data plane the connectors run in (e.g., `ops/dp/public/aws-eu-west-1-c2`). Required for BYOC or a non-default public data plane. Defaults to Estuary's default data plane. |
 | `flowctl_path` | — | Path to the `flowctl` binary. Defaults to `flowctl` on `PATH`. |
 | `backend` | `ESTUARY_BACKEND` | How the provider reaches Estuary. Defaults to `flowctl`, the only backend available for now. |
@@ -95,7 +95,7 @@ Every attribute but `flowctl_path` can also be set through an environment variab
 
 ## Quick Start
 
-A pipeline that captures two MongoDB collections and materializes each one into a PostgreSQL table:
+A capture that reads two MongoDB collections into Estuary:
 
 ```hcl
 provider "estuary" {
@@ -107,13 +107,8 @@ variable "mongodb_password" {
   sensitive = true
 }
 
-variable "postgres_password" {
-  type      = string
-  sensitive = true
-}
-
 resource "estuary_source_mongodb" "shop" {
-  name = "shop"
+  name = "mongodb"
 
   config = {
     address  = "mongodb+srv://cluster0.abc123.mongodb.net?authSource=admin"
@@ -127,39 +122,30 @@ resource "estuary_source_mongodb" "shop" {
     { resource = { database = "shop", collection = "orders" } },
   ]
 }
-
-resource "estuary_materialization_postgres" "shop" {
-  name = "shop"
-
-  config = {
-    address  = "postgres.example.com:5432"
-    user     = "flow_materialize"
-    database = "analytics"
-
-    credentials = {
-      auth_type = "UserPassword"
-      password  = var.postgres_password
-    }
-  }
-
-  bindings = [
-    for binding in estuary_source_mongodb.shop.bindings : {
-      source   = binding.target
-      resource = { table = binding.resource.collection }
-    }
-  ]
-}
 ```
 
 ```bash
 export FLOW_AUTH_TOKEN="<refresh token>"
 export TF_VAR_mongodb_password="<password>"
-export TF_VAR_postgres_password="<password>"
-terraform init
-terraform apply
 ```
 
-This creates the capture `acmeCo/shop/source-mongodb` and the materialization `acmeCo/shop/materialize-postgres`. The materialization reads its bindings from the capture, so a collection added to the capture is materialized too.
+Then plan, review, and apply:
+
+```bash
+terraform init
+terraform plan -out tfplan
+terraform apply tfplan
+```
+
+> [!IMPORTANT]
+> Read every plan before applying it. The provider makes Estuary match your configuration, so an apply can remove bindings, overwrite changes made in the dashboard, or trigger backfills.
+
+This creates:
+
+| Object | Name | Built from |
+|---|---|---|
+| Capture | `acmeCo/mongodb/source-mongodb` | `tenant` + `name` + the connector name |
+| Collections | `acmeCo/mongodb/shop/users`, `acmeCo/mongodb/shop/orders` | the capture name without the connector name + each resource, see [Bindings Lifecycle](#bindings-lifecycle) |
 
 ---
 
@@ -170,7 +156,6 @@ Each resource manages a capture or a materialization of one Estuary connector. S
 | Resource | Type | Connector |
 |---|---|---|
 | [`estuary_source_mongodb`](internal/resources/capture/mongodb/README.md) | Capture | [MongoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/) |
-| `estuary_materialization_postgres` | Materialization | [PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) |
 
 ---
 
@@ -178,11 +163,11 @@ Each resource manages a capture or a materialization of one Estuary connector. S
 
 ### Bindings Lifecycle
 
-Each binding is identified by its collection: the `target` of a capture binding, or the `source` of a materialization binding. The read-only `name` attribute shows that collection in every plan, so you can tell which binding changes. Changing a binding's collection removes the old binding and adds a new one.
+A binding links one resource, such as a MongoDB collection or a PostgreSQL table, to one Estuary collection: the `target` of a capture binding, or the `source` of a materialization binding. That collection identifies the binding, and the read-only `name` attribute shows it in every plan so you can tell which binding changes. Changing a binding's collection removes the old binding and adds a new one.
 
-Which bindings Terraform manages depends on whether Estuary can add bindings on its own, through discovery (`auto_discover`) or a source capture (`source.capture`):
+Estuary can add bindings on its own, through discovery (`auto_discover`) on a capture or `source.capture` on a materialization. When it can, Terraform manages only the bindings you declare and leaves the others alone:
 
-| Task | Bindings Terraform manages | Bindings added outside Terraform |
+| Resource | Bindings Terraform manages | Bindings added outside Terraform |
 |---|---|---|
 | Capture without `auto_discover` | All of them | Shown in the plan and removed by the next apply. |
 | Capture with `auto_discover` | Only the ones in your configuration | Kept, and not shown in plans. |
@@ -213,7 +198,7 @@ bindings = [
 bindings = [
   {
     resource = { database = "shop", collection = "sessions" }
-    disable  = true # removing the binding instead would let discovery add it back
+    disable  = true # with auto_discover, removing the binding instead would let discovery add it back
   },
 ]
 ```
@@ -229,11 +214,11 @@ bindings = [
 ```
 
 **Lifecycle rules:**
-- **Default target:** a capture binding without `target` keeps its current collection. A new one gets the collection discovery would name: the capture name without its connector name, followed by the resource name (e.g., `acmeCo/mongodb/shop/users`).
-- **Changes made outside Terraform:** plans refresh the fields you set on capture bindings, so dashboard edits show up as changes the next apply reverts. Fields you leave unset stay managed by Estuary, and a declared binding deleted outside Terraform is added back.
-- **Removing a binding:** with `add_new_bindings = true`, discovery may add it back while the collection exists in the source, and the plan warns about it.
+- **Default target:** a capture binding without `target` keeps its current collection. A new one gets the collection discovery would name: the capture name without its connector name, followed by the resource name. For example, the capture `acmeCo/mongodb/source-mongodb` writes `shop.users` to `acmeCo/mongodb/shop/users`.
+- **Changes made outside Terraform:** plans refresh the fields you set on capture bindings, so dashboard edits show up as changes, and the next apply reverts them. Fields you leave unset stay managed by Estuary. A declared binding deleted outside Terraform is added back.
+- **Removing a binding:** with `add_new_bindings = true`, discovery may add it back while the collection still exists in the source. The plan warns about it. Use `disable = true` to stop it for good.
 - **Taking over a binding:** the plan shows it as added, but the apply updates the live binding in place. A warning lists the fields the apply changes, so copy over the live values you want to keep.
-- **Importing:** a task Estuary may add bindings to is imported without its bindings, which stay unmanaged until you declare them. Other tasks are imported with all of their bindings.
+- **Importing:** a capture with `auto_discover` or a materialization with `source.capture` is imported without its bindings, which stay unmanaged until you declare them. Any other capture or materialization is imported with all of its bindings.
 
 > [!WARNING]
 > Materialization plans don't refresh bindings yet, so the next apply overwrites dashboard edits to a materialization's bindings without showing them in the plan.
@@ -242,7 +227,7 @@ bindings = [
 
 Each materialization binding can set `fields` to choose which collection fields it materializes. Omit it to use Estuary's default selection.
 
-| Attribute | Behaviour |
+| Attribute | Behavior |
 |---|---|
 | `recommended` | Required when `fields` is set. `true` selects every field of the collection. `false` selects only the fields the connector requires, such as the collection key, plus the ones in `require`. |
 | `require` | Fields always materialized, whatever `recommended` selects. |
@@ -275,7 +260,9 @@ Each materialization binding can set `fields` to choose which collection fields 
 ```
 
 > [!NOTE]
-> **`flow_document`:** This special field holds the full source document. With standard updates it is always materialized, since the connector reads it back to merge each update, unless the connector's `no_flow_document` advanced option is enabled. With `delta_updates = true` it is excluded by default, so add it to `require` to keep it.
+> **`flow_document`:** This special field holds the full source document.
+> - With standard updates, it's always materialized, because the connector reads it back to merge each update. The exception is when the connector's `no_flow_document` advanced option is enabled.
+> - With `delta_updates = true`, it's excluded by default. Add it to `require` to keep it.
 
 ### Backfill Control
 
@@ -289,7 +276,10 @@ The `backfill` counter on each binding triggers a full re-read of its data: a ca
 ```
 
 > [!CAUTION]
-> **The counter never goes down.** Each increment triggers exactly one backfill. Leave the new value in place afterwards: don't reset it or remove the attribute, which sets it back to 0. Estuary keeps each binding's progress under its counter, so a lower counter can make a capture resume from stale progress, and materializations reject it. When you add back a removed binding or take over a live one, set `backfill` to the value it had.
+> **Never lower the counter.** Estuary tracks each binding's progress under its counter value, so a lower value can make a capture resume from stale progress, and materializations reject it.
+> - Each increment triggers exactly one backfill. Leave the new value in place afterwards.
+> - Don't remove the attribute: that sets the counter back to 0.
+> - When you add back a removed binding or take over a live one, set `backfill` to the value it had.
 
 ### Connector Versions
 
@@ -304,7 +294,7 @@ resource "estuary_source_mongodb" "shop" {
 ```
 
 > [!WARNING]
-> Avoid pinning a per-commit image tag: tasks running a tag Estuary doesn't register stop getting fixes, skip auto discovery, and can't be used with a materialization `source.capture`.
+> Don't pin a per-commit image tag. Estuary doesn't register those tags as connector versions, so a capture or materialization running one stops getting fixes and skips auto discovery, and such a capture can't be used as a materialization's `source.capture`.
 
 ---
 
@@ -355,7 +345,7 @@ Secrets don't go in these files, see [Keep Secrets Out of Code](#keep-secrets-ou
 
 ### Give Each Environment Its Own State
 
-Pick one of these layouts. The first two keep a single copy of the code.
+Terraform state records which captures and materializations a configuration manages. If dev and production shared one state, applying production would plan to replace what dev created. Pick one of these layouts. The first two keep a single copy of the code.
 
 **Workspaces, if all environments can share one backend.** Each [Terraform workspace](https://developer.hashicorp.com/terraform/language/state/workspaces) keeps its own state in the same backend. Name each variable file after its workspace, so the selected workspace picks the right values:
 
@@ -395,13 +385,14 @@ terraform apply -var-file="$ENV.tfvars"
 
 **Separate root modules, only if environments run different pipelines.** For example, when a pipeline exists only in production. Still define each pipeline once, in a [module](#share-pipelines-with-modules), so each root module only chooses which pipelines to run and with which values.
 
-### Isolate Catalogs with `tenant`
+### Separate Environments with `tenant`
 
-Give each environment its own [`tenant`](#provider-configuration) prefix, set from its variable file:
+Separate states keep Terraform's records apart, but not Estuary's names: all environments share one Estuary namespace. If dev and production both apply a capture named `mongodb`, they manage the same capture and undo each other's changes on every apply. To keep them apart, give each environment its own [`tenant`](#provider-configuration) prefix in its variable file:
 
 ```hcl
 provider "estuary" {
-  tenant = var.tenant # or the ESTUARY_TENANT environment variable
+  tenant     = var.tenant     # "acmeCo/dev/" in dev.tfvars, "acmeCo/prod/" in production.tfvars
+  data_plane = var.data_plane # Estuary's default data plane when null
 }
 
 resource "estuary_source_mongodb" "shop" {
@@ -410,21 +401,31 @@ resource "estuary_source_mongodb" "shop" {
 }
 ```
 
-The same configuration creates the capture `acmeCo/dev/mongodb/source-mongodb` in dev and `acmeCo/prod/mongodb/source-mongodb` in production. Capture bindings that leave `target` unset follow the capture name, landing in `acmeCo/dev/mongodb/shop/users` and `acmeCo/prod/mongodb/shop/users`.
+Despite its name, `tenant` can be any prefix under your Estuary tenant, such as `acmeCo/dev/`. Your token must have access to it.
 
-> [!CAUTION]
-> Two states managing the same capture or materialization overwrite each other on every apply, so never give two environments the same tenant.
+The prefix is added only to names the provider builds. Names you write out yourself are used exactly as written:
 
-> [!NOTE]
-> Collection names aren't prefixed: a binding `target` or `source` you write is used as is. Build it from the environment instead of hard-coding it, ideally from the capture itself, as in the [Quick Start](#quick-start):
+| Name | Prefixed | In dev | In production |
+|---|---|---|---|
+| Capture or materialization `name` | Yes | `acmeCo/dev/mongodb/source-mongodb` | `acmeCo/prod/mongodb/source-mongodb` |
+| Capture binding without `target` | Yes, from the capture name | `acmeCo/dev/mongodb/shop/users` | `acmeCo/prod/mongodb/shop/users` |
+| Capture binding `target` you set | No | as written | as written |
+| Materialization binding `source` | No | as written | as written |
+
+Don't hard-code a collection name in a binding. For example, `source = "acmeCo/prod/mongodb/shop/users"` would make the dev materialization read production data. Instead, take the collection from the capture so that it changes with the environment:
 
 ```hcl
-bindings = [
-  for binding in estuary_source_mongodb.shop.bindings : {
-    source   = binding.target
-    resource = { table = binding.resource.collection }
-  }
-]
+resource "estuary_materialization_postgres" "shop" {
+  name = "postgres"
+  # ...
+
+  bindings = [
+    for binding in estuary_source_mongodb.shop.bindings : {
+      source   = binding.target # acmeCo/dev/... in dev, acmeCo/prod/... in production
+      resource = { table = binding.resource.collection }
+    }
+  ]
+}
 ```
 
 ### Keep Secrets Out of Code
@@ -443,17 +444,14 @@ Connector secrets such as `password` and `private_key` are write-only: Terraform
 
 ### Share Pipelines with Modules
 
-When the same source → destination pattern repeats, across pipelines, tenants, or environments that can't mirror each other, extract it into a module:
-
-> [!IMPORTANT]
-> Every module must declare `estuary/estuary` in its `required_providers`, or Terraform looks for a `hashicorp/estuary` provider that doesn't exist.
+When several pipelines follow the same pattern, such as one MongoDB-to-PostgreSQL pipeline per application, write the pattern once in a module and call it once per pipeline. A fix to the module then reaches every pipeline. Modules also let [separate root modules](#give-each-environment-its-own-state) share pipelines without copying them:
 
 ```hcl
 # modules/mongodb-to-postgres/main.tf
 terraform {
   required_providers {
     estuary = {
-      source = "estuary/estuary"
+      source = "estuary/estuary" # required in every module, or Terraform looks for hashicorp/estuary
     }
   }
 }

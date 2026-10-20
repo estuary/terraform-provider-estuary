@@ -1,0 +1,159 @@
+package dekaf
+
+import (
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
+	"gopkg.in/yaml.v3"
+)
+
+func TestSpec(test *testing.T) {
+	spectest.RunMaterializationSuite[Spec](test, "")
+}
+
+func TestSchemaConformance(test *testing.T) {
+	spectest.AssertConformsToSchema[Config, Resource](test)
+}
+
+func TestSampleVariants(test *testing.T) {
+	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
+
+	expectations := map[string]struct {
+		variant          Variant
+		strictTopicNames bool
+		deletions        DeletionMode
+	}{
+		"acmeCo/dekaf/generic":        {VariantGeneric, false, DeletionModeKafka},
+		"acmeCo/dekaf/generic-strict": {VariantGeneric, true, DeletionModeKafka},
+		"acmeCo/dekaf/materialize":    {VariantMaterialize, false, DeletionModeKafka},
+		"acmeCo/dekaf/tinybird":       {VariantTinybird, false, DeletionModeCDC},
+		"acmeCo/dekaf/clickhouse":     {VariantClickHouse, false, DeletionModeCDC},
+		"acmeCo/dekaf/risingwave":     {VariantRisingWave, false, DeletionModeKafka},
+		"acmeCo/dekaf/singlestore":    {VariantSingleStore, false, DeletionModeKafka},
+		"acmeCo/dekaf/startree":       {VariantStarTree, false, DeletionModeKafka},
+		"acmeCo/dekaf/imply-polaris":  {VariantImplyPolaris, false, DeletionModeKafka},
+		"acmeCo/dekaf/bytewax":        {VariantBytewax, false, DeletionModeKafka},
+	}
+
+	if len(specs) != len(expectations) {
+		test.Fatalf("got %d materializations, want %d", len(specs), len(expectations))
+	}
+
+	for name, expected := range expectations {
+		test.Run(name, func(t *testing.T) {
+			spec, found := specs[name]
+
+			var endpoint Endpoint = spec.Endpoint.Dekaf
+
+			if !found {
+				t.Fatal("materialization missing from sample")
+			}
+
+			if endpoint.Variant != expected.variant {
+				t.Errorf("variant = %q, want %q", endpoint.Variant, expected.variant)
+			}
+
+			if endpoint.Config.Token != "<auth-token>" {
+				t.Errorf("token = %q, want <auth-token>", endpoint.Config.Token)
+			}
+
+			if endpoint.Config.StrictTopicNames != expected.strictTopicNames {
+				t.Errorf("strict_topic_names = %v, want %v", endpoint.Config.StrictTopicNames, expected.strictTopicNames)
+			}
+
+			if endpoint.Config.Deletions != expected.deletions {
+				t.Errorf("deletions = %q, want %q", endpoint.Config.Deletions, expected.deletions)
+			}
+
+			if len(spec.Bindings) != 1 || spec.Bindings[0].Resource.TopicName != "orders" || spec.Bindings[0].Source != "acmeCo/orders" {
+				t.Errorf("bindings = %+v, want a single orders binding from acmeCo/orders", spec.Bindings)
+			}
+		})
+	}
+}
+
+func TestEnumListsCoverSamples(test *testing.T) {
+	var seenVariants map[Variant]bool = map[Variant]bool{}
+
+	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
+
+	for name, spec := range specs {
+		var endpoint Endpoint = spec.Endpoint.Dekaf
+
+		if !slices.Contains(Variants, endpoint.Variant) {
+			test.Errorf("%s: variant %q is not in Variants", name, endpoint.Variant)
+		}
+
+		if !slices.Contains(DeletionModes, endpoint.Config.Deletions) {
+			test.Errorf("%s: deletions %q is not in DeletionModes", name, endpoint.Config.Deletions)
+		}
+
+		seenVariants[endpoint.Variant] = true
+	}
+
+	for _, variant := range Variants {
+		if !seenVariants[variant] {
+			test.Errorf("variant %q has no sample", variant)
+		}
+	}
+}
+
+func TestExplicitDefaultsAreEmitted(test *testing.T) {
+	spec := Spec{
+		Endpoint: EndpointSpec{
+			Dekaf: Endpoint{
+				Variant: VariantGeneric,
+				Config: Config{
+					Token: "token",
+				},
+			},
+		},
+		Bindings: []Binding{{Resource: Resource{TopicName: "orders"}, Source: "acmeCo/orders"}},
+	}
+
+	content, err := yaml.Marshal(spec)
+
+	if err != nil {
+		test.Fatalf("marshaling spec: %v", err)
+	}
+
+	var marshaled struct {
+		Endpoint struct {
+			Dekaf struct {
+				Config map[string]any `yaml:"config"`
+			} `yaml:"dekaf"`
+		} `yaml:"endpoint"`
+	}
+
+	if err := yaml.Unmarshal(content, &marshaled); err != nil {
+		test.Fatalf("decoding marshaled spec: %v", err)
+	}
+
+	for _, key := range []string{"strict_topic_names", "deletions"} {
+		if _, found := marshaled.Endpoint.Dekaf.Config[key]; !found {
+			test.Errorf("config is missing %s:\n%s", key, content)
+		}
+	}
+}
+
+func TestUnknownKeysAreRejected(test *testing.T) {
+	var document []byte = []byte(`
+		materializations:
+			acmeCo/dekaf/typo:
+				endpoint:
+					dekaf:
+						variant: generic
+						config:
+							token: <auth-token>
+							strict_topic_name: true
+				bindings: []
+	`)
+
+	_, err := spectest.ParseMaterializations[Spec](document)
+
+	if err == nil || !strings.Contains(err.Error(), "field strict_topic_name not found") {
+		test.Fatalf("error = %v, want strict decoding to reject the misspelled strict_topic_name key", err)
+	}
+}

@@ -1,0 +1,56 @@
+captures:
+  acmeCo/mongodb/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-mongodb:v3
+        config:
+          address: mongodb+srv://cluster0.abc123.mongodb.net?authSource=admin
+          user: flow_capture
+          password: <secret>
+          database: shop,metrics
+          batchAndChangeStream: true
+          pollSchedule: 6h
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+          advanced:
+            maxAwaitTime: 10s
+            disablePreImages: true
+            excludeCollections: shop:sessions,shop:carts
+            skipBackfills: shop:events
+    bindings:
+      - resource:
+          database: shop
+          collection: users
+        target: acmeCo/mongodb/users
+
+      - resource:
+          database: shop
+          collection: events
+          captureMode: Change Stream Incremental
+        target: acmeCo/mongodb/events
+        backfill: 2
+
+      - resource:
+          database: shop
+          collection: user_view
+          captureMode: Batch Snapshot
+          cursorField: _id
+          pollSchedule: 1h
+        target: acmeCo/mongodb/user_view
+
+      - resource:
+          database: metrics
+          collection: readings
+          captureMode: Batch Incremental
+          cursorField: ts
+          pollSchedule: daily at 02:00Z
+        target: acmeCo/mongodb/readings
+        disable: true

@@ -1,0 +1,71 @@
+examples-local/
+
+# Provider binary built by go build
+/terraform-provider-estuary
+
+# Go binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test binaries, built with go test -c
+*.test
+
+# Go coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Terraform local state, variables and plugins, which may hold secrets
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+
+# Terraform saved plans and local overrides, which may hold secrets
+*.tfplan
+tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform CLI configuration, which may hold registry credentials
+.terraformrc
+terraform.rc
+
+# Environment files and keys
+.env
+.env.*
+.envrc
+.netrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.ppk
+id_rsa*
+id_ed25519*
+
+# Local tool and editor settings
+.claude/settings.local.json
+.idea/
+.vscode/
+
+# Release artifacts and logs
+dist/
+*.log
+
+# OS files
+.DS_Store

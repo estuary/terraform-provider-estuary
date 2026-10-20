@@ -1,0 +1,34 @@
+captures:
+  acmeCo/dynamodb/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-dynamodb:v1
+        config:
+          region: eu-west-1
+          credentials:
+            auth_type: AWSIAM
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-dynamodb
+            aws_region: eu-west-1
+          advanced:
+            backfillSegments: 50
+            scanLimit: 500
+            idleBackoffMax: 2m
+            endpoint: http://localhost:8000
+    bindings:
+      - resource:
+          table: orders
+        target: acmeCo/dynamodb/orders
+
+      - resource:
+          table: customers
+          rcuAllocation: 1000
+        target: acmeCo/dynamodb/customers
+        backfill: 1
+
+      - resource:
+          table: sessions
+        target: acmeCo/dynamodb/sessions
+        disable: true

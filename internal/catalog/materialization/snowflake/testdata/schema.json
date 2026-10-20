@@ -1,0 +1,324 @@
+{
+  "endpoint": {
+    "$id": "https://github.com/estuary/connectors/materialize-snowflake/config",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "account": {
+        "description": "Optional Snowflake account identifier.",
+        "order": 7,
+        "title": "Account",
+        "type": "string",
+        "x-hidden-field": true
+      },
+      "advanced": {
+        "additionalProperties": false,
+        "advanced": true,
+        "description": "Options for advanced users. You should not typically need to modify these.",
+        "properties": {
+          "disableFieldTruncation": {
+            "description": "Disables truncation of materialized fields. May result in errors for documents with extremely large values or complex nested structures.",
+            "nonsensitive": true,
+            "title": "Disable Field Truncation",
+            "type": "boolean"
+          },
+          "feature_flags": {
+            "description": "This property is intended for Estuary internal use. You should only modify this field as directed by Estuary support.",
+            "nonsensitive": true,
+            "title": "Feature Flags",
+            "type": "string"
+          },
+          "no_flow_document": {
+            "default": false,
+            "description": "When enabled the root document will not be required for standard updates.",
+            "nonsensitive": true,
+            "title": "Exclude Flow Document",
+            "type": "boolean"
+          }
+        },
+        "title": "Advanced Options",
+        "type": "object"
+      },
+      "credentials": {
+        "default": {
+          "auth_type": "jwt"
+        },
+        "discriminator": {
+          "propertyName": "auth_type"
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "auth_type": {
+                "const": "jwt",
+                "default": "jwt",
+                "type": "string"
+              },
+              "private_key": {
+                "description": "Private Key to be used to sign the JWT token",
+                "multiline": true,
+                "order": 2,
+                "secret": true,
+                "title": "Private Key",
+                "type": "string"
+              },
+              "user": {
+                "description": "The Snowflake user login name",
+                "order": 1,
+                "title": "User",
+                "type": "string"
+              }
+            },
+            "required": [
+              "auth_type",
+              "private_key"
+            ],
+            "title": "Private Key (JWT)"
+          },
+          {
+            "properties": {
+              "auth_type": {
+                "const": "user_password",
+                "default": "user_password",
+                "type": "string"
+              },
+              "password": {
+                "description": "The password for the provided user",
+                "order": 2,
+                "secret": true,
+                "title": "Password",
+                "type": "string"
+              },
+              "user": {
+                "description": "The Snowflake user login name",
+                "order": 1,
+                "title": "User",
+                "type": "string"
+              }
+            },
+            "required": [
+              "auth_type",
+              "user",
+              "password"
+            ],
+            "title": "User Password"
+          }
+        ],
+        "title": "Authentication",
+        "type": "object"
+      },
+      "database": {
+        "description": "The SQL database to connect to.",
+        "order": 3,
+        "title": "Database",
+        "type": "string"
+      },
+      "dbt_job_trigger": {
+        "additionalProperties": false,
+        "description": "Trigger a dbt Job when new data is available",
+        "properties": {
+          "access_url": {
+            "description": "dbt access URL can be found in your Account Settings. See go.estuary.dev/dbt-cloud-trigger",
+            "pattern": "^https://.+$",
+            "title": "Access URL",
+            "type": "string"
+          },
+          "account_id": {
+            "description": "dbt account ID",
+            "title": "Account ID",
+            "type": "string"
+          },
+          "api_key": {
+            "description": "dbt API Key",
+            "secret": true,
+            "title": "API Key",
+            "type": "string"
+          },
+          "cause": {
+            "description": "You can set a custom 'cause' message for the job trigger. Defaults to 'Estuary'.",
+            "title": "Cause Message",
+            "type": "string"
+          },
+          "interval": {
+            "default": "30m",
+            "description": "Minimum time between dbt job triggers. This interval is only triggered if data has been materialized by your task.",
+            "nonsensitive": true,
+            "title": "Minimum Run Interval",
+            "type": "string"
+          },
+          "job_id": {
+            "description": "dbt job ID",
+            "title": "Job ID",
+            "type": "string"
+          },
+          "mode": {
+            "default": "skip",
+            "description": "Specifies how should already-running jobs be treated. Defaults to 'skip' which skips the trigger if a job is already running; 'replace' cancels the running job and runs a new one; while 'ignore' triggers a new job regardless of existing jobs.",
+            "enum": [
+              "skip",
+              "replace",
+              "ignore"
+            ],
+            "nonsensitive": true,
+            "title": "Job Trigger Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "account_id",
+          "api_key"
+        ],
+        "title": "dbt Cloud Job Trigger",
+        "type": "object"
+      },
+      "hardDelete": {
+        "default": false,
+        "description": "If this option is enabled items deleted in the source will also be deleted from the destination. By default is disabled and _meta/op in the destination will signify whether rows have been deleted (soft-delete).",
+        "nonsensitive": true,
+        "order": 9,
+        "title": "Hard Delete",
+        "type": "boolean"
+      },
+      "host": {
+        "description": "The Snowflake Host used for the connection. Must include the account identifier and end in .snowflakecomputing.com. Example: orgname-accountname.snowflakecomputing.com (do not include the protocol).",
+        "order": 0,
+        "pattern": "^[^/:]+.snowflakecomputing.com$",
+        "title": "Host (Account URL)",
+        "type": "string"
+      },
+      "role": {
+        "description": "The user role used to perform actions.",
+        "order": 6,
+        "title": "Role",
+        "type": "string"
+      },
+      "schema": {
+        "description": "Database schema for bound collection tables (unless overridden within the binding resource configuration).",
+        "order": 4,
+        "title": "Schema",
+        "type": "string"
+      },
+      "syncSchedule": {
+        "additionalProperties": false,
+        "description": "Configure schedule of transactions for the materialization.",
+        "properties": {
+          "fastSyncEnabledDays": {
+            "description": "Days of the week that the configured Sync Frequency is active. On days that are not enabled, transactions will be executed more slowly for the entire day. Examples: 'M-F' (Monday through Friday, inclusive), 'M,W,F' (Monday, Wednesday, and Friday), 'Su-T,Th-S' (Sunday through Tuesday, inclusive; Thursday through Saturday, inclusive). All days are enabled if unset.",
+            "nonsensitive": true,
+            "order": 4,
+            "title": "Fast Sync Enabled Days",
+            "type": "string"
+          },
+          "fastSyncStartTime": {
+            "description": "Time of day that transactions begin executing at the configured Sync Frequency. Prior to this time transactions will be executed more slowly. Must be in the form of '09:00'.",
+            "nonsensitive": true,
+            "order": 2,
+            "pattern": "^(0?[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Fast Sync Start Time",
+            "type": "string"
+          },
+          "fastSyncStopTime": {
+            "description": "Time of day that transactions stop executing at the configured Sync Frequency. After this time transactions will be executed more slowly. Must be in the form of '17:00'.",
+            "nonsensitive": true,
+            "order": 3,
+            "pattern": "^(0?[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Fast Sync Stop Time",
+            "type": "string"
+          },
+          "syncFrequency": {
+            "description": "Frequency at which transactions are executed when the materialization is fully caught up and streaming changes. May be enabled only for certain time periods and days of the week if configured below; otherwise it is effective 24/7. Defaults to 30 minutes if unset.",
+            "enum": [
+              "0s",
+              "30s",
+              "1m",
+              "2m30s",
+              "5m",
+              "15m",
+              "20m",
+              "30m",
+              "1h",
+              "2h",
+              "4h"
+            ],
+            "nonsensitive": true,
+            "order": 0,
+            "title": "Sync Frequency",
+            "type": "string"
+          },
+          "timezone": {
+            "description": "Timezone applicable to sync time windows and active days. Must be a valid IANA time zone name or +HH:MM offset.",
+            "nonsensitive": true,
+            "order": 1,
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "title": "Sync Schedule",
+        "type": "object"
+      },
+      "timestamp_type": {
+        "description": "Controls how timestamp columns are stored in Snowflake.",
+        "enum": [
+          "TIMESTAMP_LTZ",
+          "TIMESTAMP_NTZ (discard TZ)",
+          "TIMESTAMP_NTZ (normalize to UTC)",
+          "TIMESTAMP_TZ"
+        ],
+        "nonsensitive": true,
+        "order": 8,
+        "title": "Snowflake Timestamp Type",
+        "type": "string"
+      },
+      "warehouse": {
+        "description": "The Snowflake virtual warehouse used to execute queries. Uses the default warehouse for the Snowflake user if left blank.",
+        "order": 5,
+        "title": "Warehouse",
+        "type": "string"
+      }
+    },
+    "required": [
+      "host",
+      "database",
+      "schema",
+      "timestamp_type",
+      "credentials"
+    ],
+    "title": "SQL Connection",
+    "type": "object"
+  },
+  "resource": {
+    "$id": "https://github.com/estuary/connectors/materialize-snowflake/table-config",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "clustering": {
+        "advanced": true,
+        "description": "Comma-separated list of column names to use as the clustering key for Snowflake Automatic Clustering. Leave empty to disable clustering. Recommended only for large tables queried with selective filters on the chosen columns. Consumes additional Snowflake credits.",
+        "nonsensitive": true,
+        "title": "Clustering Keys",
+        "type": "string"
+      },
+      "delta_updates": {
+        "description": "Use Private Key authentication to enable Snowpipe Streaming for Delta Update bindings",
+        "nonsensitive": true,
+        "title": "Delta Updates",
+        "type": "boolean",
+        "x-delta-updates": true
+      },
+      "schema": {
+        "description": "Alternative schema for this table (optional)",
+        "title": "Alternative Schema",
+        "type": "string",
+        "x-schema-name": true
+      },
+      "table": {
+        "type": "string",
+        "x-collection-name": true
+      }
+    },
+    "required": [
+      "table"
+    ],
+    "title": "SQL Table",
+    "type": "object"
+  }
+}

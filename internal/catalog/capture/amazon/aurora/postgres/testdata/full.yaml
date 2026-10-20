@@ -1,0 +1,89 @@
+captures:
+  acmeCo/aurora/postgres-all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-aurora-postgres:v3
+        config:
+          address: my-cluster.cluster-abc123xyz.us-east-1.rds.amazonaws.com:5432
+          user: flow_capture
+          database: analytics
+          historyMode: true
+          credentials:
+            auth_type: AWSIAM
+            aws_region: us-east-1
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-aurora-capture
+          discoveryFilters:
+            include_schemas:
+              - public
+              - sales
+            exclude_schemas:
+              - audit
+            table_patterns:
+              - public.orders*
+              - customers
+            discover_unpublished_tables: true
+          advanced:
+            publicationName: estuary_publication
+            slotName: estuary_slot
+            watermarksTable: public.estuary_watermarks
+            skip_backfills: public.events,public.logs
+            backfill_chunk_size: 10000
+            sslmode: verify-full
+            discover_schemas:
+              - public
+            min_backfill_xid: "123456"
+            read_only_capture: true
+            capture_as_partitions: true
+            discover_unpublished_tables: true
+            discover_only_published: true
+            source_tag: aurora-primary
+            rediscovery_interval: 1h
+            feature_flags: emit_sourced_schemas
+            statement_timeout: 5m
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+    bindings:
+      - resource:
+          namespace: public
+          stream: orders
+        target: acmeCo/aurora/orders
+
+      - resource:
+          namespace: sales
+          stream: customers
+          mode: Precise
+          priority: 10
+        target: acmeCo/aurora/customers
+        backfill: 2
+
+      - resource:
+          namespace: public
+          stream: events
+          mode: Only Changes
+          priority: -1
+          advanced:
+            additional_backfill_filter: created_at > '2026-01-01'
+        target: acmeCo/aurora/events
+
+      - resource:
+          namespace: public
+          stream: logs
+          mode: Without Primary Key
+          primary_key:
+            - id
+        target: acmeCo/aurora/logs
+        disable: true
+
+      - resource:
+          namespace: public
+          stream: invoices
+          mode: Normal
+        target: acmeCo/aurora/invoices

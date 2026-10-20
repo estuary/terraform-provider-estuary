@@ -1,0 +1,146 @@
+{
+  "endpoint": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "advanced": {
+        "additionalProperties": false,
+        "advanced": true,
+        "description": "Options for advanced users. You should not typically need to modify these.",
+        "properties": {
+          "backfillSegments": {
+            "description": "Number of segments to use for backfill table scans. Has no effect if changed after the backfill has started.",
+            "nonsensitive": true,
+            "title": "Backfill Table Segments",
+            "type": "integer"
+          },
+          "endpoint": {
+            "description": "The AWS endpoint URI to connect to. Use if you're capturing from a compatible API that isn't provided by AWS.",
+            "title": "AWS Endpoint",
+            "type": "string"
+          },
+          "idleBackoffMax": {
+            "default": "1s",
+            "description": "Maximum wait between polls of an open stream shard whose reads keep returning no records. Polling returns to once per second as soon as records appear. Accepts Go duration strings between '1s' and '10m'. Defaults to '1s'. Higher values reduce billed DynamoDB Streams requests on idle shards but delay capture of new records by up to the configured wait.",
+            "nonsensitive": true,
+            "pattern": "^[0-9]+(ms|s|m|h)$",
+            "title": "Idle Poll Backoff Maximum",
+            "type": "string"
+          },
+          "scanLimit": {
+            "description": "Limit the number of items to evaluate for each table backfill scan request.",
+            "nonsensitive": true,
+            "title": "Scan Limit",
+            "type": "integer"
+          }
+        },
+        "title": "Advanced Options",
+        "type": "object"
+      },
+      "credentials": {
+        "default": {
+          "auth_type": "AWSAccessKey"
+        },
+        "discriminator": {
+          "propertyName": "auth_type"
+        },
+        "oneOf": [
+          {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "auth_type": {
+                "const": "AWSAccessKey",
+                "default": "AWSAccessKey",
+                "order": 0,
+                "type": "string"
+              },
+              "aws_access_key_id": {
+                "description": "AWS Access Key ID for capturing from the DynamoDB table.",
+                "order": 1,
+                "title": "AWS Access Key ID",
+                "type": "string"
+              },
+              "aws_secret_access_key": {
+                "description": "AWS Access Key ID for capturing from the DynamoDB table.",
+                "order": 2,
+                "secret": true,
+                "title": "AWS Secret Access key",
+                "type": "string"
+              }
+            },
+            "required": [
+              "aws_access_key_id",
+              "aws_secret_access_key"
+            ],
+            "title": "Access Key",
+            "type": "object"
+          },
+          {
+            "$id": "https://github.com/estuary/connectors/go/auth/iam/aws-config",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "auth_type": {
+                "const": "AWSIAM",
+                "default": "AWSIAM",
+                "order": 0,
+                "type": "string"
+              },
+              "aws_region": {
+                "description": "AWS Region of your resource",
+                "title": "AWS Region",
+                "type": "string"
+              },
+              "aws_role_arn": {
+                "description": "AWS Role which has access to the resource which will be assumed by Flow",
+                "title": "AWS Role ARN",
+                "type": "string"
+              }
+            },
+            "required": [
+              "aws_region",
+              "aws_role_arn"
+            ],
+            "title": "AWS IAM",
+            "type": "object"
+          }
+        ],
+        "order": 2,
+        "title": "Authentication",
+        "type": "object",
+        "x-iam-auth": true
+      },
+      "region": {
+        "description": "Region of the DynamoDB table.",
+        "order": 1,
+        "title": "Region",
+        "type": "string"
+      }
+    },
+    "required": [
+      "region",
+      "credentials"
+    ],
+    "title": "Source DynamoDB Spec",
+    "type": "object"
+  },
+  "resource": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "rcuAllocation": {
+        "description": "Read capacity units the capture will attempt to consume during the table backfill. Leave blank to automatically determine based on the provisioned capacity of the table.",
+        "nonsensitive": true,
+        "title": "RCU Allocation",
+        "type": "integer"
+      },
+      "table": {
+        "description": "The name of the table to be captured.",
+        "title": "Table Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "table"
+    ],
+    "title": "Resource",
+    "type": "object"
+  }
+}

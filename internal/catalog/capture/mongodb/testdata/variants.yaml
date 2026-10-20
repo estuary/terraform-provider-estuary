@@ -1,0 +1,63 @@
+captures:
+  acmeCo/mongodb/change-stream:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-mongodb:v3
+        config:
+          address: mongo:27017
+          user: flow_capture
+          password: <secret>
+    bindings:
+      - resource: { database: shop, collection: users }
+        target: acmeCo/mongodb/users
+
+  acmeCo/mongodb/atlas:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-mongodb:v3
+        config:
+          address: mongodb+srv://cluster0.abc123.mongodb.net?authSource=admin
+          user: flow_capture
+          password: <secret>
+          database: shop,billing
+          advanced:
+            exclusiveCollectionFilter: true
+    bindings:
+      - resource: { database: shop, collection: users, captureMode: Change Stream Incremental }
+        target: acmeCo/mongodb/users
+
+  acmeCo/mongodb/ssh-tunnel:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-mongodb:v3
+        config:
+          address: mongodb://10.0.0.12:27017
+          user: flow_capture
+          password: <secret>
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+    bindings:
+      - resource: { database: shop, collection: users }
+        target: acmeCo/mongodb/users
+
+  acmeCo/mongodb/batch:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-mongodb:v3
+        config:
+          address: mongo:27017
+          user: flow_capture
+          password: <secret>
+          batchAndChangeStream: true
+          pollSchedule: daily at 12:34Z
+    bindings:
+      - resource: { database: shop, collection: user_view, captureMode: Batch Snapshot, cursorField: _id }
+        target: acmeCo/mongodb/user_view
+
+      - resource: { database: metrics, collection: readings, captureMode: Batch Incremental, cursorField: ts, pollSchedule: 15m }
+        target: acmeCo/mongodb/readings

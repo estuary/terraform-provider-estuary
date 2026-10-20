@@ -1,0 +1,121 @@
+materializations:
+  acmeCo/dekaf/generic:
+    endpoint:
+      dekaf:
+        variant: generic
+        config:
+          token: <auth-token>
+          strict_topic_names: false
+          deletions: kafka
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders
+
+  acmeCo/dekaf/generic-strict:
+    endpoint:
+      dekaf:
+        variant: generic
+        config:
+          token: <auth-token>
+          strict_topic_names: true
+          deletions: kafka
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders
+
+  acmeCo/dekaf/materialize:
+    endpoint:
+      dekaf:
+        variant: materialize
+        config:
+          token: <auth-token>
+          strict_topic_names: false
+          deletions: kafka
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders
+
+  acmeCo/dekaf/tinybird:
+    endpoint:
+      dekaf:
+        variant: tinybird
+        config:
+          token: <auth-token>
+          strict_topic_names: false
+          deletions: cdc
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders
+
+  acmeCo/dekaf/clickhouse:
+    endpoint:
+      dekaf:
+        variant: clickhouse
+        config:
+          token: <auth-token>
+          strict_topic_names: false
+          deletions: cdc
+
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders
+
+  acmeCo/dekaf/risingwave:
+    endpoint:
+      dekaf:
+        variant: risingwave
+        config:
+          token: <auth-token>
+          strict_topic_names: false
+          deletions: kafka
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders
+
+  acmeCo/dekaf/singlestore:
+    endpoint:
+      dekaf:
+        variant: singlestore
+        config:
+          token: <auth-token>
+          strict_topic_names: false
+          deletions: kafka
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders
+
+  acmeCo/dekaf/startree:
+    endpoint:
+      dekaf:
+        variant: startree
+        config:
+          token: <auth-token>
+          strict_topic_names: false
+          deletions: kafka
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders
+
+  acmeCo/dekaf/imply-polaris:
+    endpoint:
+      dekaf:
+        variant: imply-polaris
+        config:
+          token: <auth-token>
+          strict_topic_names: false
+          deletions: kafka
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders
+
+  acmeCo/dekaf/bytewax:
+    endpoint:
+      dekaf:
+        variant: bytewax
+        config:
+          token: <auth-token>
+          strict_topic_names: false
+          deletions: kafka
+    bindings:
+      - resource: { topic_name: orders }
+        source: acmeCo/orders

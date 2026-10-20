@@ -1,0 +1,171 @@
+{
+  "endpoint": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "address": {
+        "description": "The connection URI for your database without the username and password. For example mongodb://my-mongo.test?authSource=admin.",
+        "order": 0,
+        "title": "Address",
+        "type": "string"
+      },
+      "advanced": {
+        "additionalProperties": false,
+        "advanced": true,
+        "description": "Options for advanced users. You should not typically need to modify these.",
+        "order": 7,
+        "properties": {
+          "disablePreImages": {
+            "description": "Disable requesting pre-images even if the MongoDB deployment supports them and they are enabled for collections.",
+            "nonsensitive": true,
+            "title": "Disable Pre-Images",
+            "type": "boolean"
+          },
+          "excludeCollections": {
+            "description": "Comma-separated list of collections to exclude from database change streams. Each one should be formatted as 'database_name:collection'. Cannot be set if exclusiveCollectionFilter is enabled.",
+            "title": "Exclude Collections",
+            "type": "string"
+          },
+          "exclusiveCollectionFilter": {
+            "description": "Add a MongoDB pipeline filter to database change streams to exclusively match events having enabled capture bindings. Should only be used if a small number of bindings are enabled.",
+            "nonsensitive": true,
+            "title": "Change Stream Exclusive Collection Filter",
+            "type": "boolean"
+          },
+          "maxAwaitTime": {
+            "description": "Maximum time to wait for new change stream events before returning an empty batch. Defaults to 1 second. Accepts a Go duration string like '10s'.",
+            "nonsensitive": true,
+            "title": "Max Await Time",
+            "type": "string"
+          },
+          "skipBackfills": {
+            "description": "Comma-separated list of collections which should not be backfilled. Each one should be formatted as 'database_name:collection'. Use '*:*' to skip the backfill of every change stream collection.",
+            "title": "Skip Backfills",
+            "type": "string"
+          }
+        },
+        "title": "Advanced Options",
+        "type": "object"
+      },
+      "batchAndChangeStream": {
+        "description": "Discover collections that can only be batch captured if the deployment supports change streams. Check this box to capture views and time series collections as well as change streams. All collections will be captured in batch mode if the server does not support change streams regardless of this setting.",
+        "nonsensitive": true,
+        "order": 4,
+        "title": "Capture Batch Collections in Addition to Change Stream Collections",
+        "type": "boolean"
+      },
+      "database": {
+        "description": "Optional comma-separated list of the databases to discover. If not provided will discover all available databases in the deployment.",
+        "order": 3,
+        "title": "Database",
+        "type": "string"
+      },
+      "networkTunnel": {
+        "additionalProperties": false,
+        "description": "Connect to your system through an SSH server that acts as a bastion host for your network.",
+        "order": 6,
+        "properties": {
+          "sshForwarding": {
+            "additionalProperties": false,
+            "properties": {
+              "privateKey": {
+                "description": "Private key to connect to the remote SSH server.",
+                "multiline": true,
+                "secret": true,
+                "title": "SSH Private Key",
+                "type": "string"
+              },
+              "sshEndpoint": {
+                "description": "Endpoint of the remote SSH server that supports tunneling (in the form of ssh://user@hostname[:port])",
+                "pattern": "^ssh://.+@.+$",
+                "title": "SSH Endpoint",
+                "type": "string"
+              }
+            },
+            "required": [
+              "sshEndpoint",
+              "privateKey"
+            ],
+            "title": "SSH Forwarding",
+            "type": "object"
+          }
+        },
+        "title": "Network Tunnel",
+        "type": "object"
+      },
+      "password": {
+        "description": "Password for the specified database user.",
+        "order": 2,
+        "secret": true,
+        "title": "Password",
+        "type": "string"
+      },
+      "pollSchedule": {
+        "description": "When and how often to poll batch collections. Accepts a Go duration string like '5m' or '6h' for frequency-based polling or a string like 'daily at 12:34Z' to poll at a specific time (specified in UTC) every day. Defaults to '24h' if unset.",
+        "nonsensitive": true,
+        "order": 5,
+        "pattern": "^([-+]?([0-9]+([.][0-9]+)?(h|m|s|ms))+|daily at [0-9][0-9]?:[0-9]{2}Z)$",
+        "title": "Default Batch Collection Polling Schedule",
+        "type": "string"
+      },
+      "user": {
+        "description": "Database user to connect as.",
+        "order": 1,
+        "title": "User",
+        "type": "string"
+      }
+    },
+    "required": [
+      "address",
+      "user",
+      "password"
+    ],
+    "title": "MongoDB",
+    "type": "object"
+  },
+  "resource": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "captureMode": {
+        "enum": [
+          "Change Stream Incremental",
+          "Batch Snapshot",
+          "Batch Incremental"
+        ],
+        "nonsensitive": true,
+        "order": 2,
+        "title": "Capture Mode",
+        "type": "string"
+      },
+      "collection": {
+        "order": 1,
+        "title": "Collection name",
+        "type": "string"
+      },
+      "cursorField": {
+        "description": "The name of the field to use as a cursor for batch-mode bindings. For best performance this field should be indexed. When used with 'Batch Incremental' mode documents added to the collection are expected to always have the cursor field and for it to be strictly increasing.",
+        "order": 3,
+        "title": "Cursor Field",
+        "type": "string"
+      },
+      "database": {
+        "order": 0,
+        "title": "Database name",
+        "type": "string"
+      },
+      "pollSchedule": {
+        "description": "When and how often to poll batch collections (overrides the connector default setting). Accepts a Go duration string like '5m' or '6h' for frequency-based polling or a string like 'daily at 12:34Z' to poll at a specific time (specified in UTC) every day. Defaults to '24h' if unset.",
+        "nonsensitive": true,
+        "order": 4,
+        "pattern": "^([-+]?([0-9]+([.][0-9]+)?(h|m|s|ms))+|daily at [0-9][0-9]?:[0-9]{2}Z)$",
+        "title": "Polling Schedule",
+        "type": "string"
+      }
+    },
+    "required": [
+      "database",
+      "collection"
+    ],
+    "title": "MongoDB Resource Spec",
+    "type": "object"
+  }
+}

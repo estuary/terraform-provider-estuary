@@ -1,0 +1,33 @@
+materializations:
+  acmeCo/iceberg/s3-compatible-v3:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-s3-iceberg:v2
+        config:
+          credentials:
+            auth_type: AWSAccessKey
+            awsAccessKeyId: AKIAXXXXXXXXXXXXXXXX
+            awsSecretAccessKey: <secret-access-key>
+          bucket: my-iceberg-bucket
+          region: us-east-1
+          namespace: analytics
+          s3_endpoint: https://minio.example.com
+          catalog:
+            catalog_type: Iceberg REST Server
+            uri: https://catalog.example.com/api/catalog
+            warehouse: my_warehouse
+          advanced:
+            nanosecond_timestamps: true
+            variant_columns: true
+            feature_flags: retain_existing_data_on_backfill,nested_dot_hash_location_style
+    bindings:
+      - resource:
+          table: customers
+          delta_updates: true
+          additional_table_properties:
+            format-version: "3"
+        source: acmeCo/customers
+        fields:
+          recommended: true
+          exclude:
+            - someLargeField

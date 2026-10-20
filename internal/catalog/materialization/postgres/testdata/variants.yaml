@@ -1,0 +1,64 @@
+materializations:
+  acmeCo/postgres/password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-postgres:v5
+        config:
+          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+          user: flow_materialize
+          database: analytics
+          credentials:
+            auth_type: UserPassword
+            password: <secret>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/postgres/aurora-iam:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-postgres:v5
+        config:
+          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+          user: flow_materialize
+          database: analytics
+          credentials:
+            auth_type: AWSIAM
+            aws_region: us-east-1
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-materialize
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/postgres/ssh-tunnel:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-postgres:v5
+        config:
+          address: 10.0.0.12:5432
+          user: flow_materialize
+          credentials:
+            auth_type: UserPassword
+            password: <secret>
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/postgres/legacy-password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-postgres:v5
+        config:
+          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com
+          user: flow_materialize
+          password: <secret>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders

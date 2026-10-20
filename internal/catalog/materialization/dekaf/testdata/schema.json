@@ -1,0 +1,61 @@
+{
+  "endpoint": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "DeletionMode": {
+        "enum": [
+          "kafka",
+          "cdc"
+        ],
+        "type": "string"
+      }
+    },
+    "description": "Configures the behavior of a whole dekaf task",
+    "properties": {
+      "deletions": {
+        "allOf": [
+          {
+            "$ref": "#/definitions/DeletionMode"
+          }
+        ],
+        "default": "kafka",
+        "description": "How to handle deletion events. \"Default\" emits them as regular Kafka tombstones with null values, and \"Header\" emits then as a kafka document with empty string and `_is_deleted` header set to `1`. Setting this value will also cause all other non-deletions to have an `_is_deleted` header of `0`.",
+        "title": "Deletion Mode"
+      },
+      "strict_topic_names": {
+        "default": false,
+        "description": "Whether or not to expose topic names in a strictly Kafka-compliant format for systems that require it. Off by default.",
+        "title": "Strict Topic Names",
+        "type": "boolean"
+      },
+      "token": {
+        "description": "The password that will authenticate Kafka consumers to this task.",
+        "order": 0,
+        "secret": true,
+        "title": "Auth Token",
+        "type": "string"
+      }
+    },
+    "required": [
+      "token"
+    ],
+    "title": "DekafConfig",
+    "type": "object"
+  },
+  "resource": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "Configures a particular binding in a Dekaf-type materialization",
+    "properties": {
+      "topic_name": {
+        "description": "The exposed name of the topic that maps to this binding. This will be exposed through the Kafka metadata/discovery APIs.",
+        "type": "string",
+        "x-collection-name": true
+      }
+    },
+    "required": [
+      "topic_name"
+    ],
+    "title": "DekafResourceConfig",
+    "type": "object"
+  }
+}

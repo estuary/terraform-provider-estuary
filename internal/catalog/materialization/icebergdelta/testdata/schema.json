@@ -1,0 +1,325 @@
+{
+  "endpoint": {
+    "$id": "https://github.com/estuary/connectors/materialize-s3-iceberg/config",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "advanced": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "advanced": true,
+            "description": "Options for advanced users. You should not typically need to modify these.",
+            "order": 10,
+            "properties": {
+              "feature_flags": {
+                "description": "This property is intended for Estuary internal use. You should only modify this field as directed by Estuary support.",
+                "nonsensitive": true,
+                "title": "Feature Flags",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nanosecond_timestamps": {
+                "default": false,
+                "description": "Use nanosecond precision (Iceberg format v3) for date-time columns instead of microsecond precision (format v2). Toggling this on an existing materialization applies to data going forward: existing rows read as null for converted columns unless the binding is explicitly backfilled.",
+                "nonsensitive": true,
+                "title": "Nanosecond Timestamps",
+                "type": "boolean"
+              },
+              "variant_columns": {
+                "default": false,
+                "description": "Use the Iceberg variant column type (format v3) for object/array/multi-type fields and the root document instead of JSON strings. Toggling this on an existing materialization applies to data going forward: existing rows read as null for converted columns unless the binding is explicitly backfilled.",
+                "nonsensitive": true,
+                "title": "Variant Columns",
+                "type": "boolean"
+              }
+            },
+            "title": "Advanced Options",
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "aws_access_key_id": {
+        "description": "Access Key ID for accessing AWS services (legacy).",
+        "order": 0,
+        "title": "AWS Access Key ID",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-hidden-field": true
+      },
+      "aws_secret_access_key": {
+        "description": "Secret Access Key for accessing AWS services (legacy).",
+        "order": 1,
+        "secret": true,
+        "title": "AWS Secret Access Key",
+        "type": [
+          "string",
+          "null"
+        ],
+        "x-hidden-field": true
+      },
+      "bucket": {
+        "description": "The S3 bucket to write data files to.",
+        "order": 3,
+        "title": "Bucket",
+        "type": "string"
+      },
+      "catalog": {
+        "default": {
+          "catalog_type": "Iceberg REST Server"
+        },
+        "discriminator": {
+          "propertyName": "catalog_type"
+        },
+        "oneOf": [
+          {
+            "$id": "https://github.com/estuary/connectors/materialize-s3-iceberg/rest-catalog-props",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "catalog_type": {
+                "const": "Iceberg REST Server",
+                "default": "Iceberg REST Server",
+                "nonsensitive": true,
+                "order": 0,
+                "type": "string"
+              },
+              "credential": {
+                "description": "Credential for connecting to the catalog.",
+                "order": 2,
+                "secret": true,
+                "title": "Credential",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "description": "Desired scope of the requested security token.",
+                "order": 5,
+                "title": "Scope",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "token": {
+                "description": "Token for connecting to the catalog.",
+                "order": 3,
+                "secret": true,
+                "title": "Token",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "uri": {
+                "description": "URI identifying the REST catalog. Format: 'https://yourserver.com/catalog'.",
+                "order": 1,
+                "title": "URI",
+                "type": "string"
+              },
+              "warehouse": {
+                "description": "Warehouse to connect to.",
+                "order": 4,
+                "title": "Warehouse",
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "warehouse"
+            ],
+            "title": "REST",
+            "type": "object"
+          },
+          {
+            "$id": "https://github.com/estuary/connectors/materialize-s3-iceberg/glue-catalog-props",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "catalog_type": {
+                "const": "AWS Glue",
+                "default": "AWS Glue",
+                "nonsensitive": true,
+                "order": 0,
+                "type": "string"
+              },
+              "glue_id": {
+                "description": "Glue Catalog ID to use. Defaults to the account ID of the configured credentials when not set.",
+                "order": 1,
+                "title": "Glue Catalog ID",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "title": "AWS Glue",
+            "type": "object"
+          }
+        ],
+        "order": 9,
+        "title": "Catalog",
+        "type": "object"
+      },
+      "credentials": {
+        "default": {
+          "auth_type": "AWSAccessKey"
+        },
+        "discriminator": {
+          "propertyName": "auth_type"
+        },
+        "oneOf": [
+          {
+            "$id": "https://github.com/estuary/connectors/filesink/access-key-credentials",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "auth_type": {
+                "const": "AWSAccessKey",
+                "default": "AWSAccessKey",
+                "order": 0,
+                "type": "string"
+              },
+              "awsAccessKeyId": {
+                "description": "Access Key ID for writing data to the bucket.",
+                "order": 1,
+                "title": "AWS Access Key ID",
+                "type": "string"
+              },
+              "awsSecretAccessKey": {
+                "description": "Secret Access Key for writing data to the bucket.",
+                "order": 2,
+                "secret": true,
+                "title": "AWS Secret Access key",
+                "type": "string"
+              }
+            },
+            "required": [
+              "awsAccessKeyId",
+              "awsSecretAccessKey"
+            ],
+            "title": "Access Key",
+            "type": "object"
+          },
+          {
+            "$id": "https://github.com/estuary/connectors/go/auth/iam/aws-config",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "auth_type": {
+                "const": "AWSIAM",
+                "default": "AWSIAM",
+                "order": 0,
+                "type": "string"
+              },
+              "aws_region": {
+                "description": "AWS Region of your resource",
+                "title": "AWS Region",
+                "type": "string"
+              },
+              "aws_role_arn": {
+                "description": "AWS Role which has access to the resource which will be assumed by Flow",
+                "title": "AWS Role ARN",
+                "type": "string"
+              }
+            },
+            "required": [
+              "aws_region",
+              "aws_role_arn"
+            ],
+            "title": "AWS IAM",
+            "type": "object"
+          }
+        ],
+        "order": 2,
+        "title": "Authentication",
+        "type": "object",
+        "x-iam-auth": true
+      },
+      "namespace": {
+        "description": "Namespace for bound collection tables (unless overridden within the binding resource configuration).",
+        "order": 6,
+        "pattern": "^[^.]*$",
+        "title": "Namespace",
+        "type": "string"
+      },
+      "prefix": {
+        "description": "Optional prefix that will be used to store objects.",
+        "order": 4,
+        "title": "Prefix",
+        "type": "string"
+      },
+      "region": {
+        "description": "AWS region.",
+        "order": 5,
+        "title": "Region",
+        "type": "string"
+      },
+      "s3_endpoint": {
+        "description": "Custom S3 endpoint URL. The default AWS S3 endpoint for the specified region is used if not provided.",
+        "order": 8,
+        "title": "S3 Endpoint",
+        "type": "string"
+      },
+      "upload_interval": {
+        "default": "PT5M",
+        "description": "Frequency at which files will be uploaded. Must be a valid ISO8601 duration string no greater than 4 hours.",
+        "format": "duration",
+        "nonsensitive": true,
+        "order": 7,
+        "title": "Upload Interval",
+        "type": "string"
+      }
+    },
+    "required": [
+      "credentials",
+      "bucket",
+      "region",
+      "namespace",
+      "catalog"
+    ],
+    "title": "EndpointConfig",
+    "type": "object"
+  },
+  "resource": {
+    "$id": "https://github.com/estuary/connectors/materialize-s3-iceberg/resource",
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "additional_table_properties": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Additional Iceberg table properties to set when the table is created. These are set only at creation time and cannot be changed afterwards. Example: {'write.parquet.compression-codec': 'zstd'}",
+        "title": "Additional Table Properties",
+        "type": "object"
+      },
+      "delta_updates": {
+        "default": true,
+        "description": "Should updates to this table be done via delta updates. Currently this connector only supports delta updates.",
+        "nonsensitive": true,
+        "title": "Delta Update",
+        "type": "boolean"
+      },
+      "namespace": {
+        "description": "Alternative namespace for this table (optional).",
+        "title": "Alternative Namespace",
+        "type": "string"
+      },
+      "table": {
+        "description": "Name of the database table.",
+        "title": "Table",
+        "type": "string",
+        "x-collection-name": true
+      }
+    },
+    "required": [
+      "table"
+    ],
+    "title": "ResourceConfig",
+    "type": "object"
+  }
+}

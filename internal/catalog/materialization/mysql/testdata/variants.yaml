@@ -1,0 +1,66 @@
+materializations:
+  acmeCo/mysql/password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-mysql:v2
+        config:
+          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:3306
+          user: flow_materialize
+          password: <secret>
+          database: analytics
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/mysql/verify-ca:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-mysql:v2
+        config:
+          address: 10.0.0.15:3306
+          user: flow_materialize
+          password: <secret>
+          database: analytics
+          advanced:
+            sslmode: verify_ca
+            ssl_server_ca: |
+              -----BEGIN CERTIFICATE-----
+              <rds-ca>
+              -----END CERTIFICATE-----
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/mysql/ssh-tunnel:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-mysql:v2
+        config:
+          address: 10.0.0.15:3306
+          user: flow_materialize
+          password: <secret>
+          database: analytics
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/mysql/timezone:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-mysql:v2
+        config:
+          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com
+          user: flow_materialize
+          password: <secret>
+          database: analytics
+          timezone: America/New_York
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders

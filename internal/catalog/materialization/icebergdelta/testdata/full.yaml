@@ -1,0 +1,39 @@
+materializations:
+  acmeCo/analytics/materialize-s3-iceberg:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-s3-iceberg:v2
+        config:
+          credentials:
+            auth_type: AWSAccessKey
+            awsAccessKeyId: AKIAXXXXXXXXXXXXXXXX
+            awsSecretAccessKey: <secret-access-key>
+          bucket: my-iceberg-bucket
+          prefix: warehouse
+          region: us-east-1
+          namespace: analytics
+          upload_interval: PT5M
+          catalog:
+            catalog_type: Iceberg REST Server
+            uri: https://catalog.example.com/api/catalog
+            warehouse: my_warehouse
+            credential: <client_id>:<client_secret>
+            token: <bearer-token>
+            scope: PRINCIPAL_ROLE:ALL
+          advanced:
+            nanosecond_timestamps: false
+            variant_columns: false
+    bindings:
+      - resource:
+          table: orders
+          delta_updates: true
+        source: acmeCo/orders
+      - resource:
+          table: customers
+          namespace: crm
+          delta_updates: true
+          additional_table_properties:
+            write.parquet.compression-codec: zstd
+        source: acmeCo/customers
+        fields:
+          recommended: true

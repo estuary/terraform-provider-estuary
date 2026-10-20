@@ -1,0 +1,49 @@
+materializations:
+  acmeCo/analytics/materialize-iceberg:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-iceberg:v1
+        config:
+          url: https://glue.us-east-1.amazonaws.com/iceberg
+          warehouse: "123456789012"
+          namespace: analytics
+          base_location: s3://my-table-bucket/iceberg/
+          hard_delete: false
+          credentials:
+            auth_type: AWS IAM
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-iceberg-catalog
+            aws_region: us-east-1
+          compute:
+            compute_type: AWS EMR Serverless
+            region: us-east-1
+            application_id: 00abcdefghijklmn
+            execution_role_arn: arn:aws:iam::123456789012:role/estuary-emr-execution
+            bucket: my-staging-bucket
+            bucket_path: estuary/staging
+            credentials:
+              auth_type: UseCatalogAuth
+          syncSchedule:
+            syncFrequency: 30m
+          advanced:
+            table_identifier_case: lowercase
+            field_name_case: preserve
+          glue_optimizers:
+            execution_role_arn: arn:aws:iam::123456789012:role/glue-table-optimizer
+            enable_compaction: true
+            enable_retention: true
+            snapshot_retention_days: 5
+            number_of_snapshots_to_retain: 1
+            enable_orphan_file_deletion: true
+            orphan_file_retention_days: 3
+    bindings:
+      - resource:
+          table: orders
+        source: acmeCo/orders
+      - resource:
+          table: customers
+          namespace: crm
+          additional_table_properties:
+            write.parquet.compression-codec: zstd
+        source: acmeCo/customers
+        fields:
+          recommended: true

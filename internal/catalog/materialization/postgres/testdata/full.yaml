@@ -1,0 +1,57 @@
+materializations:
+  acmeCo/analytics/materialize-postgres:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-postgres:v5
+        config:
+          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+          user: flow_materialize
+          database: analytics
+          schema: estuary
+          hardDelete: true
+          credentials:
+            auth_type: AWSIAM
+            aws_region: us-east-1
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-materialize
+          dbt_job_trigger:
+            job_id: "12345"
+            account_id: "67890"
+            api_key: <dbt-api-key>
+            access_url: https://cloud.getdbt.com
+            cause: Estuary
+            mode: skip
+            interval: 30m
+          advanced:
+            sslmode: verify-full
+            no_flow_document: true
+            feature_flags: allow_existing_tables_for_new_bindings
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+    bindings:
+      - resource:
+          table: orders
+        source: acmeCo/orders
+        fields:
+          recommended: true
+
+      - resource:
+          table: customers
+          schema: crm
+          additional_table_create_sql: CREATE INDEX customers_email ON crm.customers (email);
+        source: acmeCo/customers
+
+      - resource:
+          table: events
+          delta_updates: true
+        source: acmeCo/events
+        fields:
+          recommended: true
+          exclude:
+            - payload
+          require:
+            flow_document: {}

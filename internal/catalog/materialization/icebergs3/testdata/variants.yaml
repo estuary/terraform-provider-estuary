@@ -1,0 +1,223 @@
+materializations:
+  acmeCo/iceberg/glue-iam-shared:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-iceberg:v1
+        config:
+          url: https://glue.us-east-1.amazonaws.com/iceberg
+          warehouse: "123456789012"
+          namespace: analytics
+          base_location: s3://my-table-bucket/iceberg/
+          credentials:
+            auth_type: AWS IAM
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-iceberg
+            aws_region: us-east-1
+          compute:
+            compute_type: AWS EMR Serverless
+            region: us-east-1
+            application_id: 00abcdefghijklmn
+            execution_role_arn: arn:aws:iam::123456789012:role/estuary-emr-execution
+            bucket: my-staging-bucket
+            credentials:
+              auth_type: UseCatalogAuth
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/iceberg/glue-iam-separate-emr:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-iceberg:v1
+        config:
+          url: https://glue.us-east-1.amazonaws.com/iceberg
+          warehouse: "123456789012"
+          namespace: analytics
+          base_location: s3://my-table-bucket/iceberg/
+          credentials:
+            auth_type: AWS IAM
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-iceberg-catalog
+            aws_region: us-east-1
+          compute:
+            compute_type: AWS EMR Serverless
+            region: us-east-1
+            application_id: 00abcdefghijklmn
+            execution_role_arn: arn:aws:iam::123456789012:role/estuary-emr-execution
+            bucket: my-staging-bucket
+            credentials:
+              auth_type: AWSAccessKey
+              aws_access_key_id: AKIAXXXXXXXXXXXXXXXX
+              aws_secret_access_key: <emr-secret-access-key>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/iceberg/glue-sigv4-shared:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-iceberg:v1
+        config:
+          url: https://glue.us-east-2.amazonaws.com/iceberg
+          warehouse: "123456789012"
+          namespace: analytics
+          base_location: s3://my-table-bucket/iceberg/
+          hard_delete: true
+          credentials:
+            auth_type: AWS SigV4
+            aws_access_key_id: AKIAXXXXXXXXXXXXXXXX
+            aws_secret_access_key: <secret-access-key>
+            aws_region: us-east-2
+          compute:
+            compute_type: AWS EMR Serverless
+            region: us-east-2
+            application_id: 00abcdefghijklmn
+            execution_role_arn: arn:aws:iam::123456789012:role/estuary-emr-execution
+            bucket: my-staging-bucket
+            bucket_path: staging
+            credentials:
+              auth_type: UseCatalogAuth
+          glue_optimizers:
+            execution_role_arn: arn:aws:iam::123456789012:role/glue-table-optimizer
+            enable_compaction: true
+            enable_retention: true
+            enable_orphan_file_deletion: true
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/iceberg/glue-sigv4-separate-emr:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-iceberg:v1
+        config:
+          url: https://glue.us-east-2.amazonaws.com/iceberg
+          warehouse: "123456789012"
+          namespace: analytics
+          base_location: s3://my-table-bucket/iceberg/
+          credentials:
+            auth_type: AWS SigV4
+            aws_access_key_id: AKIACATALOGXXXXXXXXX
+            aws_secret_access_key: <catalog-secret-access-key>
+            aws_region: us-east-2
+          compute:
+            compute_type: AWS EMR Serverless
+            region: us-east-2
+            application_id: 00abcdefghijklmn
+            execution_role_arn: arn:aws:iam::123456789012:role/estuary-emr-execution
+            bucket: my-staging-bucket
+            credentials:
+              auth_type: AWSAccessKey
+              aws_access_key_id: AKIAEMRXXXXXXXXXXXXX
+              aws_secret_access_key: <emr-secret-access-key>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/iceberg/rest-oauth:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-iceberg:v1
+        config:
+          url: https://myaccount.snowflakecomputing.com/polaris/api/catalog
+          warehouse: my_catalog
+          namespace: analytics
+          base_location: s3://my-table-bucket/iceberg/
+          credentials:
+            auth_type: OAuth 2.0 Client Credentials
+            oauth2_server_uri: v1/oauth/tokens
+            credential: <client_id>:<client_secret>
+            scope: PRINCIPAL_ROLE:estuary_role
+          compute:
+            compute_type: AWS EMR Serverless
+            region: us-east-1
+            application_id: 00abcdefghijklmn
+            execution_role_arn: arn:aws:iam::123456789012:role/estuary-emr-execution
+            bucket: my-staging-bucket
+            systems_manager_prefix: /estuary/
+            credentials:
+              auth_type: AWSAccessKey
+              aws_access_key_id: AKIAXXXXXXXXXXXXXXXX
+              aws_secret_access_key: <emr-secret-access-key>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/iceberg/s3tables-iam:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-iceberg:v1
+        config:
+          url: https://s3tables.us-east-1.amazonaws.com/iceberg
+          warehouse: arn:aws:s3tables:us-east-1:123456789012:bucket/my-table-bucket
+          namespace: analytics
+          credentials:
+            auth_type: AWS IAM
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-iceberg
+            aws_region: us-east-1
+          compute:
+            compute_type: AWS EMR Serverless
+            region: us-east-1
+            application_id: 00abcdefghijklmn
+            execution_role_arn: arn:aws:iam::123456789012:role/estuary-emr-execution
+            bucket: my-staging-bucket
+            credentials:
+              auth_type: UseCatalogAuth
+          advanced:
+            field_name_case: lowercase
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/iceberg/rest-oauth-external-token:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-iceberg:v1
+        config:
+          url: https://catalog.dremio.cloud/api/iceberg
+          warehouse: my_dremio_catalog
+          namespace: analytics
+          base_location: s3://my-table-bucket/iceberg/
+          credentials:
+            auth_type: OAuth 2.0 Client Credentials
+            oauth2_server_uri: https://login.dremio.cloud/oauth/token
+            credential: <client_id>:<client_secret>
+            scope: dremio.all
+          compute:
+            compute_type: AWS EMR Serverless
+            region: us-east-1
+            application_id: 00abcdefghijklmn
+            execution_role_arn: arn:aws:iam::123456789012:role/estuary-emr-execution
+            bucket: my-staging-bucket
+            systems_manager_prefix: /estuary/
+            credentials:
+              auth_type: AWSAccessKey
+              aws_access_key_id: AKIAXXXXXXXXXXXXXXXX
+              aws_secret_access_key: <emr-secret-access-key>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/iceberg/legacy:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-iceberg:v1
+        config:
+          url: https://glue.us-east-1.amazonaws.com/iceberg
+          warehouse: "123456789012"
+          namespace: analytics
+          base_location: s3://my-table-bucket/iceberg/
+          catalog_authentication:
+            catalog_auth_type: AWS SigV4
+            aws_access_key_id: AKIAXXXXXXXXXXXXXXXX
+            aws_secret_access_key: <secret-access-key>
+            region: us-east-1
+          compute:
+            compute_type: AWS EMR Serverless
+            region: us-east-1
+            application_id: 00abcdefghijklmn
+            execution_role_arn: arn:aws:iam::123456789012:role/estuary-emr-execution
+            bucket: my-staging-bucket
+            aws_access_key_id: AKIAXXXXXXXXXXXXXXXX
+            aws_secret_access_key: <secret-access-key>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders

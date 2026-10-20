@@ -52,8 +52,7 @@ resource "estuary_source_mongodb" "shop" {
         database   = "shop"
         collection = "orders"
       }
-      target   = "acmeCo/shop/orders"
-      backfill = 1
+      target = "acmeCo/shop/orders"
     },
   ]
 }
@@ -101,7 +100,6 @@ resource "estuary_source_mongodb" "metrics" {
         collection   = "events"
         capture_mode = "Change Stream Incremental"
       }
-      disable = true
     },
   ]
 }
@@ -156,18 +154,24 @@ resource "estuary_source_mongodb" "private" {
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `name` | String | Yes | Capture name (e.g., `mongodb`). The provider `tenant` is added in front and `/source-mongodb` at the end, unless they're already there. Changing the name destroys the capture and creates a new one. |
-| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-mongodb:v3`. |
+| `name` | String | Yes | Capture name (e.g., `mongodb`). The provider `tenant` is added in front and `/source-mongodb` at the end, unless they're already there. |
+| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-mongodb:v3`, see [Connector Versions](../../../../README.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the deployment for new collections and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Connection and discovery settings of the MongoDB deployment. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Captured collections, one per binding. See [`bindings`](#bindings). |
+
+> [!WARNING]
+> Changing `name` destroys the capture and creates a new one.
 
 ### `auto_discover`
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `add_new_bindings` | Bool | No | Automatically adds a binding for each new collection found in the deployment. When enabled, a binding you remove from your configuration may be added back by the next discovery, so set `disable = true` on it instead to stop capturing it. |
+| `add_new_bindings` | Bool | No | Automatically adds a binding for each new collection found in the deployment. |
 | `evolve_incompatible_collections` | Bool | No | Automatically updates the target collections when the source schema changes in a way they can't accept. |
+
+> [!TIP]
+> With `add_new_bindings = true`, a binding you remove from your configuration may be added back by the next discovery. To stop capturing a collection, set `disable = true` on its binding instead.
 
 ### `config`
 
@@ -207,9 +211,9 @@ resource "estuary_source_mongodb" "private" {
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `resource` | Object | Yes | MongoDB collection the binding captures. See [`bindings.resource`](#bindingsresource). |
-| `target` | String | No | Estuary collection the data is captured into. Defaults to the capture name without `/source-mongodb`, followed by `database/collection` (e.g., `acmeCo/mongodb/shop/users`). |
+| `target` | String | No | Estuary collection the data is captured into. A new binding defaults to the capture name without `/source-mongodb`, followed by `database/collection` (e.g., `acmeCo/mongodb/shop/users`), see [Bindings Lifecycle](../../../../README.md#bindings-lifecycle). |
 | `disable` | Bool | No | Stops capturing the collection while keeping the binding in the capture. |
-| `backfill` | Number | No | Backfill counter. Increase it by one to capture the whole collection again from the start. |
+| `backfill` | Number | No | Backfill counter. Increase it by one to capture the whole collection again from the start. Never lower it, see [Backfill Control](../../../../README.md#backfill-control). |
 | `name` | String | Read-only | Collection of the binding, shown in every plan so you can tell which binding changes. |
 
 ### `bindings.resource`

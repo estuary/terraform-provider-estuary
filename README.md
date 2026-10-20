@@ -15,9 +15,9 @@
 
 </div>
 
-The Estuary Terraform provider manages your Estuary captures (sources) and materializations (destinations) as code.
-
 Estuary is a data pipeline platform that combines batch and real-time data. It offers hundreds of low- and no-code connectors, transforms and aggregates data, and powers real-time applications.
+
+The Estuary Terraform provider manages your Estuary captures (sources) and materializations (destinations) as code.
 
 ## Table of Contents
 

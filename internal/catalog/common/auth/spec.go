@@ -32,10 +32,9 @@ var AWSAuthTypes = []AWSAuthType{
 	AWSAuthTypeIAM,
 }
 
-// DatabaseCredentials carries the database authentication of SQL captures and materializations,
-// with the fields relevant to its AuthType.
+// DatabaseCredentials is the database authentication of SQL connectors, with the fields of its AuthType.
 type DatabaseCredentials struct {
-	AuthType                        DatabaseAuthType `yaml:"auth_type"`
+	AuthType                        DatabaseAuthType `yaml:"auth_type" enum:"UserPassword,AWSIAM,GCPIAM,AzureIAM"`
 	Password                        string           `yaml:"password,omitempty"`
 	AWSRegion                       string           `yaml:"aws_region,omitempty"`
 	AWSRoleARN                      string           `yaml:"aws_role_arn,omitempty"`
@@ -45,10 +44,9 @@ type DatabaseCredentials struct {
 	AzureTenantID                   string           `yaml:"azure_tenant_id,omitempty"`
 }
 
-// AWSCredentials carries the AWS authentication of AWS captures and materializations, with the
-// fields relevant to its AuthType.
+// AWSCredentials is the AWS authentication of AWS connectors, with the fields of its AuthType.
 type AWSCredentials struct {
-	AuthType           AWSAuthType `yaml:"auth_type"`
+	AuthType           AWSAuthType `yaml:"auth_type" enum:"AWSAccessKey,AWSIAM"`
 	AWSAccessKeyID     string      `yaml:"aws_access_key_id,omitempty"`
 	AWSSecretAccessKey string      `yaml:"aws_secret_access_key,omitempty"`
 	AWSRoleARN         string      `yaml:"aws_role_arn,omitempty"`

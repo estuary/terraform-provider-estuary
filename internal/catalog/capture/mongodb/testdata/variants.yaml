@@ -16,7 +16,7 @@ captures:
       connector:
         image: ghcr.io/estuary/source-mongodb:v3
         config:
-          address: mongodb+srv://cluster0.abc123.mongodb.net?authSource=admin
+          address: mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin
           user: flow_capture
           password: <secret>
           database: shop,billing
@@ -31,12 +31,12 @@ captures:
       connector:
         image: ghcr.io/estuary/source-mongodb:v3
         config:
-          address: mongodb://10.0.0.12:27017
+          address: mongodb://123.4.567.89:27017
           user: flow_capture
           password: <secret>
           networkTunnel:
             sshForwarding:
-              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              sshEndpoint: ssh://ec2-user@ec2-123-4-567-89.compute-1.amazonaws.com:22
               privateKey: |
                 -----BEGIN RSA PRIVATE KEY-----
                 <private-key>

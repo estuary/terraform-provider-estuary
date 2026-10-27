@@ -5,16 +5,29 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 	"gopkg.in/yaml.v3"
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, "")
+	spectest.RunMaterializationSuite[Spec](test)
 }
 
 func TestSchemaConformance(test *testing.T) {
 	spectest.AssertConformsToSchema[Config, Resource](test)
+}
+
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, Variants, DeletionModes, materialization.OnIncompatibleSchemaChanges, materialization.TargetNamingStrategies)
+}
+
+func TestConnectorNames(test *testing.T) {
+	for _, variant := range Variants {
+		if name := ConnectorName(variant); name != "dekaf-"+string(variant) {
+			test.Errorf("connector name of %q = %q, want dekaf-%s", variant, name, variant)
+		}
+	}
 }
 
 func TestSampleVariants(test *testing.T) {
@@ -42,39 +55,39 @@ func TestSampleVariants(test *testing.T) {
 	}
 
 	for name, expected := range expectations {
-		test.Run(name, func(t *testing.T) {
+		test.Run(name, func(test *testing.T) {
 			spec, found := specs[name]
 
 			var endpoint Endpoint = spec.Endpoint.Dekaf
 
 			if !found {
-				t.Fatal("materialization missing from sample")
+				test.Fatal("materialization missing from sample")
 			}
 
 			if endpoint.Variant != expected.variant {
-				t.Errorf("variant = %q, want %q", endpoint.Variant, expected.variant)
+				test.Errorf("variant = %q, want %q", endpoint.Variant, expected.variant)
 			}
 
 			if endpoint.Config.Token != "<auth-token>" {
-				t.Errorf("token = %q, want <auth-token>", endpoint.Config.Token)
+				test.Errorf("token = %q, want <auth-token>", endpoint.Config.Token)
 			}
 
 			if endpoint.Config.StrictTopicNames != expected.strictTopicNames {
-				t.Errorf("strict_topic_names = %v, want %v", endpoint.Config.StrictTopicNames, expected.strictTopicNames)
+				test.Errorf("strict_topic_names = %v, want %v", endpoint.Config.StrictTopicNames, expected.strictTopicNames)
 			}
 
 			if endpoint.Config.Deletions != expected.deletions {
-				t.Errorf("deletions = %q, want %q", endpoint.Config.Deletions, expected.deletions)
+				test.Errorf("deletions = %q, want %q", endpoint.Config.Deletions, expected.deletions)
 			}
 
-			if len(spec.Bindings) != 1 || spec.Bindings[0].Resource.TopicName != "orders" || spec.Bindings[0].Source != "acmeCo/orders" {
-				t.Errorf("bindings = %+v, want a single orders binding from acmeCo/orders", spec.Bindings)
+			if len(spec.Bindings) != 1 || spec.Bindings[0].Resource.TopicName != "orders" || spec.Bindings[0].Source.Name != "acmeCo/orders" {
+				test.Errorf("bindings = %+v, want a single orders binding from acmeCo/orders", spec.Bindings)
 			}
 		})
 	}
 }
 
-func TestEnumListsCoverSamples(test *testing.T) {
+func TestSamplesFollowConnectorRules(test *testing.T) {
 	var seenVariants map[Variant]bool = map[Variant]bool{}
 
 	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
@@ -110,7 +123,7 @@ func TestExplicitDefaultsAreEmitted(test *testing.T) {
 				},
 			},
 		},
-		Bindings: []Binding{{Resource: Resource{TopicName: "orders"}, Source: "acmeCo/orders"}},
+		Bindings: []Binding{{Resource: Resource{TopicName: "orders"}, Source: materialization.BindingSource{Name: "acmeCo/orders"}}},
 	}
 
 	content, err := yaml.Marshal(spec)

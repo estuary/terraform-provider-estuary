@@ -4,7 +4,7 @@ materializations:
       connector:
         image: ghcr.io/estuary/materialize-postgres:v5
         config:
-          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:5432
           user: flow_materialize
           database: analytics
           credentials:
@@ -19,7 +19,7 @@ materializations:
       connector:
         image: ghcr.io/estuary/materialize-postgres:v5
         config:
-          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:5432
           user: flow_materialize
           database: analytics
           credentials:
@@ -35,14 +35,14 @@ materializations:
       connector:
         image: ghcr.io/estuary/materialize-postgres:v5
         config:
-          address: 10.0.0.12:5432
+          address: 123.4.567.89:5432
           user: flow_materialize
           credentials:
             auth_type: UserPassword
             password: <secret>
           networkTunnel:
             sshForwarding:
-              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              sshEndpoint: ssh://ec2-user@ec2-123-4-567-89.compute-1.amazonaws.com:22
               privateKey: |
                 -----BEGIN RSA PRIVATE KEY-----
                 <private-key>
@@ -56,7 +56,7 @@ materializations:
       connector:
         image: ghcr.io/estuary/materialize-postgres:v5
         config:
-          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com
           user: flow_materialize
           password: <secret>
     bindings:

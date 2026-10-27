@@ -13,7 +13,7 @@ func TestWithoutSecrets(test *testing.T) {
 			"connector": map[string]any{
 				"image": "ghcr.io/estuary/source-mongodb:v3",
 				"config": map[string]any{
-					"address":       "mongodb+srv://cluster0.abc123.mongodb.net",
+					"address":       "mongodb+srv://cluster0.123456789.mongodb.net",
 					"password_sops": "ENC[AES256_GCM,data:abc,type:str]",
 					"networkTunnel": map[string]any{"sshForwarding": map[string]any{"sshEndpoint": "ssh://bastion.example.com", "privateKey": "ENC[AES256_GCM,data:def,type:str]"}},
 					"sops":          map[string]any{"mac": "<encrypted>", "encrypted_suffix": "_sops"},
@@ -28,7 +28,7 @@ func TestWithoutSecrets(test *testing.T) {
 			"connector": map[string]any{
 				"image": "ghcr.io/estuary/source-mongodb:v3",
 				"config": map[string]any{
-					"address":       "mongodb+srv://cluster0.abc123.mongodb.net",
+					"address":       "mongodb+srv://cluster0.123456789.mongodb.net",
 					"networkTunnel": map[string]any{"sshForwarding": map[string]any{"sshEndpoint": "ssh://bastion.example.com"}},
 				},
 			},

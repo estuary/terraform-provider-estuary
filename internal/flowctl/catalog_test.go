@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
+	"github.com/estuary/terraform-provider-estuary/internal/utils"
 )
 
 func TestPulledSpec(test *testing.T) {
@@ -19,7 +20,7 @@ func TestPulledSpec(test *testing.T) {
 					connector:
 						image: ghcr.io/estuary/source-mongodb:v3
 						config:
-							address: mongodb+srv://cluster0.abc123.mongodb.net
+							address: mongodb+srv://cluster0.123456789.mongodb.net
 							user: flow_capture
 							password_sops: ENC[AES256_GCM,data:abc,type:str]
 							networkTunnel:
@@ -52,7 +53,7 @@ func TestPulledSpec(test *testing.T) {
 				"connector": map[string]any{
 					"image": "ghcr.io/estuary/source-mongodb:v3",
 					"config": map[string]any{
-						"address":       "mongodb+srv://cluster0.abc123.mongodb.net",
+						"address":       "mongodb+srv://cluster0.123456789.mongodb.net",
 						"user":          "flow_capture",
 						"password_sops": "ENC[AES256_GCM,data:abc,type:str]",
 						"networkTunnel": map[string]any{"sshForwarding": map[string]any{"sshEndpoint": "ssh://bastion.example.com", "privateKey": "ENC[AES256_GCM,data:def,type:str]"}},
@@ -108,57 +109,50 @@ func TestPulledSpec(test *testing.T) {
 	}
 }
 
-func TestFindCatalogEntry(test *testing.T) {
-	outputs := map[string]struct {
-		output string
-		found  bool
-	}{
-		"json lines with camel case names": {
-			output: `
-				{"catalogName":"acmeCo/pg-staging","catalogType":"materialization"}
-				{"catalogName":"acmeCo/pg","catalogType":"materialization"}
-			`,
-			found: true,
-		},
-		"json lines with legacy snake case names": {
-			output: `{"catalog_name":"acmeCo/pg","spec_type":"materialization"}`,
-			found:  true,
-		},
-		"json array": {
-			output: `[{"catalogName":"acmeCo/pg"}]`,
-			found:  true,
-		},
-		"prefix match only": {
-			output: `{"catalogName":"acmeCo/pg-staging"}`,
-			found:  false,
-		},
-		"empty output": {
-			output: "",
-			found:  false,
-		},
+func TestInlineConfigsReadsNestedConfigs(test *testing.T) {
+	var directory string = test.TempDir()
+	var spec map[string]any = map[string]any{"endpoint": map[string]any{"connector": map[string]any{"config": "acmeCo/movies/source-postgres.config.yaml"}}}
+
+	if err := os.MkdirAll(filepath.Join(directory, "acmeCo", "movies"), 0700); err != nil {
+		test.Fatal(err)
 	}
 
-	for name, expected := range outputs {
-		test.Run(name, func(test *testing.T) {
-			entry, err := findCatalogEntry([]byte(expected.output), "acmeCo/pg")
+	if err := os.WriteFile(filepath.Join(directory, "acmeCo", "movies", "source-postgres.config.yaml"), []byte("address: db:5432\n"), 0600); err != nil {
+		test.Fatal(err)
+	}
 
-			if err != nil {
-				test.Fatalf("findCatalogEntry: %v", err)
-			}
+	if err := inlineConfigs(spec, directory); err != nil {
+		test.Fatal(err)
+	}
 
-			if (entry != nil) != expected.found {
-				test.Errorf("entry = %+v, want found = %v", entry, expected.found)
-			}
-
-			if entry != nil && entry.CatalogName != "acmeCo/pg" {
-				test.Errorf("catalog name = %q, want acmeCo/pg", entry.CatalogName)
-			}
-		})
+	if config := utils.Lookup(spec, "endpoint", "connector", "config"); config["address"] != "db:5432" {
+		test.Errorf("config = %v, want the nested config file inlined", config)
 	}
 }
 
-func TestFindCatalogEntryRejectsMalformedOutput(test *testing.T) {
-	if _, err := findCatalogEntry([]byte("Name  Type\nacmeCo/pg  capture"), "acmeCo/pg"); err == nil {
-		test.Error("error = nil, want table output to be rejected")
+func TestInlineConfigsRejectsPathsOutOfTheWorkspace(test *testing.T) {
+	var outside string = filepath.Join(test.TempDir(), "credentials.yaml")
+	var directory string = test.TempDir()
+
+	if err := os.WriteFile(outside, []byte("aws_secret_access_key: leaked\n"), 0600); err != nil {
+		test.Fatal(err)
+	}
+
+	if err := os.Symlink(outside, filepath.Join(directory, "link.config.yaml")); err != nil {
+		test.Fatal(err)
+	}
+
+	relative, err := filepath.Rel(directory, outside)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	for _, path := range []string{relative, outside, "link.config.yaml"} {
+		var spec map[string]any = map[string]any{"endpoint": map[string]any{"connector": map[string]any{"config": path}}}
+
+		if err := inlineConfigs(spec, directory); err == nil {
+			test.Errorf("%s: inlineConfigs read a file out of the workspace: %v", path, spec)
+		}
 	}
 }

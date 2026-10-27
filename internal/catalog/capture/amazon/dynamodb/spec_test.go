@@ -11,11 +11,15 @@ import (
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunCaptureSuite[Spec](test, Image)
+	spectest.RunCaptureSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
 }
 
 func TestSchemaConformance(test *testing.T) {
 	spectest.AssertConformsToSchema[Config, Resource](test)
+}
+
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, auth.AWSAuthTypes)
 }
 
 func TestSampleVariants(test *testing.T) {

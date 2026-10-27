@@ -19,7 +19,7 @@ resource "estuary_source_mongodb" "shop" {
   }
 
   config = {
-    address  = "mongodb+srv://cluster0.abc123.mongodb.net?authSource=admin"
+    address  = "mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin"
     user     = "flow_capture"
     password = var.mongodb_password
     database = "shop"
@@ -48,7 +48,7 @@ resource "estuary_source_mongodb" "metrics" {
   name = "mongodb/metrics"
 
   config = {
-    address                 = "mongodb://mongo.internal.acme.co:27017?authSource=admin"
+    address                 = "mongodb://123.4.567.89:27017?authSource=admin"
     user                    = "flow_capture"
     password                = var.mongodb_password
     database                = "shop,metrics"
@@ -91,13 +91,13 @@ resource "estuary_source_mongodb" "private" {
   name = "mongodb/private"
 
   config = {
-    address  = "mongodb://10.0.1.25:27017?authSource=admin"
+    address  = "mongodb://123.4.567.89:27017?authSource=admin"
     user     = "flow_capture"
     password = var.mongodb_password
 
     network_tunnel = {
       ssh_forwarding = {
-        ssh_endpoint = "ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22"
+        ssh_endpoint = "ssh://ec2-user@ec2-123-4-567-89.compute-1.amazonaws.com:22"
         private_key  = var.ssh_private_key
       }
     }

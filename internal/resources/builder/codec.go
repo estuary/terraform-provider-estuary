@@ -14,33 +14,44 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Connector identifies a connector resource by its Terraform type name suffix, default image and the
-// connector name appended to its catalog names.
+// Connector identifies a connector resource by its type name suffix, default image and catalog connector name.
 type Connector struct {
 	TypeName      string
 	Image         string
 	ConnectorName string
 }
 
-// Document is the Terraform shape of a catalog entry, D being the document itself and S the catalog spec it maps to.
+// Document is the Terraform shape of a catalog entry mapping to the catalog spec S.
 type Document[D, S any] interface {
 	Spec() (string, S)
 	FromSpec(name string, spec S) D
 }
 
-// attributesAdjuster is implemented by documents changing the attributes inferred from their spec types.
+// attributesAdjuster is implemented by documents changing their inferred attributes.
 type attributesAdjuster interface {
 	adjustAttributes(attributes map[string]schema.Attribute)
 }
 
-// Codec converts a catalog entry between its Terraform values and its catalog spec, through its document D.
+// backfillModeHolder is implemented by documents whose binding resources hold a backfill mode.
+type backfillModeHolder interface {
+	resourceBackfillMode() string
+}
+
+// shapeMover is implemented by documents placing fields elsewhere than their spec, moving them in both directions.
+type shapeMover interface {
+	toSpecShape(document map[string]any)
+	toTerraformShape(document map[string]any)
+}
+
+// Codec converts a catalog entry between Terraform values and its catalog spec.
 type Codec[D Document[D, S], S any] struct {
 	root      *translator.Object
 	schema    schema.Schema
+	secrets   secrets
 	valueType tftypes.Type
 }
 
-// NewCodec builds the node tree and Terraform schema of the document from the YAML tags of its spec types.
+// NewCodec builds the node tree and Terraform schema from the spec YAML tags.
 func NewCodec[D Document[D, S], S any](connector Connector) (*Codec[D, S], error) {
 	root, err := translator.NewObject(reflect.TypeFor[D]())
 
@@ -74,6 +85,12 @@ func NewCodec[D Document[D, S], S any](connector Connector) (*Codec[D, S], error
 		attributes[bindingsAttribute] = bindings
 	}
 
+	if shards, isDynamic := attributes[shardsAttribute].(schema.DynamicAttribute); isDynamic {
+		shards.Computed = true
+
+		attributes[shardsAttribute] = shards
+	}
+
 	if _, found := attributes["image"]; found {
 		if connector.Image == "" {
 			return nil, fmt.Errorf("building %s schema: the connector has no default image", connector.TypeName)
@@ -94,6 +111,7 @@ func NewCodec[D Document[D, S], S any](connector Connector) (*Codec[D, S], error
 	return &Codec[D, S]{
 		root:      root,
 		schema:    resourceSchema,
+		secrets:   secrets{schema: resourceSchema},
 		valueType: resourceSchema.Type().TerraformType(context.Background()),
 	}, nil
 }
@@ -103,12 +121,11 @@ func (codec *Codec[D, S]) Schema() schema.Schema {
 	return codec.schema
 }
 
-// Spec converts a Terraform plan or state value into the catalog name and spec, without the secrets hash and the
-// binding names, both unknown in plans until the provider sets them.
+// Spec converts a Terraform value into the catalog name and spec, without the secret hashes and binding names.
 func (codec *Codec[D, S]) Spec(value tftypes.Value) (string, S, error) {
 	var empty S
 
-	value, err := codec.nullSecretsHash(value)
+	value, err := codec.secrets.nullHashes(value)
 
 	if err != nil {
 		return "", empty, err
@@ -130,6 +147,12 @@ func (codec *Codec[D, S]) Spec(value tftypes.Value) (string, S, error) {
 		return "", empty, err
 	}
 
+	if mover, isMover := any(*new(D)).(shapeMover); isMover {
+		object, _ := converted.(map[string]any)
+
+		mover.toSpecShape(object)
+	}
+
 	document, err := decode[D](converted, true)
 
 	if err != nil {
@@ -141,11 +164,18 @@ func (codec *Codec[D, S]) Spec(value tftypes.Value) (string, S, error) {
 	return name, spec, nil
 }
 
-// LiveSpec decodes a live catalog spec, strict failing on the keys the spec doesn't model.
-func (codec *Codec[D, S]) LiveSpec(live map[string]any, strict bool) (S, error) {
-	return decode[S](live, strict)
+// Document converts a Terraform value into the YAML document of its catalog spec.
+func (codec *Codec[D, S]) Document(value tftypes.Value) (map[string]any, error) {
+	_, spec, err := codec.Spec(value)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return utils.YAMLDocument(spec)
 }
 
+// decode decodes a YAML value into T, strict failing on unknown keys.
 func decode[T any](value any, strict bool) (T, error) {
 	var decoded T
 
@@ -166,7 +196,7 @@ func decode[T any](value any, strict bool) (T, error) {
 	return decoded, nil
 }
 
-// Value converts a catalog name and spec into its Terraform value, naming each binding after its collection.
+// Value converts a catalog name and spec into a Terraform value, naming bindings after their collection.
 func (codec *Codec[D, S]) Value(name string, spec S) (tftypes.Value, error) {
 	var document D
 
@@ -174,6 +204,10 @@ func (codec *Codec[D, S]) Value(name string, spec S) (tftypes.Value, error) {
 
 	if err != nil {
 		return tftypes.Value{}, err
+	}
+
+	if mover, isMover := any(document).(shapeMover); isMover {
+		mover.toTerraformShape(decoded)
 	}
 
 	value, err := codec.root.TerraformValue(decoded, codec.valueType)

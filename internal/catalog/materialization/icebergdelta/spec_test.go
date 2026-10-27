@@ -5,30 +5,36 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/auth"
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, Image)
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
 }
 
 func TestSchemaConformance(test *testing.T) {
 	spectest.AssertConformsToSchema[Config, Resource](test)
 }
 
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, CatalogTypes, auth.AWSAuthTypes, materialization.OnIncompatibleSchemaChanges, materialization.TargetNamingStrategies)
+}
+
 func TestSampleAuthVariants(test *testing.T) {
 	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
 
 	expectations := map[string]struct {
-		authType    AuthType
+		authType    auth.AWSAuthType
 		catalogType CatalogType
 		glueID      string
 	}{
-		"acmeCo/iceberg/rest-access-key":        {AuthTypeAWSAccessKey, CatalogTypeREST, ""},
-		"acmeCo/iceberg/rest-iam":               {AuthTypeAWSIAM, CatalogTypeREST, ""},
-		"acmeCo/iceberg/glue-access-key":        {AuthTypeAWSAccessKey, CatalogTypeGlue, ""},
-		"acmeCo/iceberg/glue-iam":               {AuthTypeAWSIAM, CatalogTypeGlue, ""},
-		"acmeCo/iceberg/glue-iam-cross-account": {AuthTypeAWSIAM, CatalogTypeGlue, "210987654321"},
+		"acmeCo/iceberg/rest-access-key":        {auth.AWSAuthTypeAccessKey, CatalogTypeREST, ""},
+		"acmeCo/iceberg/rest-iam":               {auth.AWSAuthTypeIAM, CatalogTypeREST, ""},
+		"acmeCo/iceberg/glue-access-key":        {auth.AWSAuthTypeAccessKey, CatalogTypeGlue, ""},
+		"acmeCo/iceberg/glue-iam":               {auth.AWSAuthTypeIAM, CatalogTypeGlue, ""},
+		"acmeCo/iceberg/glue-iam-cross-account": {auth.AWSAuthTypeIAM, CatalogTypeGlue, "210987654321"},
 	}
 
 	for name, expected := range expectations {
@@ -46,11 +52,11 @@ func TestSampleAuthVariants(test *testing.T) {
 			}
 
 			switch expected.authType {
-			case AuthTypeAWSAccessKey:
+			case auth.AWSAuthTypeAccessKey:
 				if config.Credentials.AWSAccessKeyID == "" || config.Credentials.AWSRoleARN != "" {
 					test.Errorf("access key credentials = %+v, want awsAccessKeyId and no role", config.Credentials)
 				}
-			case AuthTypeAWSIAM:
+			case auth.AWSAuthTypeIAM:
 				if config.Credentials.AWSRoleARN == "" || config.Credentials.AWSRegion == "" || config.Credentials.AWSAccessKeyID != "" {
 					test.Errorf("IAM credentials = %+v, want role and region and no keys", config.Credentials)
 				}
@@ -127,8 +133,8 @@ func TestSampleFullSpec(test *testing.T) {
 		test.Errorf("customers resource = %+v", customers.Resource)
 	}
 
-	if customers.Fields == nil || !customers.Fields.Recommended {
-		test.Errorf("customers fields = %+v, want recommended", customers.Fields)
+	if customers.Fields == nil || customers.Fields.Recommended != materialization.FieldDepthUnlimited {
+		test.Errorf("customers fields = %+v, want every field recommended", customers.Fields)
 	}
 }
 
@@ -162,8 +168,8 @@ func TestSampleAlternatives(test *testing.T) {
 	}
 }
 
-func TestEnumListsCoverSamples(test *testing.T) {
-	var seenAuthTypes map[AuthType]bool = map[AuthType]bool{}
+func TestSamplesFollowConnectorRules(test *testing.T) {
+	var seenAuthTypes map[auth.AWSAuthType]bool = map[auth.AWSAuthType]bool{}
 
 	var seenCatalogTypes map[CatalogType]bool = map[CatalogType]bool{}
 
@@ -174,8 +180,8 @@ func TestEnumListsCoverSamples(test *testing.T) {
 			var config Config = spec.Endpoint.Connector.Config
 
 			if config.Credentials != nil {
-				if !slices.Contains(AuthTypes, config.Credentials.AuthType) {
-					test.Errorf("%s: auth_type %q is not in AuthTypes", name, config.Credentials.AuthType)
+				if !slices.Contains(auth.AWSAuthTypes, config.Credentials.AuthType) {
+					test.Errorf("%s: auth_type %q is not in auth.AWSAuthTypes", name, config.Credentials.AuthType)
 				}
 
 				seenAuthTypes[config.Credentials.AuthType] = true
@@ -189,7 +195,7 @@ func TestEnumListsCoverSamples(test *testing.T) {
 		}
 	}
 
-	for _, authType := range AuthTypes {
+	for _, authType := range auth.AWSAuthTypes {
 		if !seenAuthTypes[authType] {
 			test.Errorf("auth_type %q has no sample", authType)
 		}
@@ -224,7 +230,7 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 									compute:
 										compute_type: AWS EMR Serverless
 						bindings: []
-				`,
+			`,
 		},
 		"snake case access key under credentials": {
 			key: "aws_access_key_id",

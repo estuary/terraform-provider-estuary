@@ -3,12 +3,18 @@ package builder
 import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
+
+const bindingsAttribute string = "bindings"
+const bindingTargetAttribute string = "target"
+const bindingSourceAttribute string = "source"
+const bindingNameAttribute string = "name"
 
 const resourceMetaKey string = "_meta"
 
-// mergeBindings publishes the planned bindings over the live ones, keeping the live bindings Terraform never
-// managed and dropping the previously managed ones no longer planned. New planned bindings follow, in plan order.
+// mergeBindings merges planned bindings over live ones, keeping unmanaged ones and dropping removed managed ones.
+// New planned bindings follow, in plan order.
 func mergeBindings(planned []any, previous []any, live []any) []any {
 	var pending map[string]any = map[string]any{}
 	var managed map[string]bool = map[string]bool{}
@@ -43,29 +49,42 @@ func mergeBindings(planned []any, previous []any, live []any) []any {
 	return merged
 }
 
-// liveDocument returns a sealed live spec as the provider manages it: without its encrypted secrets, which can't be
-// decrypted, and without the metadata the control plane adds to each binding resource, which users don't write.
-func liveDocument(sealed map[string]any) map[string]any {
-	var live map[string]any = catalog.WithoutSecrets(sealed)
+// keepResourceMetadata copies control-plane resource metadata, such as the path, from live into planned bindings.
+func keepResourceMetadata(planned any, live []any) {
+	var metadata map[string]any = map[string]any{}
 
-	liveBindings, _ := live["bindings"].([]any)
-
-	for _, binding := range liveBindings {
-		delete(utils.Lookup(binding, "resource"), resourceMetaKey)
+	for _, binding := range live {
+		if meta, found := utils.Lookup(binding, "resource")[resourceMetaKey]; found {
+			metadata[bindingCollection(binding)] = meta
+		}
 	}
 
-	return live
+	bindings, _ := planned.([]any)
+
+	for _, binding := range bindings {
+		var resource map[string]any = utils.Lookup(binding, "resource")
+
+		if meta, found := metadata[bindingCollection(binding)]; found && resource != nil && resource[resourceMetaKey] == nil {
+			resource[resourceMetaKey] = meta
+		}
+	}
 }
 
-// generatesBindings reports whether the control plane may add bindings to the spec, such as discovered ones.
+// generatesBindings reports whether the control plane may add bindings, such as discovered ones.
 func generatesBindings(spec any) bool {
 	generator, isGenerator := spec.(catalog.BindingsGenerator)
 
 	return isGenerator && generator.GeneratesBindings()
 }
 
-// bindingCollection returns the collection of a binding: the target of a capture binding, or the source of a
-// materialization binding, either a collection name or an object naming it.
+// addsNewBindings reports whether discovery binds every resource the spec doesn't.
+func addsNewBindings(spec any) bool {
+	adder, isAdder := spec.(catalog.NewBindingsAdder)
+
+	return isAdder && adder.AddsNewBindings()
+}
+
+// bindingCollection returns a binding document's collection: the capture target or materialization source.
 func bindingCollection(binding any) string {
 	object, _ := binding.(map[string]any)
 
@@ -80,4 +99,134 @@ func bindingCollection(binding any) string {
 	name, _ := utils.Lookup(object, "source")["name"].(string)
 
 	return name
+}
+
+// bindings returns an entry's bindings and list type, nil type when null.
+func bindings(value tftypes.Value) ([]tftypes.Value, tftypes.Type, error) {
+	var attributes map[string]tftypes.Value
+	var items []tftypes.Value
+
+	if value.Type() == nil || value.IsNull() || !value.IsKnown() {
+		return nil, nil, nil
+	}
+
+	if err := value.As(&attributes); err != nil {
+		return nil, nil, err
+	}
+
+	list, found := attributes[bindingsAttribute]
+
+	if !found || list.IsNull() || !list.IsKnown() {
+		return nil, nil, nil
+	}
+
+	if err := list.As(&items); err != nil {
+		return nil, nil, err
+	}
+
+	return items, list.Type(), nil
+}
+
+// byCollection indexes binding values by collection.
+func byCollection(items []tftypes.Value) map[string]tftypes.Value {
+	var indexed map[string]tftypes.Value = map[string]tftypes.Value{}
+
+	for _, binding := range items {
+		indexed[bindingCollectionValue(binding)] = binding
+	}
+
+	return indexed
+}
+
+// bindingCollectionValue returns a binding value's collection, empty when unknown.
+func bindingCollectionValue(binding tftypes.Value) string {
+	var collection string
+
+	for _, attribute := range []string{bindingTargetAttribute, bindingSourceAttribute} {
+		if value := bindingAttribute(binding, attribute); value.IsKnown() && !value.IsNull() {
+			_ = value.As(&collection)
+
+			return collection
+		}
+	}
+
+	return collection
+}
+
+// withBindingNames sets each binding name to its collection, unknown while the collection is.
+func withBindingNames(value tftypes.Value) (tftypes.Value, error) {
+	return tftypes.Transform(value, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
+		var steps []tftypes.AttributePathStep = path.Steps()
+		var attributes map[string]tftypes.Value
+
+		if len(steps) != 2 || steps[0] != tftypes.AttributeName(bindingsAttribute) || !current.IsKnown() || current.IsNull() {
+			return current, nil
+		}
+
+		if err := current.As(&attributes); err != nil {
+			return current, err
+		}
+
+		collection, isCapture := attributes[bindingTargetAttribute]
+
+		if !isCapture {
+			collection = bindingAttribute(current, bindingSourceAttribute)
+		}
+
+		attributes[bindingNameAttribute] = collection
+
+		return tftypes.NewValue(current.Type(), attributes), nil
+	})
+}
+
+// bindingAttribute returns a binding attribute, unknown when the binding is.
+func bindingAttribute(binding tftypes.Value, attribute string) tftypes.Value {
+	var attributes map[string]tftypes.Value
+
+	if !binding.IsKnown() {
+		return tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+	}
+
+	if binding.IsNull() || binding.As(&attributes) != nil {
+		return tftypes.NewValue(tftypes.String, nil)
+	}
+
+	if value, found := attributes[attribute]; found {
+		return value
+	}
+
+	return tftypes.NewValue(tftypes.String, nil)
+}
+
+// providerOnly reports whether path is applied by the provider but absent from the catalog spec: the entry
+// backfill block and binding backfill trigger and strategy.
+func providerOnly(path *tftypes.AttributePath) bool {
+	return path.Equal(tftypes.NewAttributePath().WithAttributeName(backfillAttribute)) ||
+		bindingBackfillPath(path, backfillTriggerAttribute) || bindingBackfillPath(path, backfillStrategyAttribute)
+}
+
+// bindingBackfillPath reports whether path is bindings[index].backfill.attribute.
+func bindingBackfillPath(path *tftypes.AttributePath, attribute string) bool {
+	var steps []tftypes.AttributePathStep = path.Steps()
+
+	if len(steps) != 4 || steps[3] != tftypes.AttributeName(attribute) {
+		return false
+	}
+
+	_, isBlock := bindingAttributeIndex(tftypes.NewAttributePathWithSteps(steps[:3]), backfillAttribute)
+
+	return isBlock
+}
+
+// bindingAttributeIndex returns the index of a bindings[index].attribute path, false for other paths.
+func bindingAttributeIndex(path *tftypes.AttributePath, attribute string) (int, bool) {
+	var steps []tftypes.AttributePathStep = path.Steps()
+
+	if len(steps) != 3 || steps[0] != tftypes.AttributeName(bindingsAttribute) || steps[2] != tftypes.AttributeName(attribute) {
+		return 0, false
+	}
+
+	index, isIndex := steps[1].(tftypes.ElementKeyInt)
+
+	return int(index), isIndex
 }

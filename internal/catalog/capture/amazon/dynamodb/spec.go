@@ -9,7 +9,7 @@ import (
 // Image is the DynamoDB connector image.
 const Image string = "ghcr.io/estuary/source-dynamodb:v1"
 
-// ConnectorName ends the catalog name of every task of the connector, as the dashboard names them.
+// ConnectorName ends the catalog name of the connector tasks.
 const ConnectorName string = "source-dynamodb"
 
 // Advanced carries the advanced endpoint options, including the backfill scan and stream polling settings.
@@ -20,8 +20,7 @@ type Advanced struct {
 	Endpoint         string `yaml:"endpoint,omitempty"`
 }
 
-// Config carries the ghcr.io/estuary/source-dynamodb connector configurations, including
-// the tables region and the AWS authentication.
+// Config is the source-dynamodb configuration: region and AWS authentication.
 type Config struct {
 	Region      string              `yaml:"region"`
 	Credentials auth.AWSCredentials `yaml:"credentials"`
@@ -32,6 +31,11 @@ type Config struct {
 type Resource struct {
 	Table         string `yaml:"table"`
 	RCUAllocation int    `yaml:"rcuAllocation,omitempty"`
+}
+
+// ResourcePath returns the table, satisfying capture.ResourcePather.
+func (resource Resource) ResourcePath() []string {
+	return []string{resource.Table}
 }
 
 // Binding maps a captured DynamoDB resource to the collection it is captured into.

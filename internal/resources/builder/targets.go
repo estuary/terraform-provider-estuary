@@ -2,55 +2,18 @@ package builder
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
+	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-// liveReader returns the live value of the entry in state, read once and found being false when it can't be read.
-type liveReader func() (tftypes.Value, bool)
-
-// newLiveReader returns the liveReader of the entry in state, which never reads an entry not created yet.
-func (entryResource *entryResource[D, S]) newLiveReader(ctx context.Context, state tftypes.Value) liveReader {
-	var live tftypes.Value
-	var found, read bool
-
-	return func() (tftypes.Value, bool) {
-		if read {
-			return live, found
-		}
-
-		read = true
-
-		name, err := attributeValue(state, tftypes.NewAttributePath().WithAttributeName("name"))
-
-		var text string
-
-		if err != nil || name.As(&text) != nil || entryResource.session == nil || entryResource.session.Backend == nil {
-			return live, found
-		}
-
-		sealed, err := entryResource.session.Backend.ReadSpec(ctx, entryResource.catalogName(text))
-
-		if err != nil || sealed == nil {
-			return live, found
-		}
-
-		live, err = entryResource.liveValue(text, sealed)
-		found = err == nil
-
-		return live, found
-	}
-}
-
-// planTargets returns plan with the target of each binding config leaves unset: the state target of the same resource,
-// else the live one, else the collection discovery names, the capture name without its connector name followed by the
-// resource recommended name. Bindings are the same resource when their recommended names are. Targets stay unknown
-// until apply while the names aren't known, rather than keeping the target Terraform proposes from another binding.
-func (entryResource *entryResource[D, S]) planTargets(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+// planTargets fills each unset binding target from state, else live, else discovery, so the provider never replicates
+// connector naming rules. Targets stay unknown while the resources aren't known.
+func (entryResource *entryResource[D, S]) planTargets(ctx context.Context, plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
 	var unset map[int]bool = map[int]bool{}
-	var text string
-	var liveAdded bool
+	var resolved map[int]string
 
 	configBindings, _, err := bindings(config)
 
@@ -68,12 +31,13 @@ func (entryResource *entryResource[D, S]) planTargets(plan tftypes.Value, config
 		return plan, nil
 	}
 
-	name, err := attributeValue(plan, tftypes.NewAttributePath().WithAttributeName("name"))
-	names, known := entryResource.recommendedNames(plan)
-	known = known && err == nil && name.IsKnown() && name.As(&text) == nil
+	if paths, known := entryResource.resourcePaths(plan); known {
+		resolved, err = entryResource.resolveTargets(ctx, unset, paths, plan, config, state, readLive)
+	}
 
-	var targets map[string]string = entryResource.recommendedTargets(state)
-	var prefix string = catalog.Name(entryResource.catalogName(text), entryResource.connector.ConnectorName) + "/"
+	if err != nil {
+		return plan, err
+	}
 
 	return tftypes.Transform(plan, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
 		index, isTarget := bindingAttributeIndex(path, bindingTargetAttribute)
@@ -82,46 +46,133 @@ func (entryResource *entryResource[D, S]) planTargets(plan tftypes.Value, config
 			return current, nil
 		}
 
-		if !known || names[index] == "" {
-			return tftypes.NewValue(tftypes.String, tftypes.UnknownValue), nil
-		}
-
-		if _, found := targets[names[index]]; !found && !liveAdded {
-			entryResource.addLiveTargets(targets, readLive)
-			liveAdded = true
-		}
-
-		if target, found := targets[names[index]]; found {
+		if target, found := resolved[index]; found {
 			return tftypes.NewValue(tftypes.String, target), nil
 		}
 
-		return tftypes.NewValue(tftypes.String, prefix+names[index]), nil
+		return tftypes.NewValue(tftypes.String, tftypes.UnknownValue), nil
 	})
 }
 
-// addLiveTargets adds the live targets of the resources targets doesn't hold yet, the state ones taking precedence.
-func (entryResource *entryResource[D, S]) addLiveTargets(targets map[string]string, readLive liveReader) {
-	live, found := readLive()
+// resolveTargets returns the unset binding targets by index. Discovery runs only when state and live miss some and
+// config is known, failing the plan for resources it doesn't find.
+func (entryResource *entryResource[D, S]) resolveTargets(ctx context.Context, unset map[int]bool, paths []string, plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (map[int]string, error) {
+	var resolved map[int]string = map[int]string{}
+	var targets map[string]string = entryResource.pathTargets(state)
 
-	if !found {
-		return
+	if missingTargets(unset, paths, targets) != nil {
+		if live, found := readLive(); found {
+			addTargets(targets, entryResource.pathTargets(live))
+		}
 	}
 
-	for name, target := range entryResource.recommendedTargets(live) {
-		if _, stored := targets[name]; !stored {
-			targets[name] = target
+	if missing := missingTargets(unset, paths, targets); missing != nil && config.IsFullyKnown() && entryResource.session != nil && entryResource.session.Backend != nil {
+		discovered, err := entryResource.discoverTargets(ctx, plan, config)
+
+		if err != nil {
+			return nil, err
+		}
+
+		addTargets(targets, discovered)
+
+		if missing = missingTargets(unset, paths, targets); missing != nil {
+			return nil, fmt.Errorf("discovery found no resource for bindings %v. Check the resources exist and the capture user can read them, or set their target", missing)
+		}
+	}
+
+	for index := range unset {
+		if target, found := targets[paths[index]]; found {
+			resolved[index] = target
+		}
+	}
+
+	return resolved, nil
+}
+
+// discoverTargets returns discovered targets by resource path, discovering without bindings or autoDiscover so every
+// resource is returned.
+func (entryResource *entryResource[D, S]) discoverTargets(ctx context.Context, plan tftypes.Value, config tftypes.Value) (map[string]string, error) {
+	var targets map[string]string = map[string]string{}
+
+	value, err := entryResource.codec.secrets.withConfigSecrets(plan, config)
+
+	if err == nil {
+		value, err = withoutTargets(value)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	name, spec, err := entryResource.codec.Spec(value)
+
+	if err != nil {
+		return nil, err
+	}
+
+	identifier, isIdentifier := any(spec).(catalog.BindingsIdentifier)
+
+	if !isIdentifier {
+		return targets, nil
+	}
+
+	document, err := utils.YAMLDocument(spec)
+
+	if err != nil {
+		return nil, err
+	}
+
+	ctx = catalog.WithSecrets(ctx, entryResource.codec.secrets.values(value)...)
+
+	discovered, err := entryResource.session.Backend.DiscoverCapture(ctx, entryResource.catalogName(name), catalog.RawCapture{"endpoint": document["endpoint"], "bindings": []any{}})
+
+	if err != nil {
+		return nil, fmt.Errorf("discovering the default binding targets: %w", err)
+	}
+
+	for target, resource := range discovered {
+		if path, err := identifier.ResourcePath(resource); err == nil {
+			targets[path] = target
+		}
+	}
+
+	return targets, nil
+}
+
+// missingTargets returns the sorted unset binding indexes whose resource targets lacks, nil when none.
+func missingTargets(unset map[int]bool, paths []string, targets map[string]string) []int {
+	var missing []int
+
+	for index := range paths {
+		if _, found := targets[paths[index]]; unset[index] && !found {
+			missing = append(missing, index)
+		}
+	}
+
+	return missing
+}
+
+// addTargets adds the targets of resources not held yet, keeping existing ones.
+func addTargets(targets map[string]string, more map[string]string) {
+	for path, target := range more {
+		if _, stored := targets[path]; !stored {
+			targets[path] = target
 		}
 	}
 }
 
-// recommendedNames returns the recommended name of each binding of value, known being false when the spec can't be
-// decoded yet, such as when the plan holds unknown values.
-func (entryResource *entryResource[D, S]) recommendedNames(value tftypes.Value) ([]string, bool) {
-	value, err := nullAttributes(value, func(path *tftypes.AttributePath) bool {
+// withoutTargets returns value with null binding targets.
+func withoutTargets(value tftypes.Value) (tftypes.Value, error) {
+	return nullAttributes(value, func(path *tftypes.AttributePath) bool {
 		_, isTarget := bindingAttributeIndex(path, bindingTargetAttribute)
 
 		return isTarget
 	})
+}
+
+// resourcePaths returns the resource path of each binding, reporting false while the spec holds unknown values.
+func (entryResource *entryResource[D, S]) resourcePaths(value tftypes.Value) ([]string, bool) {
+	value, err := withoutTargets(value)
 
 	if err != nil {
 		return nil, false
@@ -129,44 +180,31 @@ func (entryResource *entryResource[D, S]) recommendedNames(value tftypes.Value) 
 
 	_, spec, err := entryResource.codec.Spec(value)
 
-	namer, isNamer := any(spec).(catalog.BindingsNamer)
+	identifier, isIdentifier := any(spec).(catalog.BindingsIdentifier)
 
-	if err != nil || !isNamer {
+	if err != nil || !isIdentifier {
 		return nil, false
 	}
 
-	return namer.RecommendedNames(), true
+	return identifier.ResourcePaths(), true
 }
 
-// recommendedTargets returns the targets of the bindings of value by their recommended name.
-func (entryResource *entryResource[D, S]) recommendedTargets(value tftypes.Value) map[string]string {
+// pathTargets returns the binding targets by resource path.
+func (entryResource *entryResource[D, S]) pathTargets(value tftypes.Value) map[string]string {
 	var targets map[string]string = map[string]string{}
 
 	items, _, err := bindings(value)
-	names, known := entryResource.recommendedNames(value)
+	paths, known := entryResource.resourcePaths(value)
 
-	if err != nil || !known || len(names) != len(items) {
+	if err != nil || !known || len(paths) != len(items) {
 		return targets
 	}
 
 	for index, binding := range items {
-		if target := bindingTarget(binding); target != "" && names[index] != "" {
-			targets[names[index]] = target
+		if target := bindingCollectionValue(binding); target != "" {
+			targets[paths[index]] = target
 		}
 	}
 
 	return targets
-}
-
-// bindingAttributeIndex returns the binding index of a bindings[index].attribute path, found being false for other paths.
-func bindingAttributeIndex(path *tftypes.AttributePath, attribute string) (int, bool) {
-	var steps []tftypes.AttributePathStep = path.Steps()
-
-	if len(steps) != 3 || steps[0] != tftypes.AttributeName(bindingsAttribute) || steps[2] != tftypes.AttributeName(attribute) {
-		return 0, false
-	}
-
-	index, isIndex := steps[1].(tftypes.ElementKeyInt)
-
-	return int(index), isIndex
 }

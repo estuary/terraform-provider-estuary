@@ -5,11 +5,13 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"gopkg.in/yaml.v3"
 )
@@ -30,35 +32,35 @@ type testDekafEndpointSpec struct {
 type testDekafSpec = materialization.Spec[testDekafEndpointSpec, testTopic]
 
 type testDekafDocument struct {
-	Name     string                               `yaml:"name"`
-	Variant  string                               `yaml:"variant"`
-	Config   testConfig                           `yaml:"config"`
-	Source   *materialization.Source              `yaml:"source,omitempty"`
-	Bindings []materialization.Binding[testTopic] `yaml:"bindings"`
+	Name                        string     `yaml:"name"`
+	Variant                     string     `yaml:"variant"`
+	Config                      testConfig `yaml:"config"`
+	materialization.SpecOptions `yaml:",inline"`
+	Bindings                    []MaterializationBinding[testTopic] `yaml:"bindings"`
 }
 
 func (document testDekafDocument) Spec() (string, testDekafSpec) {
 	return document.Name, testDekafSpec{
-		Endpoint: testDekafEndpointSpec{Dekaf: testDekafEndpoint{Variant: document.Variant, Config: document.Config}},
-		Source:   document.Source,
-		Bindings: document.Bindings,
+		Endpoint:    testDekafEndpointSpec{Dekaf: testDekafEndpoint{Variant: document.Variant, Config: document.Config}},
+		SpecOptions: document.SpecOptions,
+		Bindings:    MaterializationBindingsSpec(document.Bindings),
 	}
 }
 
 func (testDekafDocument) FromSpec(name string, spec testDekafSpec) testDekafDocument {
 	return testDekafDocument{
-		Name:     name,
-		Variant:  spec.Endpoint.Dekaf.Variant,
-		Config:   spec.Endpoint.Dekaf.Config,
-		Source:   spec.Source,
-		Bindings: spec.Bindings,
+		Name:        name,
+		Variant:     spec.Endpoint.Dekaf.Variant,
+		Config:      spec.Endpoint.Dekaf.Config,
+		SpecOptions: spec.SpecOptions,
+		Bindings:    NewMaterializationBindings(spec.Bindings),
 	}
 }
 
 func TestMaterializationCodecSchema(test *testing.T) {
 	var ctx context.Context = context.Background()
 
-	codec, err := NewMaterializationCodec[testConfig, testResource](testConnector)
+	codec, err := NewCodec[materializationDocument[testConfig, testResource]](testConnector)
 
 	if err != nil {
 		test.Fatal(err)
@@ -78,14 +80,21 @@ func TestMaterializationCodecSchema(test *testing.T) {
 		"config":                     {path.Root("config"), schema.SingleNestedAttribute{}, true},
 		"source":                     {path.Root("source"), schema.SingleNestedAttribute{}, false},
 		"source capture":             {path.Root("source").AtName("capture"), schema.StringAttribute{}, false},
-		"source fields_recommended":  {path.Root("source").AtName("fields_recommended"), schema.Int64Attribute{}, true},
+		"source fields_recommended":  {path.Root("source").AtName("fields_recommended"), schema.StringAttribute{}, false},
+		"target_naming strategy":     {path.Root("target_naming").AtName("strategy"), schema.StringAttribute{}, true},
+		"incompatible schema change": {path.Root("on_incompatible_schema_change"), schema.StringAttribute{}, false},
 		"bindings":                   {path.Root("bindings"), schema.ListNestedAttribute{}, true},
 		"binding source":             {path.Root("bindings").AtListIndex(0).AtName("source"), schema.StringAttribute{}, true},
 		"binding fields":             {path.Root("bindings").AtListIndex(0).AtName("fields"), schema.SingleNestedAttribute{}, false},
 		"binding fields exclude":     {path.Root("bindings").AtListIndex(0).AtName("fields").AtName("exclude"), schema.ListAttribute{}, false},
-		"binding fields recommended": {path.Root("bindings").AtListIndex(0).AtName("fields").AtName("recommended"), schema.BoolAttribute{}, true},
+		"binding fields recommended": {path.Root("bindings").AtListIndex(0).AtName("fields").AtName("recommended"), schema.StringAttribute{}, true},
+		"binding fields group_by":    {path.Root("bindings").AtListIndex(0).AtName("fields").AtName("group_by"), schema.ListAttribute{}, false},
+		"binding not_before":         {path.Root("bindings").AtListIndex(0).AtName("not_before"), schema.StringAttribute{}, false},
+		"binding disable":            {path.Root("bindings").AtListIndex(0).AtName("disable"), schema.BoolAttribute{}, false},
+		"binding priority":           {path.Root("bindings").AtListIndex(0).AtName("priority"), schema.Int64Attribute{}, false},
 		"binding fields require":     {path.Root("bindings").AtListIndex(0).AtName("fields").AtName("require"), schema.SetAttribute{}, false},
-		"binding backfill":           {path.Root("bindings").AtListIndex(0).AtName("backfill"), schema.Int64Attribute{}, false},
+		"binding backfill":           {path.Root("bindings").AtListIndex(0).AtName("backfill"), schema.SingleNestedAttribute{}, false},
+		"binding backfill trigger":   {path.Root("bindings").AtListIndex(0).AtName("backfill").AtName("trigger"), schema.Int64Attribute{}, false},
 		"binding name":               {path.Root("bindings").AtListIndex(0).AtName("name"), schema.StringAttribute{}, false},
 	}
 
@@ -110,7 +119,7 @@ func TestMaterializationCodecSchema(test *testing.T) {
 func TestMaterializationCodecRoundTrip(test *testing.T) {
 	var capture string = "acmeCo/source-postgres"
 
-	codec, err := NewMaterializationCodec[testConfig, testResource](testConnector)
+	codec, err := NewCodec[materializationDocument[testConfig, testResource]](testConnector)
 
 	if err != nil {
 		test.Fatal(err)
@@ -124,15 +133,22 @@ func TestMaterializationCodecRoundTrip(test *testing.T) {
 					Config: testConfig{Host: "warehouse.example.com", Password: "<secret>", Labels: map[string]string{"team": "data"}},
 				},
 			},
-			Source: &materialization.Source{
-				Capture:           &capture,
-				TargetNaming:      "withSchema",
-				DeltaUpdates:      true,
-				FieldsRecommended: 2,
+			SpecOptions: materialization.SpecOptions{
+				Source:                     &materialization.Source{Capture: &capture, DeltaUpdates: true, FieldsRecommended: "2"},
+				TargetNaming:               &materialization.TargetNaming{Strategy: materialization.TargetNamingPrefixTableNames, Schema: "analytics", SkipCommonDefaults: true, TableTemplate: "raw_{{table}}"},
+				OnIncompatibleSchemaChange: materialization.OnIncompatibleSchemaChangeDisableBinding,
 			},
 			Bindings: []materialization.Binding[testResource]{
-				{Resource: testResource{Table: "orders", Priority: 3}, Source: "acmeCo/orders", Fields: &materialization.BindingFields{Recommended: true, Exclude: []string{"_meta"}, Require: map[string]struct{}{"flow_document": {}, "_meta/op": {}}}},
-				{Resource: testResource{Table: "customers"}, Source: "acmeCo/customers", Backfill: 2},
+				{
+					Resource: testResource{Table: "orders", Priority: 3},
+					Source:   materialization.BindingSource{Name: "acmeCo/orders", NotBefore: "2026-01-01T00:00:00Z"},
+					BindingOptions: materialization.BindingOptions{
+						Priority:                   5,
+						OnIncompatibleSchemaChange: materialization.OnIncompatibleSchemaChangeAbort,
+						Fields:                     &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited, Exclude: []string{"_meta"}, Require: map[string]struct{}{"flow_document": {}, "_meta/op": {}}, GroupBy: []string{"id"}},
+					},
+				},
+				{Resource: testResource{Table: "customers"}, Source: materialization.BindingSource{Name: "acmeCo/customers"}, BindingOptions: materialization.BindingOptions{Disable: true, Fields: &materialization.BindingFields{Recommended: "0"}}},
 			},
 		},
 		"acmeCo/materialize-null-capture": {
@@ -142,11 +158,12 @@ func TestMaterializationCodecRoundTrip(test *testing.T) {
 					Config: testConfig{Host: "warehouse.example.com"},
 				},
 			},
-			Source: &materialization.Source{
-				TargetNaming: "prefixSchema",
+			SpecOptions: materialization.SpecOptions{
+				Source:       &materialization.Source{},
+				TargetNaming: &materialization.TargetNaming{Strategy: materialization.TargetNamingMatchSourceStructure},
 			},
 			Bindings: []materialization.Binding[testResource]{
-				{Resource: testResource{Table: "orders"}, Source: "acmeCo/orders"},
+				{Resource: testResource{Table: "orders"}, Source: materialization.BindingSource{Name: "acmeCo/orders"}},
 			},
 		},
 	}
@@ -184,8 +201,8 @@ func TestMaterializationCodecRoundTrip(test *testing.T) {
 			for index, binding := range spec.Bindings {
 				bindingName, err := attributeValue(value, tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(index).WithAttributeName("name"))
 
-				if err != nil || !bindingName.Equal(tftypes.NewValue(tftypes.String, binding.Source)) {
-					test.Errorf("bindings[%d].name = %v (%v), want the source %s", index, bindingName, err, binding.Source)
+				if err != nil || !bindingName.Equal(tftypes.NewValue(tftypes.String, binding.Source.Name)) {
+					test.Errorf("bindings[%d].name = %v (%v), want the source %s", index, bindingName, err, binding.Source.Name)
 				}
 			}
 		})
@@ -198,7 +215,7 @@ func TestMaterializationFromDocument(test *testing.T) {
 	var spec testDekafSpec = testDekafSpec{
 		Endpoint: testDekafEndpointSpec{Dekaf: testDekafEndpoint{Variant: "tinybird", Config: testConfig{Host: "dekaf.example.com", Password: "<token>"}}},
 		Bindings: []materialization.Binding[testTopic]{
-			{Resource: testTopic{TopicName: "orders"}, Source: "acmeCo/orders"},
+			{Resource: testTopic{TopicName: "orders"}, Source: materialization.BindingSource{Name: "acmeCo/orders"}},
 		},
 	}
 
@@ -238,7 +255,59 @@ func TestMaterializationFromDocument(test *testing.T) {
 }
 
 func TestNewCodecRequiresConnectorImage(test *testing.T) {
-	if _, err := NewMaterializationCodec[testConfig, testResource](Connector{TypeName: "materialization_test"}); err == nil {
-		test.Error("NewMaterializationCodec accepted a connector without a default image")
+	if _, err := NewCodec[materializationDocument[testConfig, testResource]](Connector{TypeName: "materialization_test"}); err == nil {
+		test.Error("NewCodec accepted a connector without a default image")
+	}
+}
+
+func TestMaterializationReadRefreshesBindingsBySource(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var configureResp resource.ConfigureResponse
+	var backend *testBackend = &testBackend{
+		live: map[string]any{
+			"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
+			"bindings": []any{
+				map[string]any{"resource": map[string]any{"table": "orders", "priority": 3}, "source": map[string]any{"name": "acmeCo/orders", "notBefore": "2026-01-01T00:00:00Z"}},
+				map[string]any{"resource": map[string]any{"table": "users"}, "source": "acmeCo/users"},
+			},
+		},
+	}
+	var state MaterializationSpec[testConfig, testResource] = MaterializationSpec[testConfig, testResource]{
+		Endpoint: endpoint.ConnectorSpec[testConfig]{Connector: endpoint.Connector[testConfig]{Image: testNamedConnector.Image, Config: testConfig{Host: "db.example.com"}}},
+		Bindings: []materialization.Binding[testResource]{{Resource: testResource{Table: "orders", Priority: 1}, Source: materialization.BindingSource{Name: "acmeCo/orders"}}},
+	}
+	var refreshed MaterializationSpec[testConfig, testResource] = state
+
+	entry := NewMaterialization[testConfig, testResource](testNamedConnector)().(*entryResource[materializationDocument[testConfig, testResource], MaterializationSpec[testConfig, testResource]])
+
+	entry.Configure(ctx, resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: backend, Tenant: "acmeCo/"}}, &configureResp)
+
+	refreshed.Bindings = []materialization.Binding[testResource]{
+		{Resource: testResource{Table: "orders", Priority: 3}, Source: materialization.BindingSource{Name: "acmeCo/orders", NotBefore: "2026-01-01T00:00:00Z"}},
+		{Resource: testResource{Table: "users"}, Source: materialization.BindingSource{Name: "acmeCo/users"}},
+	}
+
+	stateValue, err := entry.codec.Value("warehouse", state)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	want, err := entry.codec.Value("warehouse", refreshed)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var readResp resource.ReadResponse = resource.ReadResponse{State: tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue}}
+
+	entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
+
+	if readResp.Diagnostics.HasError() || readResp.Diagnostics.WarningsCount() > 0 {
+		test.Fatalf("read: %v", readResp.Diagnostics)
+	}
+
+	if !readResp.State.Raw.Equal(want) {
+		test.Errorf("refreshed state = %v, want %v", readResp.State.Raw, want)
 	}
 }

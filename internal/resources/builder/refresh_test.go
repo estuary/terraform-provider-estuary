@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/capture"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -41,10 +42,20 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 			[]any{map[string]any{"resource": map[string]any{"table": "users", "priority": 3, "_meta": map[string]any{"path": []any{"users"}}}, "target": "acmeCo/users"}},
 			[]capture.Binding[testResource]{{Resource: testResource{Table: "users", Priority: 3}, Target: "acmeCo/users"}},
 		},
-		"keeps the fields Estuary fills in unmanaged": {
+		"refreshes a field only set live": {
 			discovering, []capture.Binding[testResource]{orders},
-			[]any{map[string]any{"resource": map[string]any{"table": "orders", "priority": 5}, "target": "acmeCo/orders", "backfill": 2}},
+			[]any{map[string]any{"resource": map[string]any{"table": "orders", "priority": 5}, "target": "acmeCo/orders"}},
+			[]capture.Binding[testResource]{{Resource: testResource{Table: "orders", Priority: 5}, Target: "acmeCo/orders"}},
+		},
+		"leaves the empty live fields out": {
+			discovering, []capture.Binding[testResource]{orders},
+			[]any{map[string]any{"resource": map[string]any{"table": "orders", "priority": 0}, "target": "acmeCo/orders", "disable": false}},
 			[]capture.Binding[testResource]{orders},
+		},
+		"refreshes the live backfill counter": {
+			discovering, []capture.Binding[testResource]{orders},
+			[]any{map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders", "backfill": 2}},
+			[]capture.Binding[testResource]{{Resource: orders.Resource, Target: orders.Target, Backfill: 2}},
 		},
 		"drops a binding removed outside Terraform": {
 			discovering, []capture.Binding[testResource]{users, orders},
@@ -69,6 +80,10 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 		var refreshed CaptureSpec[testConfig, testResource] = expected.state
 
 		entry := newTestCaptureEntry(backend)
+
+		if expected.state.AutoDiscover != nil {
+			backend.live["autoDiscover"] = map[string]any{"addNewBindings": true}
+		}
 
 		state.Bindings = expected.bindings
 		refreshed.Bindings = expected.want
@@ -100,6 +115,50 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 	}
 }
 
+func TestResourceReadRefreshesTheEntry(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var state CaptureSpec[testConfig, testResource] = testCaptureSpec
+	var refreshed CaptureSpec[testConfig, testResource] = testCaptureSpec
+	var backend *testBackend = &testBackend{live: liveCapture(map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"})}
+
+	entry := newTestCaptureEntry(backend)
+
+	backend.live["endpoint"] = map[string]any{"connector": map[string]any{"image": "ghcr.io/estuary/source-test:v2", "config": map[string]any{"host": "replica.example.com", "port": 5433, "password_sops": "ENC[AES256_GCM,data:abc,type:str]"}}}
+
+	state.AutoDiscover = &capture.AutoDiscover{AddNewBindings: true}
+	state.Endpoint.Connector.Config.Port = 5432
+	state.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"}}
+
+	refreshed.Endpoint.Connector.Image = "ghcr.io/estuary/source-test:v2"
+	refreshed.Endpoint.Connector.Config.Host = "replica.example.com"
+	refreshed.Endpoint.Connector.Config.Port = 5433
+	refreshed.Bindings = state.Bindings
+
+	stateValue, err := entry.codec.Value("movies", state)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	want, err := entry.codec.Value("movies", refreshed)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var readResp resource.ReadResponse = resource.ReadResponse{State: tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue}}
+
+	entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
+
+	if readResp.Diagnostics.HasError() {
+		test.Fatalf("read: %v", readResp.Diagnostics)
+	}
+
+	if !readResp.State.Raw.Equal(want) {
+		test.Errorf("refreshed state = %v, want the live image, host, port and no auto discover %v", readResp.State.Raw, want)
+	}
+}
+
 func TestResourceReadKeepsZeroValues(test *testing.T) {
 	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
 
@@ -110,7 +169,7 @@ func TestResourceReadKeepsZeroValues(test *testing.T) {
 	stateValue, err := entry.codec.Value("movies", spec)
 
 	if err == nil {
-		stateValue, err = withValue(stateValue, tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(0).WithAttributeName("backfill"), 0)
+		stateValue, err = withValue(stateValue, tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(0).WithAttributeName("disable"), false)
 	}
 
 	if err != nil {
@@ -122,7 +181,7 @@ func TestResourceReadKeepsZeroValues(test *testing.T) {
 	entry.Read(context.Background(), resource.ReadRequest{State: readResp.State}, &readResp)
 
 	if readResp.Diagnostics.HasError() || !readResp.State.Raw.Equal(stateValue) {
-		test.Errorf("refreshed state = %v (%v), want backfill = 0 kept as the live spec omits it", readResp.State.Raw, readResp.Diagnostics)
+		test.Errorf("refreshed state = %v (%v), want disable = false kept as the live spec omits it", readResp.State.Raw, readResp.Diagnostics)
 	}
 }
 
@@ -178,6 +237,7 @@ func TestResourceModifyPlanWarnsAboutTakenOverBindings(test *testing.T) {
 	var backend *testBackend = &testBackend{live: liveCapture(
 		map[string]any{"resource": map[string]any{"table": "users"}, "target": "acmeCo/users"},
 		map[string]any{"resource": map[string]any{"table": "logs"}, "target": "acmeCo/logs"},
+		map[string]any{"resource": map[string]any{"table": "events"}, "target": "acmeCo/events"},
 	)}
 
 	entry := newTestCaptureEntry(backend)
@@ -190,6 +250,7 @@ func TestResourceModifyPlanWarnsAboutTakenOverBindings(test *testing.T) {
 		{Resource: testResource{Table: "logs", Priority: 1}, Target: "acmeCo/logs"},
 		{Resource: testResource{Table: "users"}, Target: "acmeCo/users"},
 		{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"},
+		{Resource: testResource{Table: "events"}, Target: "acmeCo/events"},
 	}
 
 	priorValue, err := entry.codec.Value("movies", prior)
@@ -219,16 +280,22 @@ func TestResourceModifyPlanWarnsAboutTakenOverBindings(test *testing.T) {
 
 	var warnings = modifyPlanResp.Diagnostics.Warnings()
 
-	if len(warnings) != 1 {
-		test.Fatalf("warnings = %v, want one for the taken over users binding", warnings)
+	if len(warnings) != 1 || warnings[0].Summary() != "Existing bindings taken over in acmeCo/movies/source-test" {
+		test.Fatalf("warnings = %v, want a single warning listing the taken over bindings", warnings)
 	}
 
-	if warning, isAttribute := warnings[0].(interface{ Path() path.Path }); !isAttribute || !warning.Path().Equal(path.Root("bindings").AtListIndex(1)) {
-		test.Errorf("warning = %v, want it at bindings[1]", warnings[0])
+	if warning, isAttribute := warnings[0].(interface{ Path() path.Path }); !isAttribute || !warning.Path().Equal(path.Root("bindings")) {
+		test.Errorf("warning = %v, want it at bindings", warnings[0])
 	}
 
-	if !strings.Contains(warnings[0].Detail(), "No field changes") {
-		test.Errorf("warning detail = %q, want no field changes for the same live binding", warnings[0].Detail())
+	for _, entry := range []string{"- acmeCo/users (bindings[1]): no field changes", "- acmeCo/events (bindings[3]): no field changes"} {
+		if !strings.Contains(warnings[0].Detail(), entry) {
+			test.Errorf("warning detail = %q, want it to list %q", warnings[0].Detail(), entry)
+		}
+	}
+
+	if strings.Contains(warnings[0].Detail(), "acmeCo/logs") || strings.Contains(warnings[0].Detail(), "acmeCo/orders") {
+		test.Errorf("warning detail = %q, want only the bindings already live and not managed", warnings[0].Detail())
 	}
 
 	backend.reads = nil
@@ -252,11 +319,11 @@ func TestResourceModifyPlanWarnsAboutRemovedBindings(test *testing.T) {
 		planned      []capture.Binding[testResource]
 		want         int
 	}{
-		"warns when discovery adds new bindings":   {&capture.AutoDiscover{AddNewBindings: true}, []capture.Binding[testResource]{logs}, 1},
-		"keeps a disabled binding without warning": {&capture.AutoDiscover{AddNewBindings: true}, []capture.Binding[testResource]{logs, {Resource: users.Resource, Target: users.Target, Disable: true}}, 0},
-		"skips discovery not adding new bindings":  {&capture.AutoDiscover{}, []capture.Binding[testResource]{logs}, 0},
-		"skips captures without auto discover":     {nil, []capture.Binding[testResource]{logs}, 0},
-		"warns about every removed binding":        {&capture.AutoDiscover{AddNewBindings: true}, []capture.Binding[testResource]{}, 2},
+		"warns when discovery adds new bindings":     {&capture.AutoDiscover{AddNewBindings: true}, []capture.Binding[testResource]{logs}, 1},
+		"keeps a disabled binding without warning":   {&capture.AutoDiscover{AddNewBindings: true}, []capture.Binding[testResource]{logs, {Resource: users.Resource, Target: users.Target, Disable: true}}, 0},
+		"skips discovery not adding new bindings":    {&capture.AutoDiscover{}, []capture.Binding[testResource]{logs}, 0},
+		"skips captures without auto discover":       {nil, []capture.Binding[testResource]{logs}, 0},
+		"lists every removed binding in one warning": {&capture.AutoDiscover{AddNewBindings: true}, []capture.Binding[testResource]{}, 1},
 	}
 
 	for name, expected := range expectations {
@@ -305,9 +372,13 @@ func TestResourceModifyPlanWarnsAboutRemovedBindings(test *testing.T) {
 		}
 
 		for _, warning := range warnings {
-			if !strings.Contains(warning.Detail(), "disable = true") {
-				test.Errorf("%s: warning detail = %q, want the disable advice", name, warning.Detail())
+			if !strings.Contains(warning.Detail(), "disable = true") || !strings.Contains(warning.Detail(), "- acmeCo/users") {
+				test.Errorf("%s: warning detail = %q, want the removed users binding listed with the disable advice", name, warning.Detail())
 			}
+		}
+
+		if expected.planned != nil && len(expected.planned) == 0 && len(warnings) == 1 && !strings.Contains(warnings[0].Detail(), "- acmeCo/logs") {
+			test.Errorf("%s: warning detail = %q, want the removed logs binding listed too", name, warnings[0].Detail())
 		}
 	}
 }
@@ -316,7 +387,7 @@ func TestCodecBindingChanges(test *testing.T) {
 	var path *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(0)
 	var users capture.Binding[testResource] = capture.Binding[testResource]{Resource: testResource{Table: "users"}, Target: "acmeCo/users"}
 
-	codec, err := NewCaptureCodec[testConfig, testResource](testNamedConnector)
+	codec, err := NewCodec[captureDocument[testConfig, testResource]](testNamedConnector)
 
 	if err != nil {
 		test.Fatal(err)
@@ -328,7 +399,7 @@ func TestCodecBindingChanges(test *testing.T) {
 		want    []string
 	}{
 		"same binding":            {users, users, nil},
-		"adds a backfill":         {capture.Binding[testResource]{Resource: users.Resource, Target: users.Target, Backfill: 1}, users, []string{"bindings[0].backfill: (unset) -> 1"}},
+		"keeps the live backfill": {users, capture.Binding[testResource]{Resource: users.Resource, Target: users.Target, Backfill: 3}, nil},
 		"drops a live-only field": {users, capture.Binding[testResource]{Resource: testResource{Table: "users", Priority: 5}, Target: users.Target}, []string{"bindings[0].resource.priority: 5 -> (unset)"}},
 		"changes several fields": {
 			capture.Binding[testResource]{Resource: testResource{Table: "people", Priority: 1}, Target: users.Target, Disable: true},
@@ -363,5 +434,257 @@ func TestCodecBindingChanges(test *testing.T) {
 		if err != nil || !slices.Equal(changes, expected.want) {
 			test.Errorf("%s: changes = %q (%v), want %q", name, changes, err, expected.want)
 		}
+	}
+}
+
+func TestResourceModifyPlanWarnsAboutDiscoveredBindings(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	expectations := map[string]struct {
+		autoDiscover *capture.AutoDiscover
+		created      bool
+		want         int
+	}{
+		"warns on creation adding new bindings":  {&capture.AutoDiscover{AddNewBindings: true}, true, 1},
+		"skips creation not adding new bindings": {&capture.AutoDiscover{}, true, 0},
+		"skips creation without auto discover":   {nil, true, 0},
+		"skips updates even adding new bindings": {&capture.AutoDiscover{AddNewBindings: true}, false, 0},
+	}
+
+	for name, expected := range expectations {
+		var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+		entry := newTestCaptureEntry(&testBackend{live: liveCapture(map[string]any{"resource": map[string]any{"table": "users"}, "target": "acmeCo/users"})})
+
+		spec.AutoDiscover = expected.autoDiscover
+		spec.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "users"}, Target: "acmeCo/users"}}
+
+		planValue, err := entry.codec.Value("movies", spec)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var stateValue tftypes.Value = tftypes.NewValue(entry.codec.Schema().Type().TerraformType(ctx), nil)
+
+		if !expected.created {
+			stateValue = planValue
+		}
+
+		var modifyPlanReq resource.ModifyPlanRequest = resource.ModifyPlanRequest{
+			State:  tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue},
+			Plan:   tfsdk.Plan{Schema: entry.codec.Schema(), Raw: planValue},
+			Config: tfsdk.Config{Schema: entry.codec.Schema(), Raw: planValue},
+		}
+		var modifyPlanResp resource.ModifyPlanResponse = resource.ModifyPlanResponse{Plan: modifyPlanReq.Plan}
+
+		entry.ModifyPlan(ctx, modifyPlanReq, &modifyPlanResp)
+
+		var found int
+
+		for _, warning := range modifyPlanResp.Diagnostics.Warnings() {
+			if warning.Summary() == "Auto discovery adds unmanaged bindings in acmeCo/movies/source-test" && strings.Contains(warning.Detail(), "declare a binding to manage it") {
+				found++
+			}
+		}
+
+		if modifyPlanResp.Diagnostics.HasError() || found != expected.want {
+			test.Errorf("%s: diagnostics = %v, want %d discovered bindings warnings", name, modifyPlanResp.Diagnostics, expected.want)
+		}
+	}
+}
+
+func TestResourceReadRefreshesSetShardSettings(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	expectations := map[string]struct {
+		state catalog.Shards
+		want  catalog.Shards
+	}{
+		"refreshes every live setting":         {catalog.Shards{"logLevel": "debug"}, catalog.Shards{"logLevel": "info", "disable": true, "runtimeV2": true}},
+		"keeps a zero setting live leaves out": {catalog.Shards{"maxTxnDuration": ""}, catalog.Shards{"logLevel": "info", "disable": true, "runtimeV2": true, "maxTxnDuration": ""}},
+		"refreshes unset shards too":           {nil, catalog.Shards{"logLevel": "info", "disable": true, "runtimeV2": true}},
+	}
+
+	for name, expected := range expectations {
+		var state CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var refreshed CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var backend *testBackend = &testBackend{live: liveCapture()}
+
+		entry := newTestCaptureEntry(backend)
+
+		backend.live["shards"] = map[string]any{"logLevel": "info", "disable": true, "runtimeV2": true}
+
+		state.Shards = expected.state
+		refreshed.Shards = expected.want
+
+		stateValue, err := entry.codec.Value("movies", state)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		want, err := entry.codec.Value("movies", refreshed)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var readResp resource.ReadResponse = resource.ReadResponse{State: tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue}}
+
+		entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
+
+		if readResp.Diagnostics.HasError() {
+			test.Fatalf("%s: read: %v", name, readResp.Diagnostics)
+		}
+
+		if !readResp.State.Raw.Equal(want) {
+			test.Errorf("%s: refreshed state = %v, want %v", name, readResp.State.Raw, want)
+		}
+	}
+}
+
+func TestResourceModifyPlanWarnsAboutDisabledLiveEntries(test *testing.T) {
+	expectations := map[string]struct {
+		live   catalog.Shards
+		shards catalog.Shards
+		warn   bool
+	}{
+		"warns about a live entry disabled outside Terraform": {catalog.Shards{"disable": true}, nil, true},
+		"warns when the shards set leave disable out":         {catalog.Shards{"disable": true}, catalog.Shards{"logLevel": "debug"}, true},
+		"leaves a disable set in the configuration":           {catalog.Shards{"disable": true}, catalog.Shards{"disable": false}, false},
+		"leaves an enabled live entry":                        {catalog.Shards{"disable": false}, nil, false},
+		"leaves a live entry without shards":                  {nil, nil, false},
+	}
+
+	entry := newTestCaptureEntry(&testBackend{})
+
+	for name, expected := range expectations {
+		var configured CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var live CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+		configured.Shards = expected.shards
+		live.Shards = expected.live
+
+		config, err := entry.codec.Value("movies", configured)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		state, err := entry.codec.Value("movies", live)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		warnings := entry.warnDisabledLive(config, state)
+
+		if warned := len(warnings) == 1 && warnings[0].Summary() == "Disabled outside Terraform in acmeCo/movies/source-test"; warned != expected.warn || len(warnings) > 1 {
+			test.Errorf("%s: warnings = %v, want a disabled warning %v", name, warnings, expected.warn)
+		}
+	}
+}
+
+func TestPlanShards(test *testing.T) {
+	var live catalog.Shards = catalog.Shards{"disable": true, "flags": map[string]any{"enable-runtime-v2": "true"}}
+
+	expectations := map[string]struct {
+		config  catalog.Shards
+		created bool
+		want    catalog.Shards
+	}{
+		"plans the configured shards":                  {catalog.Shards{"disable": true}, false, catalog.Shards{"disable": true}},
+		"keeps the live shards when unset":             {nil, false, live},
+		"plans no shards for an entry not created yet": {nil, true, nil},
+	}
+
+	entry := newTestCaptureEntry(&testBackend{})
+
+	for name, expected := range expectations {
+		var configured CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var stored CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var planned CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+		configured.Shards = expected.config
+		stored.Shards = live
+		planned.Shards = expected.want
+
+		config, err := entry.codec.Value("movies", configured)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		state, err := entry.codec.Value("movies", stored)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		if expected.created {
+			state = tftypes.NewValue(entry.codec.valueType, nil)
+		}
+
+		want, err := entry.codec.Value("movies", planned)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		plan, err := planShards(config, config, state)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		shards, _ := attributeValue(plan, tftypes.NewAttributePath().WithAttributeName("shards"))
+		wanted, _ := attributeValue(want, tftypes.NewAttributePath().WithAttributeName("shards"))
+
+		if !shards.Equal(wanted) && !(shards.IsNull() && wanted.IsNull()) {
+			test.Errorf("%s: planned shards = %v, want %v", name, shards, wanted)
+		}
+	}
+}
+
+func TestResourceReadRefreshesLiveOnlyFields(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var state CaptureSpec[testConfig, testResource] = testCaptureSpec
+	var refreshed CaptureSpec[testConfig, testResource] = testCaptureSpec
+	var backend *testBackend = &testBackend{live: liveCapture()}
+
+	entry := newTestCaptureEntry(backend)
+
+	backend.live["autoDiscover"] = map[string]any{"addNewBindings": true}
+	backend.live["endpoint"] = map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{
+		"host": "db.example.com", "ratio": 0.5, "readOnly": false, "tunnel": map[string]any{"sshEndpoint": "ssh://bastion:22"}, "password_sops": "ENC[AES256_GCM,data:abc,type:str]",
+	}}}
+
+	refreshed.AutoDiscover = &capture.AutoDiscover{AddNewBindings: true}
+	refreshed.Endpoint.Connector.Config.Ratio = 0.5
+	refreshed.Endpoint.Connector.Config.Tunnel = &testTunnel{SSHEndpoint: "ssh://bastion:22"}
+
+	stateValue, err := entry.codec.Value("movies", state)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	want, err := entry.codec.Value("movies", refreshed)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var readResp resource.ReadResponse = resource.ReadResponse{State: tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue}}
+
+	entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
+
+	if readResp.Diagnostics.HasError() {
+		test.Fatalf("read: %v", readResp.Diagnostics)
+	}
+
+	if !readResp.State.Raw.Equal(want) {
+		test.Errorf("refreshed state = %v, want the live only fields, without the empty ones nor the secrets", readResp.State.Raw)
 	}
 }

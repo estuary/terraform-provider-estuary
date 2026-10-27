@@ -1,12 +1,19 @@
 package utils
 
 import (
+	"cmp"
+	"encoding/json"
+	"slices"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
-// sensitiveKeys are the key fragments whose string values are masked in logged specs.
+// mask replaces every secret masked in logs and errors.
+const mask string = "***"
+
+// minimumLineLength is the shortest multiline secret line masked on its own, so masking doesn't mangle other text.
+const minimumLineLength int = 4
+
+// sensitiveKeys are key fragments naming a secret.
 var sensitiveKeys = []string{
 	"password",
 	"secret",
@@ -17,45 +24,7 @@ var sensitiveKeys = []string{
 	"client_key",
 }
 
-func maskValue(key string, value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		for nestedKey, nestedValue := range typed {
-			typed[nestedKey] = maskValue(nestedKey, nestedValue)
-		}
-	case []any:
-		for index, item := range typed {
-			typed[index] = maskValue(key, item)
-		}
-	case string:
-		if IsSensitiveKey(key) {
-			return "***"
-		}
-	}
-
-	return value
-}
-
-func collectSecrets(key string, value any, secrets []string) []string {
-	switch typed := value.(type) {
-	case map[string]any:
-		for nestedKey, nestedValue := range typed {
-			secrets = collectSecrets(nestedKey, nestedValue, secrets)
-		}
-	case []any:
-		for _, item := range typed {
-			secrets = collectSecrets(key, item, secrets)
-		}
-	case string:
-		if typed != "" && IsSensitiveKey(key) {
-			secrets = append(secrets, typed)
-		}
-	}
-
-	return secrets
-}
-
-// IsSensitiveKey reports whether the key names a secret, such as a password, token or private key.
+// IsSensitiveKey reports whether the key names a secret.
 func IsSensitiveKey(key string) bool {
 	for _, sensitiveKey := range sensitiveKeys {
 		if strings.Contains(strings.ToLower(key), sensitiveKey) {
@@ -66,41 +35,71 @@ func IsSensitiveKey(key string) bool {
 	return false
 }
 
-// MaskYAML returns the YAML content with sensitive string values replaced, for logging.
-func MaskYAML(content []byte) []byte {
-	var document any
+// SecretForms returns each secret's forms in text, longest first: raw, YAML/JSON quoted and escaped, and each line of a
+// multiline secret, which YAML writes as an indented block.
+func SecretForms(secrets []string) []string {
+	var forms []string
 
-	if err := yaml.Unmarshal(content, &document); err != nil {
-		return []byte("<unparseable spec>")
-	}
-
-	masked, err := yaml.Marshal(maskValue("", document))
-
-	if err != nil {
-		return []byte("<unmarshalable spec>")
-	}
-
-	return masked
-}
-
-// SecretValues returns the non empty string values held under sensitive keys of the YAML content.
-func SecretValues(content []byte) []string {
-	var document any
-
-	if err := yaml.Unmarshal(content, &document); err != nil {
-		return nil
-	}
-
-	return collectSecrets("", document, nil)
-}
-
-// MaskStrings returns the text with every non empty secret replaced.
-func MaskStrings(text string, secrets []string) string {
 	for _, secret := range secrets {
-		if secret != "" {
-			text = strings.ReplaceAll(text, secret, "***")
+		if secret == "" {
+			continue
+		}
+
+		forms = append(forms, secret, strings.ReplaceAll(secret, "'", "''"))
+
+		if encoded, err := json.Marshal(secret); err == nil {
+			forms = append(forms, string(encoded[1:len(encoded)-1]))
+		}
+
+		for _, line := range strings.Split(secret, "\n") {
+			if line = strings.TrimSpace(line); len(line) >= minimumLineLength {
+				forms = append(forms, line)
+			}
 		}
 	}
 
+	slices.SortFunc(forms, func(left string, right string) int {
+		return cmp.Compare(len(right), len(left))
+	})
+
+	return slices.Compact(forms)
+}
+
+// MaskStrings replaces every form of every secret in text, see SecretForms.
+func MaskStrings(text string, secrets []string) string {
+	for _, form := range SecretForms(secrets) {
+		text = strings.ReplaceAll(text, form, mask)
+	}
+
 	return text
+}
+
+// MaskDocument returns a copy of a YAML document with sensitive key values and embedded secrets masked, for logs.
+func MaskDocument(value any, secrets []string) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		var masked map[string]any = make(map[string]any, len(typed))
+
+		for key, nested := range typed {
+			if _, isString := nested.(string); isString && IsSensitiveKey(key) {
+				masked[key] = mask
+			} else {
+				masked[key] = MaskDocument(nested, secrets)
+			}
+		}
+
+		return masked
+	case []any:
+		var masked []any = make([]any, len(typed))
+
+		for index, item := range typed {
+			masked[index] = MaskDocument(item, secrets)
+		}
+
+		return masked
+	case string:
+		return MaskStrings(typed, secrets)
+	}
+
+	return value
 }

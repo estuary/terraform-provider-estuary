@@ -57,7 +57,7 @@ func TestSecretsHash(test *testing.T) {
 func TestCodecSecrets(test *testing.T) {
 	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
 
-	codec, err := NewCaptureCodec[testConfig, testResource](testNamedConnector)
+	codec, err := NewCodec[captureDocument[testConfig, testResource]](testNamedConnector)
 
 	if err != nil {
 		test.Fatal(err)
@@ -71,7 +71,7 @@ func TestCodecSecrets(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	plan, err := codec.NullSecrets(config)
+	plan, err := codec.secrets.nullSecrets(config)
 
 	if err != nil {
 		test.Fatal(err)
@@ -81,7 +81,7 @@ func TestCodecSecrets(test *testing.T) {
 		test.Errorf("plan password = %v, want null", password)
 	}
 
-	merged, err := codec.WithConfigSecrets(plan, config)
+	merged, err := codec.secrets.withConfigSecrets(plan, config)
 
 	if err != nil {
 		test.Fatal(err)
@@ -93,7 +93,7 @@ func TestCodecSecrets(test *testing.T) {
 }
 
 func TestCodecSecretPath(test *testing.T) {
-	codec, err := NewCaptureCodec[testConfig, testResource](testNamedConnector)
+	codec, err := NewCodec[captureDocument[testConfig, testResource]](testNamedConnector)
 
 	if err != nil {
 		test.Fatal(err)
@@ -112,7 +112,7 @@ func TestCodecSecretPath(test *testing.T) {
 	}
 
 	for name, expected := range expectations {
-		secret, isHash := codec.secretPath(expected.path)
+		secret, isHash := codec.secrets.secretPath(expected.path)
 
 		if isHash != expected.isHash || (isHash && !secret.Equal(testPasswordPath)) {
 			test.Errorf("%s: secretPath = %v, %v, want %v", name, secret, isHash, expected.isHash)

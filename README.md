@@ -30,6 +30,7 @@ Estuary is a data pipeline platform that combines batch and real-time data. It o
   - [Bindings Lifecycle](#bindings-lifecycle)
   - [Field Selection](#field-selection)
   - [Backfill Control](#backfill-control)
+  - [Shard Settings](#shard-settings)
   - [Connector Versions](#connector-versions)
 - [Multi-Environment Best Practices](#multi-environment-best-practices)
   - [Define Pipelines Once](#define-pipelines-once)
@@ -87,7 +88,7 @@ Every attribute but `flowctl_path` can also be set through an environment variab
 |---|---|---|
 | `token` | `FLOW_AUTH_TOKEN` | **Required.** Estuary refresh token, generated in the dashboard under Admin > [CLI-API](https://dashboard.estuary.dev/admin/api). Access tokens also work but expire, so use a refresh token in CI/CD. |
 | `tenant` | `ESTUARY_TENANT` | Prefix added to every capture and materialization name that doesn't already start with it, such as `acmeCo/` or `acmeCo/dev/`. A missing trailing slash is added. Collection names you write in a binding `target` or `source` aren't prefixed, see [Separate Environments with `tenant`](#separate-environments-with-tenant). |
-| `data_plane` | `ESTUARY_DATA_PLANE` | Data plane the connectors run in (e.g., `ops/dp/public/aws-eu-west-1-c2`). Required for BYOC or a non-default public data plane. Defaults to Estuary's default data plane. |
+| `data_plane` | `ESTUARY_DATA_PLANE` | Data plane new captures and materializations are created in, and capture discovery runs on (e.g., `ops/dp/public/example-data-plane`). Existing entries keep their data plane, so changing it never moves them. Required for BYOC or a non-default public data plane. Defaults to the first data plane of your storage mapping. Find IDs in the dashboard under Admin > Settings > Data Planes. |
 | `flowctl_path` | — | Path to the `flowctl` binary. Defaults to `flowctl` on `PATH`. |
 | `backend` | `ESTUARY_BACKEND` | How the provider reaches Estuary. Defaults to `flowctl`, the only backend available for now. |
 
@@ -111,7 +112,7 @@ resource "estuary_source_mongodb" "shop" {
   name = "mongodb"
 
   config = {
-    address  = "mongodb+srv://cluster0.abc123.mongodb.net?authSource=admin"
+    address  = "mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin"
     user     = "flow_capture"
     password = var.mongodb_password
     database = "shop"
@@ -155,7 +156,12 @@ Each resource manages a capture or a materialization of one Estuary connector. S
 
 | Resource | Type | Connector |
 |---|---|---|
-| [`estuary_source_mongodb`](internal/resources/capture/mongodb/README.md) | Capture | [MongoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/) |
+| [`estuary_materialization_postgres`](internal/resources/materializationpostgres/README.md) | Materialization | [PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) |
+| [`estuary_source_aurora_mysql`](internal/resources/sourceauroramysql/README.md) | Capture | [Amazon Aurora for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/#amazon-aurora) |
+| [`estuary_source_aurora_postgres`](internal/resources/sourceaurorapostgres/README.md) | Capture | [Amazon Aurora for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-aurora-postgres/) |
+| [`estuary_source_mongodb`](internal/resources/sourcemongodb/README.md) | Capture | [MongoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/) |
+| [`estuary_source_rds_mysql`](internal/resources/sourcerdsmysql/README.md) | Capture | [Amazon RDS for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/amazon-rds-mysql/) |
+| [`estuary_source_rds_postgres`](internal/resources/sourcerdspostgres/README.md) | Capture | [Amazon RDS for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-rds-postgres/) |
 
 ---
 
@@ -165,13 +171,13 @@ Each resource manages a capture or a materialization of one Estuary connector. S
 
 A binding links one resource, such as a MongoDB collection or a PostgreSQL table, to one Estuary collection: the `target` of a capture binding, or the `source` of a materialization binding. That collection identifies the binding, and the read-only `name` attribute shows it in every plan so you can tell which binding changes. Changing a binding's collection removes the old binding and adds a new one.
 
-Estuary can add bindings on its own, through discovery (`auto_discover`) on a capture or `source.capture` on a materialization. When it can, Terraform manages only the bindings you declare and leaves the others alone:
+Estuary can add bindings on its own, through discovery (`auto_discover`) on a capture or `source.capture` on a materialization. When it can, Terraform manages only the bindings you declare and leaves the others alone. Any `auto_discover` block counts, even with `add_new_bindings = false`:
 
 | Resource | Bindings Terraform manages | Bindings added outside Terraform |
 |---|---|---|
 | Capture without `auto_discover` | All of them | Shown in the plan and removed by the next apply. |
 | Capture with `auto_discover` | Only the ones in your configuration | Kept, and not shown in plans. |
-| Materialization without `source.capture` | All of them | Not shown in plans, but removed by the next apply. |
+| Materialization without `source.capture` | All of them | Shown in the plan and removed by the next apply. |
 | Materialization with `source.capture` | Only the ones in your configuration | Kept, and not shown in plans. |
 
 **Manage every binding (no auto discovery):**
@@ -207,21 +213,18 @@ bindings = [
 ```hcl
 bindings = [
   {
-    resource = { database = "shop", collection = "events" }
-    backfill = 3 # the live counter, see Backfill Control
+    resource = { database = "shop", collection = "events" } # its live backfill counter is kept
   },
 ]
 ```
 
 **Lifecycle rules:**
-- **Default target:** a capture binding without `target` keeps its current collection. A new one gets the collection discovery would name: the capture name without its connector name, followed by the resource name. For example, the capture `acmeCo/mongodb/source-mongodb` writes `shop.users` to `acmeCo/mongodb/shop/users`.
-- **Changes made outside Terraform:** plans refresh the fields you set on capture bindings, so dashboard edits show up as changes, and the next apply reverts them. Fields you leave unset stay managed by Estuary. A declared binding deleted outside Terraform is added back.
+- **Default target:** a capture binding without `target` keeps its current collection. A new one gets the collection the connector discovery names, so the provider never replicates the connector naming rules. For example, the capture `acmeCo/mongodb/source-mongodb` writes `shop.users` to `acmeCo/mongodb/shop/users`. Discovery runs during `terraform plan` only for new bindings without `target`, from Estuary's data plane, so the source must be reachable and the plan fails naming each binding whose resource discovery doesn't find. Set `target` to skip discovery.
+- **Changes made outside Terraform:** plans refresh every field from the live spec, on the capture or materialization and on its bindings, such as the endpoint `config`, `image` or `auto_discover`. Dashboard edits to the fields you set show as changes the next apply reverts, and the live values you don't declare, such as a `priority` set in the dashboard, show as removed, as the apply would drop them: declare the ones to keep. Empty live values (`false`, `""`, `0`, empty lists) are left out, and write-only secrets are never read back. A declared binding deleted outside Terraform is added back. A materialization binding whose live `source` holds a key other than `name`, `notBefore` or `notAfter` can't be refreshed: the plan warns about it and doesn't show that materialization's outside changes.
+- **Creating a capture with `add_new_bindings = true`:** the apply runs a discovery and adds a binding for each discovered resource you didn't declare, as the dashboard does, and later discoveries keep adding new ones. The plan warns about it. Terraform doesn't manage those bindings, so declare a binding to manage it. Updates never run this discovery.
 - **Removing a binding:** with `add_new_bindings = true`, discovery may add it back while the collection still exists in the source. The plan warns about it. Use `disable = true` to stop it for good.
 - **Taking over a binding:** the plan shows it as added, but the apply updates the live binding in place. A warning lists the fields the apply changes, so copy over the live values you want to keep.
-- **Importing:** a capture with `auto_discover` or a materialization with `source.capture` is imported without its bindings, which stay unmanaged until you declare them. Any other capture or materialization is imported with all of its bindings.
-
-> [!WARNING]
-> Materialization plans don't refresh bindings yet, so the next apply overwrites dashboard edits to a materialization's bindings without showing them in the plan.
+- **Importing:** a capture with `auto_discover` or a materialization with `source.capture` is imported without its bindings, which stay unmanaged until you declare them. Any other capture or materialization is imported with all of its bindings. Import by catalog name, such as `terraform import estuary_source_mongodb.shop acmeCo/mongodb/source-mongodb`; the tenant and connector name can be left out. Write-only secrets aren't imported, so the first apply publishes the ones in your configuration. Live fields the provider doesn't manage are named in an import warning, and the next apply removes them.
 
 ### Field Selection
 
@@ -229,9 +232,12 @@ Each materialization binding can set `fields` to choose which collection fields 
 
 | Attribute | Behavior |
 |---|---|
-| `recommended` | Required when `fields` is set. `true` selects every field of the collection. `false` selects only the fields the connector requires, such as the collection key, plus the ones in `require`. |
+| `recommended` | Required when `fields` is set. Depth of the fields selected by default: `"0"` selects only the root document and the required fields, such as the collection key, `"1"` the top-level fields, `"2"` the second-level fields too, and so on, and `"unlimited"` every field. |
 | `require` | Fields always materialized, whatever `recommended` selects. |
 | `exclude` | Fields never materialized. |
+| `group_by` | Fields keying the table instead of the collection key. Only fields with a scalar type (boolean, integer or string) can be keys, and changing them backfills the binding. |
+
+A materialization's `source.fields_recommended` sets the `recommended` depth of the bindings Estuary adds itself, such as through `source.capture`.
 
 **Include only specific fields:**
 ```hcl
@@ -240,7 +246,7 @@ Each materialization binding can set `fields` to choose which collection fields 
   resource = { table = "orders_slim" }
 
   fields = {
-    recommended = false
+    recommended = "0"
     require     = ["customer_id", "status", "total"]
   }
 }
@@ -253,8 +259,21 @@ Each materialization binding can set `fields` to choose which collection fields 
   resource = { table = "orders" }
 
   fields = {
-    recommended = true
+    recommended = "1"
     exclude     = ["internal_notes"]
+  }
+}
+```
+
+**Key the table by fields other than the collection key:**
+```hcl
+{
+  source   = "acmeCo/mongodb/shop/order_lines"
+  resource = { table = "order_lines" }
+
+  fields = {
+    recommended = "1"
+    group_by    = ["order_id", "line_number"]
   }
 }
 ```
@@ -262,24 +281,94 @@ Each materialization binding can set `fields` to choose which collection fields 
 > [!NOTE]
 > **`flow_document`:** This special field holds the full source document.
 > - With standard updates, it's always materialized, because the connector reads it back to merge each update. The exception is when the connector's `no_flow_document` advanced option is enabled.
-> - With `delta_updates = true`, it's excluded by default. Add it to `require` to keep it.
+> - With `delta_updates = true`, it's only selected with `recommended = "0"`. Add it to `require` to keep it at other depths.
 
 ### Backfill Control
 
-The `backfill` counter on each binding triggers a full re-read of its data: a capture binding captures its whole resource again, and a materialization binding materializes its whole collection again. Use it to fill new columns after changing a field selection, to recreate a dropped table, or to reprocess data after a schema change.
+A backfill re-reads a binding's data: a capture binding captures its whole resource again, and a materialization binding materializes its whole collection again. Use it to fill new columns after changing a field selection, to recreate a dropped table, or to reprocess data after a schema change.
+
+Each binding has a `backfill` block. To backfill the binding, raise its `trigger`:
 
 ```hcl
 {
   resource = { database = "shop", collection = "orders" }
-  backfill = 2 # was 1 → increment by 1 to trigger a backfill
+  backfill = {
+    trigger = 2 # was 1: fix missing rows (2026-10-22)
+  }
 }
 ```
 
+> [!IMPORTANT]
+> **`backfill.trigger` is not Estuary's backfill counter.** It's an internal control of the provider, which Estuary never sees: each time you raise it, the apply raises Estuary's counter by one from its live value. The two never need to match.
+> - Each raise is one backfill, even by more than one (2 → 5). Leave the new value in place afterwards.
+> - Start at 1. It only goes up: the plan fails when it's lower than before, or when it's only known at apply time, such as `timestamp()`, which would backfill on every apply.
+> - Setting it where it wasn't set before counts as a raise: on a binding already in Estuary, managed or taken over, `trigger = 1` backfills it once. A binding new to Estuary only records it, as creating it backfills anyway.
+> - Removing it does nothing, but setting it again later backfills. Keep it in place, with the reason in a comment, so the Git history tells why each backfill happened.
+
+Terraform doesn't show Estuary's counter: the apply reads it from the live spec and never lowers it. Backfills started elsewhere, from the dashboard, a dataflow reset or a schema evolution, never show as changes, and you never copy the counter over, even when taking over a live binding.
+
+On SQL captures (PostgreSQL, MySQL), a binding's `backfill.mode` also sets how its table is backfilled: `Normal`, `Precise`, `Only Changes` or `Without Primary Key`, or unset for the connector's automatic choice. See [Backfill Modes](https://docs.estuary.dev/reference/backfilling-data/#resource-configuration-backfill-modes). The connector requires a backfill along with any mode change, so the plan fails when `mode` changes without raising the binding's `trigger`, or the capture's, in the same change. Taking over a binding with a changed mode needs a `trigger` set on it, or a raised capture `trigger`.
+
+Captures also take a `backfill` block at the top level, as the dashboard's **Backfill** button and **Backfill mode**:
+
+- Raising the capture's `backfill.trigger` backfills **every** binding of the capture, those added by discovery that Terraform doesn't manage included. A binding whose own trigger rises in the same apply still backfills once.
+- The capture's `backfill.strategy` is the default of its bindings, and a binding's `backfill.strategy` overrides it. Changing a strategy alone publishes nothing.
+
+| `strategy` | What a raised trigger does to a capture binding |
+|------------|-------------------------------------------------|
+| `incremental` (default when unset) | Captures the resource again into the existing collection. Destination tables are kept and the data merges into them. |
+| `dataflowReset` | Resets the binding's collection instead: its data is replaced by a fresh backfill from the source, its inferred schema is cleared, and every materialization of it backfills, truncating its destination tables. See [Dataflow reset](https://docs.estuary.dev/reference/backfilling-data/#dataflow-reset). |
+
+```hcl
+resource "estuary_source_aurora_postgres" "sales" {
+  # ...
+  backfill = {
+    trigger  = 2               # was 1: rebuild every binding (2026-10-22)
+    strategy = "dataflowReset" # default of every binding
+  }
+
+  bindings = [
+    {
+      resource = { namespace = "public", stream = "sales" } # resets
+    },
+    {
+      resource = { namespace = "public", stream = "audit_log" }
+      backfill = {
+        strategy = "incremental" # captures again, keeping its destination tables
+      }
+    },
+    {
+      resource = { namespace = "public", stream = "orders" }
+      backfill = {
+        trigger = 3 # was 2: raised on its own, it backfills only this binding, resetting it
+      }
+    },
+  ]
+}
+```
+
+Plans warn about every collection the apply resets, those of unmanaged bindings included. A materialization with `on_incompatible_schema_change = "abort"` makes the reset fail.
+
 > [!CAUTION]
-> **Never lower the counter.** Estuary tracks each binding's progress under its counter value, so a lower value can make a capture resume from stale progress, and materializations reject it.
-> - Each increment triggers exactly one backfill. Leave the new value in place afterwards.
-> - Don't remove the attribute: that sets the counter back to 0.
-> - When you add back a removed binding or take over a live one, set `backfill` to the value it had.
+> Removing a binding drops its live counter, so a binding added back starts over. To stop a binding while keeping its progress, set `disable = true` instead.
+
+### Shard Settings
+
+`shards` sets how Estuary runs a capture or materialization, such as pausing it or raising its log level. It's free-form: write Estuary's own keys, in camelCase, and they're published as written. See [Configuring Task Shards](https://docs.estuary.dev/reference/Configuring-task-shards/) for the available settings.
+
+```hcl
+shards = {
+  logLevel       = "debug" # error, warn, info (default), debug or trace
+  disable        = false   # true pauses the task without deleting it
+  minTxnDuration = "30s"
+  maxTxnDuration = "4m"
+}
+```
+
+- **Unset `shards`:** Estuary manages them. Every apply keeps the live settings, such as a paused task or the flags Estuary adds, and plans never show them as changes. A task disabled outside Terraform gets a plan warning, so it doesn't stay paused unnoticed: set `disable = false` to enable it, or `disable = true` to manage it as paused.
+- **Set `shards`:** Terraform manages every shard setting. Plans diff your block against all the live settings: dashboard changes to your keys show as reverted, and the live keys your block leaves out, such as `flags`, show as removed, so declare the ones to keep.
+- **Removing the block** hands the settings back to Estuary, keeping them as they are live.
+- **Unknown keys** aren't checked by the plan: Estuary rejects them when the apply publishes.
 
 ### Connector Versions
 
@@ -294,7 +383,7 @@ resource "estuary_source_mongodb" "shop" {
 ```
 
 > [!WARNING]
-> Don't pin a per-commit image tag. Estuary doesn't register those tags as connector versions, so a capture or materialization running one stops getting fixes and skips auto discovery, and such a capture can't be used as a materialization's `source.capture`.
+> Don't pin a per-commit image tag. Estuary ships fixes only to the major version tags, so a task pinned to a commit stops getting them, and some features, such as auto discovery, may not work on unregistered tags.
 
 ---
 
@@ -331,14 +420,14 @@ variable "mongodb_address" {
 ```hcl
 # dev.tfvars
 tenant          = "acmeCo/dev/"
-mongodb_address = "mongodb+srv://dev-cluster.abc123.mongodb.net?authSource=admin"
+mongodb_address = "mongodb+srv://dev-cluster.123456789.mongodb.net?authSource=admin"
 ```
 
 ```hcl
 # production.tfvars
 tenant          = "acmeCo/prod/"
-data_plane      = "ops/dp/public/aws-eu-west-1-c2"
-mongodb_address = "mongodb+srv://prod-cluster.xyz789.mongodb.net?authSource=admin"
+data_plane      = "ops/dp/public/example-data-plane"
+mongodb_address = "mongodb+srv://prod-cluster.123456789.mongodb.net?authSource=admin"
 ```
 
 Secrets don't go in these files, see [Keep Secrets Out of Code](#keep-secrets-out-of-code).
@@ -392,7 +481,7 @@ Separate states keep Terraform's records apart, but not Estuary's names: all env
 ```hcl
 provider "estuary" {
   tenant     = var.tenant     # "acmeCo/dev/" in dev.tfvars, "acmeCo/prod/" in production.tfvars
-  data_plane = var.data_plane # Estuary's default data plane when null
+  data_plane = var.data_plane # the storage mapping's first data plane when null
 }
 
 resource "estuary_source_mongodb" "shop" {
@@ -402,6 +491,8 @@ resource "estuary_source_mongodb" "shop" {
 ```
 
 Despite its name, `tenant` can be any prefix under your Estuary tenant, such as `acmeCo/dev/`. Your token must have access to it.
+
+Changing `tenant` or `name` changes the catalog name, so Terraform replaces the capture or materialization: it deletes it and creates a new one. Writing the prefix or connector name in `name` yourself, such as `name = "acmeCo/dev/mongodb"`, names the same entry and never replaces it. Without `tenant`, `name` must hold the full prefix.
 
 The prefix is added only to names the provider builds. Names you write out yourself are used exactly as written:
 
@@ -440,7 +531,12 @@ env:
   TF_VAR_postgres_password: ${{ secrets.POSTGRES_PASSWORD }}
 ```
 
-Connector secrets such as `password` and `private_key` are write-only: Terraform sends them to Estuary but never stores them in the state or shows them in plans.
+Connector secrets such as `password` and `private_key` are write-only: Terraform sends them to Estuary but never stores them in the state or shows them in plans. State keeps only a salted hash of each one, such as `config.password_hash`, so a changed secret shows as a plan warning and is published on apply.
+
+> [!WARNING]
+> Run Terraform in a trusted environment, such as your workstation or an ephemeral CI runner, that no other user or job can read. While a command runs, the provider hands flowctl the spec, secrets included, in plain text in a private `estuary-tf-*` directory of the system temporary directory (`TMPDIR`), readable by your user only, and removes it once the command ends. A provider killed mid-command, such as by `kill -9` or the host running out of memory, leaves that directory behind. On shared or long-lived machines, point `TMPDIR` to a directory removed after each run.
+
+An apply that changes neither the `config` nor a secret, such as adding a binding, republishes the config Estuary already encrypted, so its history shows no config change. Changing a config field or a secret publishes your config, which Estuary encrypts again.
 
 ### Share Pipelines with Modules
 

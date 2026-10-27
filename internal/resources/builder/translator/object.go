@@ -10,7 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-// HashSuffix names the computed attribute beside each write-only attribute, holding the salted hash of its secret.
+// HashSuffix names the computed attribute holding the salted hash of each write-only secret.
 const HashSuffix string = "_hash"
 
 type child struct {
@@ -18,7 +18,7 @@ type child struct {
 	converter node
 }
 
-// Object handles a spec struct, mapping each YAML key to its attribute through the field node.
+// Object handles a spec struct, mapping each YAML key to an attribute.
 type Object struct {
 	children []child
 }
@@ -50,16 +50,15 @@ func NewObject(structType reflect.Type) (*Object, error) {
 	}
 
 	for _, child := range object.children {
-		if child.converter.attribute(child.field).IsWriteOnly() && slices.Contains(attributes, child.field.attribute+HashSuffix) {
-			return nil, fmt.Errorf("%s: attribute %s is the hash of the write-only %s.", structType, child.field.attribute+HashSuffix, child.field.attribute)
+		if child.field.secret && slices.Contains(attributes, child.field.attribute+HashSuffix) {
+			return nil, fmt.Errorf("%s: attribute %s is the hash of the write-only %s", structType, child.field.attribute+HashSuffix, child.field.attribute)
 		}
 	}
 
 	return object, nil
 }
 
-// SpecValue converts a Terraform value of the struct into its YAML value, null becoming nil and the attributes outside
-// the struct, such as computed ones still unknown, being ignored.
+// SpecValue converts a Terraform value into its YAML value, ignoring attributes outside the struct.
 func (object *Object) SpecValue(value tftypes.Value) (any, error) {
 	if value.IsNull() {
 		return nil, nil
@@ -72,13 +71,12 @@ func (object *Object) SpecValue(value tftypes.Value) (any, error) {
 	return object.specValue(value)
 }
 
-// TerraformValue converts a YAML value of the struct into its Terraform value, nil and the attributes outside the struct becoming null.
+// TerraformValue converts a YAML value into its Terraform value, leaving out fields valueType doesn't hold.
 func (object *Object) TerraformValue(value any, valueType tftypes.Type) (tftypes.Value, error) {
 	return toTerraformValue(object, value, valueType)
 }
 
-// Attributes returns the Terraform attributes of the struct fields, each write-only one along with its computed hash,
-// whose changes plans show without storing the secret.
+// Attributes returns the struct attributes, adding a computed hash beside each write-only one so plans show changes.
 func (object *Object) Attributes() map[string]schema.Attribute {
 	var built map[string]schema.Attribute = make(map[string]schema.Attribute, len(object.children))
 
@@ -142,7 +140,13 @@ func (object *Object) terraformValue(value any, valueType tftypes.Type) (tftypes
 	}
 
 	for _, child := range object.children {
-		converted, err := toTerraformValue(child.converter, values[child.field.key], objectType.AttributeTypes[child.field.attribute])
+		attributeType, inSchema := objectType.AttributeTypes[child.field.attribute]
+
+		if !inSchema {
+			continue
+		}
+
+		converted, err := toTerraformValue(child.converter, values[child.field.key], attributeType)
 
 		if err != nil {
 			return tftypes.Value{}, fmt.Errorf("%s: %w", child.field.key, err)

@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
-	"github.com/estuary/terraform-provider-estuary/internal/resources/capture/mongodb"
-	"github.com/estuary/terraform-provider-estuary/internal/resources/materialization/postgres"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -19,7 +17,7 @@ import (
 
 var _ provider.Provider = &EstuaryProvider{}
 
-// EstuaryProvider is the root Terraform provider for Estuary's resources management
+// EstuaryProvider is the Terraform provider for Estuary resources.
 type EstuaryProvider struct {
 	version string
 }
@@ -32,30 +30,29 @@ type EstuaryProviderModel struct {
 	DataPlane   types.String `tfsdk:"data_plane"`
 }
 
-// New returns a factory function that creates an EstuaryProvider
+// New returns an EstuaryProvider factory.
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
 		return &EstuaryProvider{version: version}
 	}
 }
 
-// Metadata sets the provider type and version which Terraform uses to identify resources and data sources belonging to this provider.
+// Metadata sets the provider type name and version.
 func (estuaryProvider *EstuaryProvider) Metadata(_ context.Context, _ provider.MetadataRequest, metadataResp *provider.MetadataResponse) {
 	metadataResp.TypeName = "estuary"
 	metadataResp.Version = estuaryProvider.version
 }
 
-// Schema declares provider configuration, including the backend selection. Explicit Values override environment fallbacks,
-// and flowctl_path defaults to flowctl.
+// Schema declares the provider configuration. Explicit values override environment variables.
 func (estuaryProvider *EstuaryProvider) Schema(_ context.Context, _ provider.SchemaRequest, schemaResp *provider.SchemaResponse) {
 	schemaResp.Schema = schema.Schema{
 		Description: "The Estuary provider manages Flow capture and materialization connectors through a configurable catalog backend.",
 		Attributes: map[string]schema.Attribute{
 			"backend": schema.StringAttribute{
-				Description: "Flow catalog backend. Defaults to flowctl. Currently only flowctl is available. Can also be set via ESTUARY_BACKEND env var.",
+				Description: "Flow catalog backend. Defaults to " + defaultBackend + ", currently the only one available. Can also be set via ESTUARY_BACKEND env var.",
 				Optional:    true,
 				Validators: []validator.String{
-					stringvalidator.OneOfCaseInsensitive("flowctl"),
+					stringvalidator.OneOfCaseInsensitive(defaultBackend),
 				},
 			},
 			"token": schema.StringAttribute{
@@ -73,24 +70,17 @@ func (estuaryProvider *EstuaryProvider) Schema(_ context.Context, _ provider.Sch
 				Optional:    true,
 			},
 			"data_plane": schema.StringAttribute{
-				Description: "Target Estuary Data Plane, you must use the internal data plane ID. Required for BYOC deployments or when targeting a non-default public data plane. " +
-					"Can also be set via env variable by using ESTUARY_DATA_PLANE.",
+				Description: "Data plane the provider creates new captures and materializations in and runs their discovery on, by its internal ID. " +
+					"Existing entries keep their data plane. Required for BYOC deployments or a non-default public data plane. Can also be set via env variable by using ESTUARY_DATA_PLANE.",
 				Optional: true,
 			},
 		},
 	}
 }
 
-// Configure resolves backend and connection settings, preferring explicit provider attributes over environment variables
-// and initializes a shared catalog.Session, holding the backend and tenant, injected into every Terraform resource and data source.
+// Configure builds the catalog.Session, holding the backend and tenant, shared by every resource and data source.
 func (estuaryProvider *EstuaryProvider) Configure(ctx context.Context, configureReq provider.ConfigureRequest, configureResp *provider.ConfigureResponse) {
 	var providerConfig EstuaryProviderModel
-	var token string = os.Getenv("FLOW_AUTH_TOKEN")
-	var tenant string = os.Getenv("ESTUARY_TENANT")
-	var dataPlane string = os.Getenv("ESTUARY_DATA_PLANE")
-	var backend string = os.Getenv("ESTUARY_BACKEND")
-
-	var flowctlPath string = "flowctl"
 
 	configureResp.Diagnostics.Append(configureReq.Config.Get(ctx, &providerConfig)...)
 
@@ -98,25 +88,11 @@ func (estuaryProvider *EstuaryProvider) Configure(ctx context.Context, configure
 		return
 	}
 
-	if !providerConfig.Token.IsNull() && !providerConfig.Token.IsUnknown() {
-		token = providerConfig.Token.ValueString()
-	}
-
-	if !providerConfig.Tenant.IsNull() && !providerConfig.Tenant.IsUnknown() {
-		tenant = providerConfig.Tenant.ValueString()
-	}
-
-	if !providerConfig.FlowctlPath.IsNull() && !providerConfig.FlowctlPath.IsUnknown() {
-		flowctlPath = providerConfig.FlowctlPath.ValueString()
-	}
-
-	if !providerConfig.DataPlane.IsNull() && !providerConfig.DataPlane.IsUnknown() {
-		dataPlane = providerConfig.DataPlane.ValueString()
-	}
-
-	if !providerConfig.Backend.IsNull() && !providerConfig.Backend.IsUnknown() {
-		backend = strings.ToLower(providerConfig.Backend.ValueString())
-	}
+	var token string = valueOr(providerConfig.Token, os.Getenv("FLOW_AUTH_TOKEN"))
+	var tenant string = valueOr(providerConfig.Tenant, os.Getenv("ESTUARY_TENANT"))
+	var dataPlane string = valueOr(providerConfig.DataPlane, os.Getenv("ESTUARY_DATA_PLANE"))
+	var flowctlPath string = valueOr(providerConfig.FlowctlPath, "flowctl")
+	var backend string = strings.ToLower(valueOr(providerConfig.Backend, os.Getenv("ESTUARY_BACKEND")))
 
 	if backend == "" {
 		backend = defaultBackend
@@ -149,15 +125,21 @@ func (estuaryProvider *EstuaryProvider) Configure(ctx context.Context, configure
 	configureResp.DataSourceData = session
 }
 
-// Resources returns the full list of Terraform resource factories registered with this provider
+// Resources returns the supported connector resources, see resources.
 func (estuaryProvider *EstuaryProvider) Resources(_ context.Context) []func() resource.Resource {
-	return []func() resource.Resource{
-		postgres.New,
-		mongodb.New,
-	}
+	return resources
 }
 
-// DataSources returns the list of data source factories registered with this provider.
+// DataSources returns the provider data sources.
 func (estuaryProvider *EstuaryProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{}
+}
+
+// valueOr returns the attribute value when set, fallback otherwise.
+func valueOr(attribute types.String, fallback string) string {
+	if attribute.IsNull() || attribute.IsUnknown() {
+		return fallback
+	}
+
+	return attribute.ValueString()
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/flowctl"
 )
 
+// defaultBackend is the flowctl CLI backend, used unless configured otherwise.
 const defaultBackend string = "flowctl"
 
 type backendOptions struct {
@@ -16,10 +17,10 @@ type backendOptions struct {
 	dataPlane   string
 }
 
-// newBackend returns the catalog backend registered under the given name.
+// newBackend returns the catalog backend registered under name.
 func newBackend(backendName string, options backendOptions) (catalog.Backend, error) {
 	switch backendName {
-	case "flowctl":
+	case defaultBackend:
 		flowctlResolvedPath, err := exec.LookPath(options.flowctlPath)
 
 		if err != nil {
@@ -28,6 +29,6 @@ func newBackend(backendName string, options backendOptions) (catalog.Backend, er
 
 		return flowctl.NewClient(flowctlResolvedPath, options.token, options.dataPlane), nil
 	default:
-		return nil, fmt.Errorf("Catalog backend %q is not implemented yet. Available backends: [flowctl]", backendName)
+		return nil, fmt.Errorf("catalog backend %q is not implemented yet. Available backends: [%s]", backendName, defaultBackend)
 	}
 }

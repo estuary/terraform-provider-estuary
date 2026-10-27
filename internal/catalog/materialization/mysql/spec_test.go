@@ -5,24 +5,29 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/sslmode"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, Image)
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
+}
+
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, sslmode.MySQLModes, materialization.DBTJobTriggerModes, materialization.OnIncompatibleSchemaChanges, materialization.TargetNamingStrategies)
 }
 
 func TestSampleVariants(test *testing.T) {
 	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
 
 	expectations := map[string]struct {
-		sslMode   SSLMode
+		sslMode   sslmode.MySQL
 		timezone  string
 		sshTunnel bool
 	}{
 		"acmeCo/mysql/password":   {"", "", false},
-		"acmeCo/mysql/verify-ca":  {SSLModeVerifyCA, "", false},
+		"acmeCo/mysql/verify-ca":  {sslmode.MySQLVerifyCA, "", false},
 		"acmeCo/mysql/ssh-tunnel": {"", "", true},
 		"acmeCo/mysql/timezone":   {"", "America/New_York", false},
 	}
@@ -41,7 +46,7 @@ func TestSampleVariants(test *testing.T) {
 
 			var config Config = spec.Endpoint.Connector.Config
 
-			var sslMode SSLMode
+			var sslMode sslmode.MySQL
 
 			if config.Advanced != nil {
 				sslMode = config.Advanced.SSLMode
@@ -75,7 +80,7 @@ func TestSampleFullSpec(test *testing.T) {
 		test.Errorf("dbt_job_trigger = %+v, want ignore mode", config.DBTJobTrigger)
 	}
 
-	if config.Advanced == nil || config.Advanced.SSLMode != SSLModeVerifyIdentity || !config.Advanced.NoFlowDocument {
+	if config.Advanced == nil || config.Advanced.SSLMode != sslmode.MySQLVerifyIdentity || !config.Advanced.NoFlowDocument {
 		test.Fatalf("advanced = %+v, want verify_identity without the flow document", config.Advanced)
 	}
 
@@ -123,13 +128,13 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 				continue
 			}
 
-			var sslMode SSLMode = config.Advanced.SSLMode
+			var sslMode sslmode.MySQL = config.Advanced.SSLMode
 
-			if sslMode != "" && !slices.Contains(SSLModes, sslMode) {
-				test.Errorf("%s: sslmode %q is not in SSLModes", name, sslMode)
+			if sslMode != "" && !slices.Contains(sslmode.MySQLModes, sslMode) {
+				test.Errorf("%s: sslmode %q is not in sslmode.MySQLModes", name, sslMode)
 			}
 
-			if (sslMode == SSLModeVerifyCA || sslMode == SSLModeVerifyIdentity) && config.Advanced.SSLServerCA == "" {
+			if (sslMode == sslmode.MySQLVerifyCA || sslMode == sslmode.MySQLVerifyIdentity) && config.Advanced.SSLServerCA == "" {
 				test.Errorf("%s: sslmode %q requires ssl_server_ca", name, sslMode)
 			}
 		}
@@ -150,7 +155,7 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 							connector:
 								image: ghcr.io/estuary/materialize-mysql:v2
 								config:
-									address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:3306
+									address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
 									user: flow_materialize
 									database: analytics
 									credentials:
@@ -168,7 +173,7 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 							connector:
 								image: ghcr.io/estuary/materialize-mysql:v2
 								config:
-									address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:3306
+									address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
 									user: flow_materialize
 									password: <secret>
 									database: analytics

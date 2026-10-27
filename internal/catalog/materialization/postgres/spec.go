@@ -3,47 +3,24 @@ package postgres
 import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/auth"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/sslmode"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 )
 
-// SSLMode overrides the connection SSL behavior through the PostgreSQL 'sslmode' parameter.
-type SSLMode string
-
-// Image is the PostgreSQL connector image, also materializing into Amazon Aurora and RDS for PostgreSQL.
+// Image is the PostgreSQL connector image, also used for Amazon Aurora and RDS for PostgreSQL.
 const Image string = "ghcr.io/estuary/materialize-postgres:v5"
 
-// ConnectorName ends the catalog name of every task of the connector, as the dashboard names them.
+// ConnectorName is the catalog name suffix of the connector's tasks, as the dashboard names them.
 const ConnectorName string = "materialize-postgres"
 
-const (
-	SSLModeDisable    SSLMode = "disable"
-	SSLModeAllow      SSLMode = "allow"
-	SSLModePrefer     SSLMode = "prefer"
-	SSLModeRequire    SSLMode = "require"
-	SSLModeVerifyCA   SSLMode = "verify-ca"
-	SSLModeVerifyFull SSLMode = "verify-full"
-)
-
-// SSLModes lists every supported SSL mode, useful for schema validators.
-var SSLModes = []SSLMode{
-	SSLModeDisable,
-	SSLModeAllow,
-	SSLModePrefer,
-	SSLModeRequire,
-	SSLModeVerifyCA,
-	SSLModeVerifyFull,
-}
-
-// Advanced carries the advanced endpoint options, including the SSL mode and feature flags.
+// Advanced holds advanced endpoint options, such as the SSL mode.
 type Advanced struct {
-	SSLMode        SSLMode `yaml:"sslmode,omitempty"`
-	NoFlowDocument bool    `yaml:"no_flow_document,omitempty"`
-	FeatureFlags   string  `yaml:"feature_flags,omitempty"`
+	SSLMode        sslmode.Postgres `yaml:"sslmode,omitempty" enum:"disable,allow,prefer,require,verify-ca,verify-full"`
+	NoFlowDocument bool             `yaml:"no_flow_document,omitempty"`
+	FeatureFlags   string           `yaml:"feature_flags,omitempty"`
 }
 
-// Config carries the ghcr.io/estuary/materialize-postgres connector configurations, including
-// the database connection, its authentication and the default schema. Password is the
-// deprecated form of Credentials.
+// Config is the materialize-postgres connector configuration; Password is the deprecated form of Credentials.
 type Config struct {
 	Address       string                         `yaml:"address"`
 	User          string                         `yaml:"user"`
@@ -57,7 +34,7 @@ type Config struct {
 	NetworkTunnel *endpoint.NetworkTunnel        `yaml:"networkTunnel,omitempty"`
 }
 
-// Resource identifies the target PostgreSQL table, Schema overriding the endpoint schema.
+// Resource identifies the target PostgreSQL table; Schema overrides the endpoint schema.
 type Resource struct {
 	Table                    string `yaml:"table"`
 	Schema                   string `yaml:"schema,omitempty"`
@@ -65,11 +42,11 @@ type Resource struct {
 	DeltaUpdates             bool   `yaml:"delta_updates,omitempty"`
 }
 
-// Binding maps a source collection to the PostgreSQL table it materializes into.
+// Binding maps a source collection to its PostgreSQL table.
 type Binding = materialization.Binding[Resource]
 
-// EndpointSpec wraps the connector under the "connector" key, as in endpoint.connector.
+// EndpointSpec wraps the connector under endpoint.connector.
 type EndpointSpec = endpoint.ConnectorSpec[Config]
 
-// Spec is a full PostgreSQL materialization entry, keyed by its catalog name in a catalog spec.
+// Spec is a PostgreSQL materialization entry.
 type Spec = materialization.Spec[EndpointSpec, Resource]

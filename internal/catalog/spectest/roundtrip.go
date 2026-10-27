@@ -10,14 +10,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RawMaterializations reads a YAML file and returns its untyped materializations section.
+// RawMaterializations returns the untyped materializations of a YAML file.
 func RawMaterializations(test testing.TB, path string) map[string]any {
 	test.Helper()
 
 	return rawSections(test, path).Materializations
 }
 
-// RawCaptures reads a YAML file and returns its untyped captures section.
+// RawCaptures returns the untyped captures of a YAML file.
 func RawCaptures(test testing.TB, path string) map[string]any {
 	test.Helper()
 
@@ -41,8 +41,7 @@ func rawSections(test testing.TB, path string) sections {
 	return document
 }
 
-// AssertRoundTrip marshals spec and checks it matches want, the untyped sample it was decoded from.
-// Keys whose sample value is false may be missing from the output, as false is the omitted default.
+// AssertRoundTrip checks spec marshals back to want, its source sample. Keys false in want may be omitted.
 func AssertRoundTrip(test testing.TB, spec any, want any) {
 	test.Helper()
 

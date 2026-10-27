@@ -6,12 +6,17 @@ import (
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/auth"
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/sslmode"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, Image)
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
+}
+
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, auth.DatabaseAuthTypes, sslmode.PostgresModes, materialization.DBTJobTriggerModes, materialization.OnIncompatibleSchemaChanges, materialization.TargetNamingStrategies)
 }
 
 func TestSampleVariants(test *testing.T) {
@@ -63,7 +68,7 @@ func TestSampleFullSpec(test *testing.T) {
 	var config Config = specs["acmeCo/analytics/materialize-postgres"].Endpoint.Connector.Config
 
 	expectedAdvanced := Advanced{
-		SSLMode:        SSLModeVerifyFull,
+		SSLMode:        sslmode.PostgresVerifyFull,
 		NoFlowDocument: true,
 		FeatureFlags:   "allow_existing_tables_for_new_bindings",
 	}
@@ -146,8 +151,8 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 				seenAuthTypes[credentials.AuthType] = true
 			}
 
-			if config.Advanced != nil && config.Advanced.SSLMode != "" && !slices.Contains(SSLModes, config.Advanced.SSLMode) {
-				test.Errorf("%s: sslmode %q is not in SSLModes", name, config.Advanced.SSLMode)
+			if config.Advanced != nil && config.Advanced.SSLMode != "" && !slices.Contains(sslmode.PostgresModes, config.Advanced.SSLMode) {
+				test.Errorf("%s: sslmode %q is not in sslmode.PostgresModes", name, config.Advanced.SSLMode)
 			}
 		}
 	}
@@ -173,7 +178,7 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 							connector:
 								image: ghcr.io/estuary/materialize-postgres:v5
 								config:
-									address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+									address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:5432
 									user: flow_materialize
 									timezone: UTC
 									credentials:
@@ -191,7 +196,7 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 							connector:
 								image: ghcr.io/estuary/materialize-postgres:v5
 								config:
-									address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+									address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:5432
 									user: flow_materialize
 									credentials:
 										auth_type: UserPassword

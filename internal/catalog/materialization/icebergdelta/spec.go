@@ -1,32 +1,19 @@
 package icebergdelta
 
 import (
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/auth"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 )
 
-// AuthType identifies how the connector authenticates against AWS.
-type AuthType string
-
-// CatalogType identifies the Iceberg catalog implementation.
+// CatalogType is the Iceberg catalog implementation.
 type CatalogType string
 
 // Image is the Iceberg delta updates connector image.
 const Image string = "ghcr.io/estuary/materialize-s3-iceberg:v2"
 
-// ConnectorName ends the catalog name of every task of the connector, as the dashboard names them.
+// ConnectorName is the catalog name suffix of the connector's tasks, as the dashboard names them.
 const ConnectorName string = "materialize-s3-iceberg"
-
-const (
-	AuthTypeAWSAccessKey AuthType = "AWSAccessKey"
-	AuthTypeAWSIAM       AuthType = "AWSIAM"
-)
-
-// AuthTypes lists every supported auth type, useful for schema validators.
-var AuthTypes = []AuthType{
-	AuthTypeAWSAccessKey,
-	AuthTypeAWSIAM,
-}
 
 const (
 	CatalogTypeGlue CatalogType = "AWS Glue"
@@ -39,18 +26,18 @@ var CatalogTypes = []CatalogType{
 	CatalogTypeREST,
 }
 
-// Credentials carries the AWS authentication, with the fields relevant to its AuthType.
+// Credentials is the AWS authentication, using the fields of its AuthType.
 type Credentials struct {
-	AuthType           AuthType `yaml:"auth_type"`
-	AWSAccessKeyID     string   `yaml:"awsAccessKeyId,omitempty"`
-	AWSSecretAccessKey string   `yaml:"awsSecretAccessKey,omitempty"`
-	AWSRoleARN         string   `yaml:"aws_role_arn,omitempty"`
-	AWSRegion          string   `yaml:"aws_region,omitempty"`
+	AuthType           auth.AWSAuthType `yaml:"auth_type" enum:"AWSAccessKey,AWSIAM"`
+	AWSAccessKeyID     string           `yaml:"awsAccessKeyId,omitempty"`
+	AWSSecretAccessKey string           `yaml:"awsSecretAccessKey,omitempty"`
+	AWSRoleARN         string           `yaml:"aws_role_arn,omitempty"`
+	AWSRegion          string           `yaml:"aws_region,omitempty"`
 }
 
-// CatalogConfig carries the Iceberg catalog settings, with the fields relevant to its CatalogType.
+// CatalogConfig holds the Iceberg catalog settings, using the fields of its CatalogType.
 type CatalogConfig struct {
-	CatalogType CatalogType `yaml:"catalog_type"`
+	CatalogType CatalogType `yaml:"catalog_type" enum:"AWS Glue,Iceberg REST Server"`
 	GlueID      string      `yaml:"glue_id,omitempty"`
 	URI         string      `yaml:"uri,omitempty"`
 	Warehouse   string      `yaml:"warehouse,omitempty"`
@@ -59,16 +46,15 @@ type CatalogConfig struct {
 	Scope       string      `yaml:"scope,omitempty"`
 }
 
-// Advanced carries the advanced endpoint options, including the Iceberg format v3 types and feature flags.
+// Advanced holds advanced endpoint options, such as Iceberg format v3 types.
 type Advanced struct {
 	NanosecondTimestamps bool   `yaml:"nanosecond_timestamps,omitempty"`
 	VariantColumns       bool   `yaml:"variant_columns,omitempty"`
 	FeatureFlags         string `yaml:"feature_flags,omitempty"`
 }
 
-// Config carries the ghcr.io/estuary/materialize-s3-iceberg connector configurations, including
-// the AWS authentication, the S3 storage and the Iceberg catalog. AWSAccessKeyID and
-// AWSSecretAccessKey are the deprecated form of Credentials.
+// Config is the materialize-s3-iceberg connector configuration.
+// AWSAccessKeyID and AWSSecretAccessKey are the deprecated form of Credentials.
 type Config struct {
 	Credentials        *Credentials  `yaml:"credentials,omitempty"`
 	AWSAccessKeyID     string        `yaml:"aws_access_key_id,omitempty"`
@@ -83,7 +69,7 @@ type Config struct {
 	Advanced           *Advanced     `yaml:"advanced,omitempty"`
 }
 
-// Resource identifies the target Iceberg table, the connector only supports delta updates.
+// Resource identifies the target Iceberg table; the connector only supports delta updates.
 type Resource struct {
 	Table                     string            `yaml:"table"`
 	Namespace                 string            `yaml:"namespace,omitempty"`
@@ -91,11 +77,11 @@ type Resource struct {
 	AdditionalTableProperties map[string]string `yaml:"additional_table_properties,omitempty"`
 }
 
-// Binding maps a source collection to the Iceberg table it materializes into.
+// Binding maps a source collection to its Iceberg table.
 type Binding = materialization.Binding[Resource]
 
-// EndpointSpec wraps the connector under the "connector" key, as in endpoint.connector.
+// EndpointSpec wraps the connector under endpoint.connector.
 type EndpointSpec = endpoint.ConnectorSpec[Config]
 
-// Spec is a full Iceberg delta updates materialization entry, keyed by its catalog name in a catalog spec.
+// Spec is an Iceberg delta updates materialization entry.
 type Spec = materialization.Spec[EndpointSpec, Resource]

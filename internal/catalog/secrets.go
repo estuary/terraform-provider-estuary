@@ -8,7 +8,7 @@ const encryptedSuffix string = "_sops"
 
 const encryptedPrefix string = "ENC["
 
-// WithoutSecrets returns a copy of the spec without its sops metadata and encrypted values, which can't be decrypted.
+// WithoutSecrets returns a copy of the spec without sops metadata and encrypted values, which can't be decrypted.
 func WithoutSecrets(spec map[string]any) map[string]any {
 	stripped, _ := withoutSecrets(spec).(map[string]any)
 

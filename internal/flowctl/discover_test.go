@@ -1,18 +1,13 @@
 package flowctl
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
-	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 )
 
-func TestDiscoveredStreams(test *testing.T) {
-	var directory string = test.TempDir()
-
+func TestDiscoveredResources(test *testing.T) {
 	var content []byte = spectest.Dedent([]byte(`
 		captures:
 			acmeCo/mongodb/source:
@@ -25,51 +20,28 @@ func TestDiscoveredStreams(test *testing.T) {
 						target: acmeCo/mongodb/users
 					- resource: { database: shop, collection: events }
 						target: acmeCo/mongodb/events
-					- resource: { database: shop, collection: orphan }
-						target: acmeCo/mongodb/orphan
+					- resource: { database: shop, collection: untargeted }
 		collections:
 			acmeCo/mongodb/users:
 				key: [/_id]
-				readSchema: users.read.schema.yaml
-			acmeCo/mongodb/events:
-				key: [/id, /ts]
-				schema:
-					properties:
-						id: { type: integer }
 	`))
 
-	var schema []byte = spectest.Dedent([]byte(`
-		properties:
-			_id: { type: string, format: objectid }
-	`))
-
-	if err := os.WriteFile(filepath.Join(directory, "users.read.schema.yaml"), schema, 0600); err != nil {
-		test.Fatalf("writing schema file: %v", err)
-	}
-
-	streams, err := discoveredStreams(content, "acmeCo/mongodb/source", directory)
+	resources, err := discoveredResources(content, "acmeCo/mongodb/source")
 
 	if err != nil {
-		test.Fatalf("discoveredStreams: %v", err)
+		test.Fatalf("discoveredResources: %v", err)
 	}
 
-	expected := map[string]catalog.DiscoveredStreamInfo{
-		"acmeCo/mongodb/users": {
-			Resource:   map[string]any{"database": "shop", "collection": "users"},
-			Keys:       []string{"/_id"},
-			KeySchemas: map[string]any{"_id": map[string]any{"type": "string", "format": "objectid"}},
-		},
-		"acmeCo/mongodb/events": {
-			Resource: map[string]any{"database": "shop", "collection": "events"},
-			Keys:     []string{"/id", "/ts"},
-			KeySchemas: map[string]any{
-				"id": map[string]any{"type": "integer"},
-				"ts": map[string]any{"type": "string"},
-			},
-		},
+	expected := map[string]map[string]any{
+		"acmeCo/mongodb/users":  {"database": "shop", "collection": "users"},
+		"acmeCo/mongodb/events": {"database": "shop", "collection": "events"},
 	}
 
-	if !reflect.DeepEqual(streams, expected) {
-		test.Errorf("streams = %+v, want %+v", streams, expected)
+	if !reflect.DeepEqual(resources, expected) {
+		test.Errorf("resources = %+v, want %+v", resources, expected)
+	}
+
+	if _, err := discoveredResources([]byte("captures: [unclosed"), "acmeCo/mongodb/source"); err == nil {
+		test.Error("discoveredResources accepted an unparseable spec")
 	}
 }

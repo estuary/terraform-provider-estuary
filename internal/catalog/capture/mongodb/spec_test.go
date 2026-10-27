@@ -9,11 +9,15 @@ import (
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunCaptureSuite[Spec](test, Image)
+	spectest.RunCaptureSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
 }
 
 func TestSchemaConformance(test *testing.T) {
 	spectest.AssertConformsToSchema[Config, Resource](test)
+}
+
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, CaptureModes)
 }
 
 func TestSampleVariants(test *testing.T) {
@@ -26,8 +30,8 @@ func TestSampleVariants(test *testing.T) {
 		sshTunnel            bool
 	}{
 		"acmeCo/mongodb/change-stream": {"mongo:27017", "", false, false},
-		"acmeCo/mongodb/atlas":         {"mongodb+srv://cluster0.abc123.mongodb.net?authSource=admin", "shop,billing", false, false},
-		"acmeCo/mongodb/ssh-tunnel":    {"mongodb://10.0.0.12:27017", "", false, true},
+		"acmeCo/mongodb/atlas":         {"mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin", "shop,billing", false, false},
+		"acmeCo/mongodb/ssh-tunnel":    {"mongodb://123.4.567.89:27017", "", false, true},
 		"acmeCo/mongodb/batch":         {"mongo:27017", "", true, false},
 	}
 
@@ -225,10 +229,10 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 	}
 }
 
-func TestResourceRecommendedName(test *testing.T) {
-	var resource Resource = Resource{Database: "sample_mflix", Collection: "users"}
+func TestResourcePath(test *testing.T) {
+	var resource Resource = Resource{Database: "sample_mflix", Collection: "users", CaptureMode: "Batch Snapshot"}
 
-	if name := resource.RecommendedName(); name != "sample_mflix/users" {
-		test.Errorf("recommended name = %q, want sample_mflix/users", name)
+	if path := resource.ResourcePath(); !slices.Equal(path, []string{"sample_mflix", "users"}) {
+		test.Errorf("resource path = %q, want [sample_mflix users]", path)
 	}
 }

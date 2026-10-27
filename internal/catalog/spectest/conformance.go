@@ -11,12 +11,10 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 )
 
-// SchemaFile is the connector schema snapshot every connector package keeps under testdata.
+// SchemaFile is the connector schema snapshot of each connector package.
 const SchemaFile string = "testdata/schema.json"
 
-// AssertConformsToSchema checks the connector Config and Resource map exactly the properties of the
-// connector schema snapshot, both ways. Legacy lists the paths of mapped fields the schema hides
-// (e.g. "password" or "compute/aws_access_key_id"), which the connector still accepts.
+// AssertConformsToSchema checks Config and Resource match the schema snapshot both ways, including secrets and enums.
 func AssertConformsToSchema[C, R any](test *testing.T, legacy ...string) {
 	test.Helper()
 
@@ -51,10 +49,8 @@ func AssertConformsToSchema[C, R any](test *testing.T, legacy ...string) {
 
 func conformance(path string, mapped reflect.Type, schema map[string]any, root map[string]any, legacy []string) []string {
 	var differences []string
-
 	var properties map[string]map[string]any = schemaProperties(schema, root)
-
-	var fields map[string]reflect.Type = mappedFields(mapped)
+	var fields map[string]reflect.StructField = mappedFields(mapped)
 
 	for _, key := range sortedKeys(toAny(properties)) {
 		if _, found := fields[key]; !found {
@@ -73,13 +69,19 @@ func conformance(path string, mapped reflect.Type, schema map[string]any, root m
 			continue
 		}
 
-		var nested reflect.Type = structType(fields[key])
+		var nested reflect.Type = structType(fields[key].Type)
 
 		if nested == nil {
+			differences = append(differences, scalarConformance(path+key, fields[key], property, schema, root)...)
+
+			if slices.Contains(schemaRequired(schema, root), key) && dropsValidZero(fields[key]) {
+				differences = append(differences, fmt.Sprintf("%s: required by the schema but omitted when zero", path+key))
+			}
+
 			continue
 		}
 
-		if fields[key].Kind() == reflect.Slice {
+		if fields[key].Type.Kind() == reflect.Slice {
 			property, _ = property["items"].(map[string]any)
 		}
 
@@ -87,6 +89,91 @@ func conformance(path string, mapped reflect.Type, schema map[string]any, root m
 	}
 
 	return differences
+}
+
+func scalarConformance(path string, field reflect.StructField, property map[string]any, schema map[string]any, root map[string]any) []string {
+	var differences []string
+	var schemaSecret bool = property["secret"] == true
+
+	if secret := catalog.SecretField(field); secret != schemaSecret {
+		differences = append(differences, fmt.Sprintf("%s: secret is %v, the schema says %v", path, secret, schemaSecret))
+	}
+
+	tagValues, tagged := catalog.EnumValues(field)
+	schemaValues, enumerated := schemaEnum(catalog.FieldKey(field), property, schema, root)
+
+	slices.Sort(tagValues)
+	slices.Sort(schemaValues)
+
+	if tagged != enumerated || !slices.Equal(tagValues, schemaValues) {
+		differences = append(differences, fmt.Sprintf("%s: enum is %q, the schema allows %q", path, tagValues, schemaValues))
+	}
+
+	return differences
+}
+
+// schemaEnum returns the values a property allows: its enum, or the values its oneOf branches set, as for auth_type.
+func schemaEnum(key string, property map[string]any, schema map[string]any, root map[string]any) ([]string, bool) {
+	var values []string
+
+	if values, found := propertyEnum(property, root); found {
+		return values, true
+	}
+
+	if reference, found := schema["$ref"].(string); found {
+		schema = resolve(reference, root)
+	}
+
+	branches, _ := schema["oneOf"].([]any)
+
+	for _, branch := range branches {
+		object, _ := branch.(map[string]any)
+
+		discriminator, _ := schemaProperties(object, root)[key]
+
+		value, found := discriminator["const"]
+
+		if !found {
+			value, found = discriminator["default"]
+		}
+
+		if !found {
+			return nil, false
+		}
+
+		values = append(values, fmt.Sprint(value))
+	}
+
+	return values, len(values) > 0
+}
+
+// propertyEnum returns the enum of a property, following $ref and allOf.
+func propertyEnum(property map[string]any, root map[string]any) ([]string, bool) {
+	var values []string
+
+	if reference, found := property["$ref"].(string); found {
+		return propertyEnum(resolve(reference, root), root)
+	}
+
+	if enum, found := property["enum"].([]any); found {
+		for _, value := range enum {
+			values = append(values, fmt.Sprint(value))
+		}
+
+		return values, true
+	}
+
+	branches, _ := property["allOf"].([]any)
+
+	for _, branch := range branches {
+		nested, _ := branch.(map[string]any)
+
+		if values, found := propertyEnum(nested, root); found {
+			return values, true
+		}
+	}
+
+	return nil, false
 }
 
 func schemaProperties(schema map[string]any, root map[string]any) map[string]map[string]any {
@@ -119,6 +206,38 @@ func schemaProperties(schema map[string]any, root map[string]any) map[string]map
 	return properties
 }
 
+// schemaRequired returns the required properties, excluding those of oneOf, anyOf and allOf branches, which a mapped
+// struct merges and so can't require.
+func schemaRequired(schema map[string]any, root map[string]any) []string {
+	var required []string
+
+	if reference, found := schema["$ref"].(string); found {
+		schema = resolve(reference, root)
+	}
+
+	keys, _ := schema["required"].([]any)
+
+	for _, key := range keys {
+		if name, isName := key.(string); isName {
+			required = append(required, name)
+		}
+	}
+
+	return required
+}
+
+// dropsValidZero reports whether a field omits a valid zero value, such as false or 0, when written.
+func dropsValidZero(field reflect.StructField) bool {
+	var omitEmpty bool = slices.Contains(strings.Split(field.Tag.Get("yaml"), ",")[1:], "omitempty")
+
+	switch field.Type.Kind() {
+	case reflect.Bool, reflect.Int, reflect.Int64, reflect.Float64:
+		return omitEmpty
+	default:
+		return false
+	}
+}
+
 func resolve(reference string, root map[string]any) map[string]any {
 	var node any = root
 
@@ -133,8 +252,8 @@ func resolve(reference string, root map[string]any) map[string]any {
 	return resolved
 }
 
-func mappedFields(mapped reflect.Type) map[string]reflect.Type {
-	var fields map[string]reflect.Type = map[string]reflect.Type{}
+func mappedFields(mapped reflect.Type) map[string]reflect.StructField {
+	var fields map[string]reflect.StructField = map[string]reflect.StructField{}
 
 	mapped = structType(mapped)
 
@@ -145,10 +264,10 @@ func mappedFields(mapped reflect.Type) map[string]reflect.Type {
 	for index := range mapped.NumField() {
 		var field reflect.StructField = mapped.Field(index)
 
-		var name string = strings.Split(field.Tag.Get("yaml"), ",")[0]
+		var name string = catalog.FieldKey(field)
 
 		if name != "" && name != "-" {
-			fields[name] = field.Type
+			fields[name] = field
 		}
 	}
 

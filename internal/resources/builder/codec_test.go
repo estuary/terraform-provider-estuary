@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/capture"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -34,8 +35,8 @@ type testResource struct {
 	Priority int    `yaml:"priority,omitempty"`
 }
 
-func (resource testResource) RecommendedName() string {
-	return "public/" + resource.Table
+func (resource testResource) ResourcePath() []string {
+	return []string{resource.Table}
 }
 
 var testConnector Connector = Connector{
@@ -46,7 +47,7 @@ var testConnector Connector = Connector{
 func TestCaptureCodecSchema(test *testing.T) {
 	var ctx context.Context = context.Background()
 
-	codec, err := NewCaptureCodec[testConfig, testResource](testConnector)
+	codec, err := NewCodec[captureDocument[testConfig, testResource]](testConnector)
 
 	if err != nil {
 		test.Fatal(err)
@@ -129,7 +130,7 @@ func TestCaptureCodecSchema(test *testing.T) {
 }
 
 func TestCaptureCodecRoundTrip(test *testing.T) {
-	codec, err := NewCaptureCodec[testConfig, testResource](testConnector)
+	codec, err := NewCodec[captureDocument[testConfig, testResource]](testConnector)
 
 	if err != nil {
 		test.Fatal(err)
@@ -157,8 +158,16 @@ func TestCaptureCodecRoundTrip(test *testing.T) {
 				},
 			},
 			Bindings: []capture.Binding[testResource]{
-				{Resource: testResource{Table: "orders", Priority: -1}, Target: "acmeCo/orders", Backfill: 2},
+				{Resource: testResource{Table: "orders", Priority: -1}, Target: "acmeCo/orders"},
 				{Resource: testResource{Table: "logs"}, Target: "acmeCo/logs", Disable: true},
+			},
+			Shards: catalog.Shards{
+				"disable":        true,
+				"logLevel":       "debug",
+				"maxTxnDuration": "4m",
+				"hotStandbys":    1,
+				"flags":          map[string]any{"enable_feature": true, "ratio": 0.5},
+				"notes":          []any{"first", 2},
 			},
 		},
 		"acmeCo/source-minimal": {
@@ -215,7 +224,7 @@ func TestCaptureCodecRejectsUnknownValues(test *testing.T) {
 		},
 	}
 
-	codec, err := NewCaptureCodec[testConfig, testResource](testConnector)
+	codec, err := NewCodec[captureDocument[testConfig, testResource]](testConnector)
 
 	if err != nil {
 		test.Fatal(err)

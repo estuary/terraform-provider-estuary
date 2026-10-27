@@ -7,11 +7,16 @@ import (
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/auth"
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, Image)
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
+}
+
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, auth.AWSAuthTypes, materialization.OnIncompatibleSchemaChanges, materialization.TargetNamingStrategies)
 }
 
 func TestSampleVariants(test *testing.T) {
@@ -138,7 +143,7 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 									awsSecretAccessKey: example-aws-secret-access-key
 									region: us-east-1
 						bindings: []
-				`,
+			`,
 		},
 		"rcuAllocation is a DynamoDB capture resource field": {
 			key: "rcuAllocation",

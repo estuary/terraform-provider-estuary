@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 )
 
 type field struct {
@@ -13,10 +15,13 @@ type field struct {
 	attribute   string
 	description string
 	optional    bool
+	secret      bool
+	enum        []string
 	kind        reflect.Type
 }
 
-func attributeName(key string) string {
+// AttributeName returns the Terraform attribute name of a YAML key, in snake case.
+func AttributeName(key string) string {
 	var runes []rune = []rune(key)
 	var name strings.Builder
 
@@ -46,23 +51,43 @@ func fields(structType reflect.Type) ([]field, error) {
 		var structField reflect.StructField = structType.Field(index)
 		var options []string = strings.Split(structField.Tag.Get("yaml"), ",")
 
+		if slices.Contains(options[1:], "inline") {
+			inlined, err := fields(structField.Type)
+
+			if err != nil {
+				return nil, err
+			}
+
+			mappedFields = append(mappedFields, inlined...)
+
+			continue
+		}
+
 		if options[0] == "" || options[0] == "-" {
 			continue
 		}
 
-		var attribute string = attributeName(options[0])
+		if err := catalog.ValidateTags(structField); err != nil {
+			return nil, fmt.Errorf("%s: %w", structType, err)
+		}
+
+		var attribute string = AttributeName(options[0])
 
 		if slices.Contains(attributes, attribute) {
-			return nil, fmt.Errorf("%s: attribute %s is mapped twice.", structType, attribute)
+			return nil, fmt.Errorf("%s: attribute %s is mapped twice", structType, attribute)
 		}
 
 		attributes = append(attributes, attribute)
+
+		enum, _ := catalog.EnumValues(structField)
 
 		mappedFields = append(mappedFields, field{
 			key:         options[0],
 			attribute:   attribute,
 			description: structField.Tag.Get("description"),
 			optional:    slices.Contains(options[1:], "omitempty") || structField.Type.Kind() == reflect.Pointer,
+			secret:      catalog.SecretField(structField),
+			enum:        enum,
 			kind:        structField.Type,
 		})
 	}

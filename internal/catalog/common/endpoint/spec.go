@@ -1,6 +1,6 @@
 package endpoint
 
-// Connector carries the connector image and its configurations, C being the connector config.
+// Connector is the connector image and its config.
 type Connector[C any] struct {
 	Image  string `yaml:"image"`
 	Config C      `yaml:"config"`

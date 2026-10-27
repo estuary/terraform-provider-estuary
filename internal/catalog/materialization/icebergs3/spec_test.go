@@ -10,11 +10,15 @@ import (
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, Image)
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
 }
 
 func TestSchemaConformance(test *testing.T) {
 	spectest.AssertConformsToSchema[Config, Resource](test, "catalog_authentication", "compute/aws_access_key_id", "compute/aws_secret_access_key")
+}
+
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, CatalogAuthTypes, LegacyCatalogAuthTypes, ComputeTypes, EMRAuthTypes, IdentifierCases, materialization.DBTJobTriggerModes, materialization.OnIncompatibleSchemaChanges, materialization.TargetNamingStrategies)
 }
 
 func TestSampleAuthVariants(test *testing.T) {
@@ -122,7 +126,7 @@ func TestSampleLegacyShapes(test *testing.T) {
 		test.Errorf("credentials = %+v, want unset for the legacy shape", config.Credentials)
 	}
 
-	if legacy == nil || legacy.CatalogAuthType != CatalogAuthTypeSigV4 || legacy.Region != "us-east-1" {
+	if legacy == nil || legacy.CatalogAuthType != LegacyCatalogAuthTypeSigV4 || legacy.Region != "us-east-1" {
 		test.Errorf("catalog_authentication = %+v, want AWS SigV4 with region us-east-1", legacy)
 	}
 
@@ -130,7 +134,7 @@ func TestSampleLegacyShapes(test *testing.T) {
 		test.Errorf("compute = %+v, want top-level legacy keys and no credentials", config.Compute)
 	}
 
-	if legacyOAuth == nil || legacyOAuth.CatalogAuthType != CatalogAuthTypeClientCredentials || legacyOAuth.OAuth2ServerURI != "v1/oauth/tokens" {
+	if legacyOAuth == nil || legacyOAuth.CatalogAuthType != LegacyCatalogAuthTypeClientCredentials || legacyOAuth.OAuth2ServerURI != "v1/oauth/tokens" {
 		test.Errorf("legacy OAuth catalog_authentication = %+v", legacyOAuth)
 	}
 }
@@ -182,8 +186,8 @@ func TestSampleFullSpec(test *testing.T) {
 		test.Errorf("customers resource = %+v", customers.Resource)
 	}
 
-	if customers.Fields == nil || !customers.Fields.Recommended {
-		test.Errorf("customers fields = %+v, want recommended", customers.Fields)
+	if customers.Fields == nil || customers.Fields.Recommended != materialization.FieldDepthUnlimited {
+		test.Errorf("customers fields = %+v, want every field recommended", customers.Fields)
 	}
 }
 
@@ -236,7 +240,7 @@ func TestSampleSharedOptions(test *testing.T) {
 	}
 }
 
-func TestEnumListsCoverSamples(test *testing.T) {
+func TestSamplesFollowConnectorRules(test *testing.T) {
 	var seenCatalogAuth map[CatalogAuthType]bool = map[CatalogAuthType]bool{}
 
 	var seenEMRAuth map[EMRAuthType]bool = map[EMRAuthType]bool{}

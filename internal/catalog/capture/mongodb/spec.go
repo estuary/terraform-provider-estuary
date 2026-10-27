@@ -37,8 +37,7 @@ type Advanced struct {
 	SkipBackfills             string `yaml:"skipBackfills,omitempty"`
 }
 
-// Config carries the ghcr.io/estuary/source-mongodb connector configurations, including
-// the deployment connection, the discovered databases and the batch polling schedule.
+// Config is the source-mongodb configuration: connection, discovered databases and batch polling schedule.
 type Config struct {
 	Address              string                  `yaml:"address"`
 	User                 string                  `yaml:"user"`
@@ -54,14 +53,14 @@ type Config struct {
 type Resource struct {
 	Database     string      `yaml:"database"`
 	Collection   string      `yaml:"collection"`
-	CaptureMode  CaptureMode `yaml:"captureMode,omitempty"`
+	CaptureMode  CaptureMode `yaml:"captureMode,omitempty" enum:"Change Stream Incremental,Batch Snapshot,Batch Incremental"`
 	CursorField  string      `yaml:"cursorField,omitempty"`
 	PollSchedule string      `yaml:"pollSchedule,omitempty"`
 }
 
-// RecommendedName returns database/collection, the collection name the connector discovery recommends.
-func (resource Resource) RecommendedName() string {
-	return resource.Database + "/" + resource.Collection
+// ResourcePath returns the database and collection, satisfying capture.ResourcePather.
+func (resource Resource) ResourcePath() []string {
+	return []string{resource.Database, resource.Collection}
 }
 
 // Binding maps a captured MongoDB resource to the collection it is captured into.

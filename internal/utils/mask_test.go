@@ -1,75 +1,19 @@
 package utils_test
 
 import (
-	"slices"
-	"sort"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
+	"gopkg.in/yaml.v3"
 )
 
-func TestMaskYAML(test *testing.T) {
-	var content []byte = spectest.Dedent([]byte(`
-		materializations:
-			acmeCo/snowflake/materialize:
-				endpoint:
-					connector:
-						config:
-							host: orgname-accountname.snowflakecomputing.com
-							credentials:
-								auth_type: jwt
-								user: snowflake_user
-								private_key: <private-key>
-							dbt_job_trigger:
-								api_key: <dbt-api-key>
-							advanced:
-								ssl_client_key: <client-key>
-							networkTunnel:
-								sshForwarding:
-									privateKey: <ssh-key>
-	`))
+const privateKey string = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAsecretbody\nmoresecretline\n-----END RSA PRIVATE KEY-----\n"
 
-	var masked string = string(utils.MaskYAML(content))
-
-	for _, secret := range []string{"<private-key>", "<dbt-api-key>", "<client-key>", "<ssh-key>"} {
-		if strings.Contains(masked, secret) {
-			test.Errorf("masked spec still holds %s:\n%s", secret, masked)
-		}
-	}
-
-	for _, kept := range []string{"orgname-accountname.snowflakecomputing.com", "auth_type: jwt", "user: snowflake_user"} {
-		if !strings.Contains(masked, kept) {
-			test.Errorf("masked spec lost %s:\n%s", kept, masked)
-		}
-	}
-}
-
-func TestSecretValues(test *testing.T) {
-	var content []byte = spectest.Dedent([]byte(`
-		materializations:
-			acmeCo/snowflake/materialize:
-				endpoint:
-					connector:
-						config:
-							host: orgname-accountname.snowflakecomputing.com
-							credentials:
-								user: snowflake_user
-								private_key: <private-key>
-								password: ""
-							dbt_job_trigger:
-								api_key: <dbt-api-key>
-	`))
-
-	var secrets []string = utils.SecretValues(content)
-
-	sort.Strings(secrets)
-
-	if want := []string{"<dbt-api-key>", "<private-key>"}; !slices.Equal(secrets, want) {
-		test.Errorf("secrets = %v, want %v", secrets, want)
-	}
-}
+// secretSamples are secrets YAML and JSON don't write raw: multiline, quoted or escaped.
+var secretSamples = []string{privateKey, "it's: secret", "tab\there", `pa"ss\word`, "<api-token>"}
 
 func TestMaskStrings(test *testing.T) {
 	var masked string = utils.MaskStrings("auth failed for hunter2 at host", []string{"hunter2", ""})
@@ -79,8 +23,102 @@ func TestMaskStrings(test *testing.T) {
 	}
 }
 
-func TestMaskYAMLHidesUnparseableContent(test *testing.T) {
-	if masked := string(utils.MaskYAML([]byte("password: [unclosed"))); strings.Contains(masked, "unclosed") {
-		test.Errorf("masked = %q, want unparseable content hidden", masked)
+func TestMaskStringsMasksEncodedSecrets(test *testing.T) {
+	for _, secret := range secretSamples {
+		content, err := yaml.Marshal(map[string]any{"config": map[string]any{"value": secret}})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		encoded, err := json.Marshal(map[string]any{"value": secret})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		for _, text := range []string{string(content), string(encoded)} {
+			var masked string = utils.MaskStrings(text, []string{secret})
+
+			if leaked := leakedPart(masked, secret); leaked != "" {
+				test.Errorf("masked %q still holds %q", masked, leaked)
+			}
+		}
+	}
+}
+
+func TestMaskStringsKeepsShortLines(test *testing.T) {
+	var masked string = utils.MaskStrings("a key, b value", []string{"a\nb\nlonger line"})
+
+	if masked != "a key, b value" {
+		test.Errorf("masked = %q, want the short lines of the secret kept", masked)
+	}
+}
+
+func TestMaskDocument(test *testing.T) {
+	var document map[string]any = map[string]any{
+		"endpoint": map[string]any{
+			"config": map[string]any{
+				"address":  "mongodb://host:27017",
+				"password": "unlisted",
+				"port":     27017,
+				"networkTunnel": map[string]any{
+					"sshForwarding": map[string]any{"privateKey": privateKey},
+				},
+				"note":    "uses hunter2 inside",
+				"secrets": []any{"hunter2"},
+			},
+		},
+	}
+	var want map[string]any = map[string]any{
+		"endpoint": map[string]any{
+			"config": map[string]any{
+				"address":  "mongodb://host:27017",
+				"password": "***",
+				"port":     27017,
+				"networkTunnel": map[string]any{
+					"sshForwarding": map[string]any{"privateKey": "***"},
+				},
+				"note":    "uses *** inside",
+				"secrets": []any{"***"},
+			},
+		},
+	}
+
+	if masked := utils.MaskDocument(document, []string{"hunter2"}); !reflect.DeepEqual(masked, want) {
+		test.Errorf("masked = %v, want %v", masked, want)
+	}
+
+	if utils.Lookup(document, "endpoint", "config")["password"] != "unlisted" {
+		test.Error("MaskDocument changed the document it masks")
+	}
+}
+
+// leakedPart returns the part of secret, or of its individually masked lines, still in text, empty when none.
+func leakedPart(text string, secret string) string {
+	for _, part := range append([]string{secret}, strings.Split(secret, "\n")...) {
+		if len(strings.TrimSpace(part)) >= 4 && strings.Contains(text, strings.TrimSpace(part)) {
+			return part
+		}
+	}
+
+	return ""
+}
+
+func TestIsSensitiveKey(test *testing.T) {
+	expectations := map[string]bool{
+		"password":        true,
+		"privateKey":      true,
+		"ssl_client_key":  true,
+		"api_key":         true,
+		"sslmode":         false,
+		"aws_access_key":  false,
+		"ssl_server_cert": false,
+	}
+
+	for key, want := range expectations {
+		if got := utils.IsSensitiveKey(key); got != want {
+			test.Errorf("%s: IsSensitiveKey = %v, want %v", key, got, want)
+		}
 	}
 }

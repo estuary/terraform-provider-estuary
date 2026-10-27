@@ -9,33 +9,32 @@ import (
 // Image is the DynamoDB connector image.
 const Image string = "ghcr.io/estuary/materialize-dynamodb:v1"
 
-// ConnectorName ends the catalog name of every task of the connector, as the dashboard names them.
+// ConnectorName is the catalog name suffix of the connector's tasks, as the dashboard names them.
 const ConnectorName string = "materialize-dynamodb"
 
-// Advanced carries the advanced endpoint options, including a custom AWS endpoint and feature flags.
+// Advanced holds advanced endpoint options, such as a custom AWS endpoint.
 type Advanced struct {
 	Endpoint     string `yaml:"endpoint,omitempty"`
 	FeatureFlags string `yaml:"feature_flags,omitempty"`
 }
 
-// Config carries the ghcr.io/estuary/materialize-dynamodb connector configurations, including
-// the tables region and the AWS authentication.
+// Config is the materialize-dynamodb connector configuration.
 type Config struct {
 	Region      string              `yaml:"region"`
 	Credentials auth.AWSCredentials `yaml:"credentials"`
 	Advanced    *Advanced           `yaml:"advanced,omitempty"`
 }
 
-// Resource identifies the target DynamoDB table, created by the connector when missing.
+// Resource identifies the target DynamoDB table, which the connector creates when missing.
 type Resource struct {
 	Table string `yaml:"table"`
 }
 
-// Binding maps a source collection to the DynamoDB table it materializes into.
+// Binding maps a source collection to its DynamoDB table.
 type Binding = materialization.Binding[Resource]
 
-// EndpointSpec wraps the connector under the "connector" key, as in endpoint.connector.
+// EndpointSpec wraps the connector under endpoint.connector.
 type EndpointSpec = endpoint.ConnectorSpec[Config]
 
-// Spec is a full DynamoDB materialization entry, keyed by its catalog name in a catalog spec.
+// Spec is a DynamoDB materialization entry.
 type Spec = materialization.Spec[EndpointSpec, Resource]

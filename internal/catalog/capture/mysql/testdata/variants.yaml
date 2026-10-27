@@ -1,0 +1,152 @@
+captures:
+  acmeCo/aurora/mysql-password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-aurora-mysql:v3
+        config:
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
+          user: flow_capture
+          historyMode: false
+          credentials:
+            auth_type: UserPassword
+            password: <secret>
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/aurora/orders
+
+  acmeCo/aurora/mysql-iam:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-aurora-mysql:v3
+        config:
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
+          user: flow_capture
+          historyMode: false
+          credentials:
+            auth_type: AWSIAM
+            aws_region: us-east-1
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-aurora-capture
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/aurora/orders
+
+  acmeCo/aurora/mysql-ssh-tunnel:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-aurora-mysql:v3
+        config:
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
+          user: flow_capture
+          historyMode: false
+          credentials:
+            auth_type: UserPassword
+            password: <secret>
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-123-4-567-89.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/aurora/orders
+
+  acmeCo/aurora/mysql-legacy-password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-aurora-mysql:v3
+        config:
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
+          user: flow_capture
+          historyMode: false
+          password: <secret>
+          timezone: America/New_York
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/aurora/orders
+
+  acmeCo/aurora/mysql-gcp-iam:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-aurora-mysql:v3
+        config:
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
+          user: flow_capture
+          historyMode: false
+          credentials:
+            auth_type: GCPIAM
+            gcp_service_account_to_impersonate: estuary-capture@my-project.iam.gserviceaccount.com
+            gcp_workload_identity_pool_audience: //iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/estuary/providers/estuary
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/aurora/orders
+
+  acmeCo/aurora/mysql-azure-iam:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-aurora-mysql:v3
+        config:
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
+          user: flow_capture
+          historyMode: false
+          credentials:
+            auth_type: AzureIAM
+            azure_client_id: 00000000-0000-0000-0000-000000000001
+            azure_tenant_id: 00000000-0000-0000-0000-000000000002
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/aurora/orders
+
+  acmeCo/rds/mysql-password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-rds-mysql:v3
+        config:
+          address: my-instance.123456789.us-east-1.rds.amazonaws.com:3306
+          user: flow_capture
+          historyMode: false
+          credentials:
+            auth_type: UserPassword
+            password: <secret>
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/rds/orders
+
+  acmeCo/rds/mysql-iam:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-rds-mysql:v3
+        config:
+          address: my-instance.123456789.us-east-1.rds.amazonaws.com:3306
+          user: flow_capture
+          historyMode: false
+          credentials:
+            auth_type: AWSIAM
+            aws_region: us-east-1
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-rds-capture
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/rds/orders
+
+  acmeCo/rds/mysql-ssh-tunnel:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-rds-mysql:v3
+        config:
+          address: my-instance.123456789.us-east-1.rds.amazonaws.com:3306
+          user: flow_capture
+          historyMode: false
+          credentials:
+            auth_type: UserPassword
+            password: <secret>
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-123-4-567-89.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/rds/orders

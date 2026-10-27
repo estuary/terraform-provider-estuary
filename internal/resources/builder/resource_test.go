@@ -34,7 +34,7 @@ var testCaptureSpec CaptureSpec[testConfig, testResource] = CaptureSpec[testConf
 
 type testCaptureEntry = entryResource[captureDocument[testConfig, testResource], CaptureSpec[testConfig, testResource]]
 
-// newTestCaptureEntry returns a test capture resource configured with the backend under the acmeCo/ tenant.
+// newTestCaptureEntry returns a capture resource using backend under the acmeCo/ tenant.
 func newTestCaptureEntry(backend *testBackend) *testCaptureEntry {
 	var configureResp resource.ConfigureResponse
 
@@ -56,15 +56,28 @@ func withValue(value tftypes.Value, path *tftypes.AttributePath, raw any) (tftyp
 	})
 }
 
-// testBackend is an in-memory catalog.Backend recording the specs read and published.
+// testBackend is an in-memory catalog.Backend recording read and published specs.
 type testBackend struct {
-	live      map[string]any
-	reads     []string
-	published map[string]any
+	live       map[string]any
+	reads      []string
+	published  map[string]any
+	discovered map[string]map[string]any
+	discovers  []catalog.RawCapture
+	discover   bool
+	resets     []string
 }
 
-func (backend *testBackend) PublishCapture(_ context.Context, name string, spec catalog.CaptureSpec) error {
+func (backend *testBackend) PublishCapture(_ context.Context, name string, spec catalog.CaptureSpec, resets []string) error {
+	backend.resets = resets
+
 	backend.published = spec.(catalog.RawCapture)
+
+	return nil
+}
+
+func (backend *testBackend) PublishDiscoveredCapture(_ context.Context, name string, spec catalog.CaptureSpec, _ catalog.BindingsIdentifier) error {
+	backend.published = spec.(catalog.RawCapture)
+	backend.discover = true
 
 	return nil
 }
@@ -75,20 +88,14 @@ func (backend *testBackend) PublishMaterialization(_ context.Context, name strin
 	return nil
 }
 
-func (backend *testBackend) ReadCatalogEntry(context.Context, string) (*catalog.CatalogEntry, error) {
-	return nil, nil
-}
-
 func (backend *testBackend) DeleteCatalogEntry(context.Context, string) error {
 	return nil
 }
 
-func (backend *testBackend) DiscoverCapture(context.Context, string, catalog.CaptureSpec) (map[string]catalog.DiscoveredStreamInfo, error) {
-	return nil, nil
-}
+func (backend *testBackend) DiscoverCapture(_ context.Context, _ string, spec catalog.CaptureSpec) (map[string]map[string]any, error) {
+	backend.discovers = append(backend.discovers, spec.(catalog.RawCapture))
 
-func (backend *testBackend) ConnectorSchema(context.Context, string) (*catalog.ConnectorSchema, error) {
-	return nil, nil
+	return backend.discovered, nil
 }
 
 func (backend *testBackend) ReadSpec(_ context.Context, name string) (map[string]any, error) {
@@ -124,7 +131,7 @@ func TestResourceUpdateMergesLiveBindings(test *testing.T) {
 
 	planned.AutoDiscover = prior.AutoDiscover
 	planned.Bindings = []capture.Binding[testResource]{
-		{Resource: testResource{Table: "users", Priority: 2}, Target: "acmeCo/users", Backfill: 1},
+		{Resource: testResource{Table: "users", Priority: 2}, Target: "acmeCo/users"},
 		{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"},
 	}
 
@@ -153,7 +160,7 @@ func TestResourceUpdateMergesLiveBindings(test *testing.T) {
 
 	var want []any = []any{
 		discovered,
-		map[string]any{"resource": map[string]any{"table": "users", "priority": 2}, "target": "acmeCo/users", "backfill": 1},
+		map[string]any{"resource": map[string]any{"table": "users", "priority": 2}, "target": "acmeCo/users"},
 		map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"},
 	}
 
@@ -180,12 +187,14 @@ func TestResourcePublishesPlannedBindingsWithoutMerge(test *testing.T) {
 	plain.Bindings = discovering.Bindings
 
 	expectations := map[string]struct {
-		spec   CaptureSpec[testConfig, testResource]
-		create bool
-		reads  int
+		spec     CaptureSpec[testConfig, testResource]
+		create   bool
+		reads    int
+		discover bool
 	}{
-		"create with auto discover":    {discovering, true, 0},
-		"update without auto discover": {plain, false, 1},
+		"create with auto discover":    {discovering, true, 0, true},
+		"create without auto discover": {plain, true, 0, false},
+		"update without auto discover": {plain, false, 1, false},
 	}
 
 	for name, expected := range expectations {
@@ -217,6 +226,10 @@ func TestResourcePublishesPlannedBindingsWithoutMerge(test *testing.T) {
 		if len(backend.reads) != expected.reads || !reflect.DeepEqual(backend.published["bindings"], want) {
 			test.Errorf("%s: read %v and published %v, want %d reads and only the planned bindings", name, backend.reads, backend.published["bindings"], expected.reads)
 		}
+
+		if backend.discover != expected.discover {
+			test.Errorf("%s: published with discovery %v, want %v", name, backend.discover, expected.discover)
+		}
 	}
 }
 
@@ -231,7 +244,7 @@ func TestResourceModifyPlanSecretsHash(test *testing.T) {
 	priorValue, err := entry.codec.Value("movies", priorSpec)
 
 	if err == nil {
-		priorValue, err = entry.codec.NullSecrets(priorValue)
+		priorValue, err = entry.codec.secrets.nullSecrets(priorValue)
 	}
 
 	if err != nil {
@@ -279,7 +292,7 @@ func TestResourceModifyPlanSecretsHash(test *testing.T) {
 			test.Fatal(err)
 		}
 
-		planValue, err := entry.codec.NullSecrets(configValue)
+		planValue, err := entry.codec.secrets.nullSecrets(configValue)
 
 		if err != nil {
 			test.Fatal(err)
@@ -360,25 +373,38 @@ func TestResourceUpdateKeepsUnchangedSecrets(test *testing.T) {
 		test.Fatal(err)
 	}
 
+	var sealedWithExtras map[string]any = map[string]any{
+		"endpoint": map[string]any{
+			"connector": map[string]any{
+				"image":  testNamedConnector.Image,
+				"config": map[string]any{"host": "db.example.com", "ratio": 0.5, "unmodeled": true, "password_sops": "ENC[AES256_GCM,data:abc,type:str]", "sops": map[string]any{"mac": "<encrypted>"}},
+			},
+		},
+		"bindings": []any{},
+	}
+
 	expectations := map[string]struct {
+		live      map[string]any
 		host      string
 		password  string
 		sealed    bool
 		plaintext map[string]any
 	}{
-		"keeps the sealed endpoint of an unchanged config": {"db.example.com", "secret", true, nil},
-		"publishes a changed config":                       {"other.example.com", "secret", false, map[string]any{"host": "other.example.com", "password": "secret"}},
-		"publishes changed secrets":                        {"db.example.com", "rotated", false, map[string]any{"host": "db.example.com", "password": "rotated"}},
-		"publishes removed secrets":                        {"db.example.com", "", false, map[string]any{"host": "db.example.com"}},
+		"keeps the sealed endpoint of an unchanged config":         {sealed, "db.example.com", "secret", true, nil},
+		"keeps the sealed endpoint holding fields Terraform skips": {sealedWithExtras, "db.example.com", "secret", true, nil},
+		"publishes a changed config":                               {sealed, "other.example.com", "secret", false, map[string]any{"host": "other.example.com", "password": "secret"}},
+		"publishes changed secrets":                                {sealed, "db.example.com", "rotated", false, map[string]any{"host": "db.example.com", "password": "rotated"}},
+		"publishes removed secrets":                                {sealed, "db.example.com", "", false, map[string]any{"host": "db.example.com"}},
 	}
 
 	for name, expected := range expectations {
-		var backend *testBackend = &testBackend{live: sealed}
+		var backend *testBackend = &testBackend{live: expected.live}
 		var plannedSpec CaptureSpec[testConfig, testResource] = testCaptureSpec
 
 		entry := newTestCaptureEntry(backend)
 
 		plannedSpec.Endpoint.Connector.Config = testConfig{Host: expected.host, Password: expected.password}
+		plannedSpec.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"}}
 
 		priorValue, err := entry.codec.Value("movies", priorSpec)
 
@@ -392,7 +418,7 @@ func TestResourceUpdateKeepsUnchangedSecrets(test *testing.T) {
 			test.Fatal(err)
 		}
 
-		stateValue, err := entry.codec.NullSecrets(priorValue)
+		stateValue, err := entry.codec.secrets.nullSecrets(priorValue)
 
 		if err == nil {
 			stateValue, err = withValue(stateValue, testPasswordHashPath, stored)
@@ -402,10 +428,10 @@ func TestResourceUpdateKeepsUnchangedSecrets(test *testing.T) {
 			test.Fatal(err)
 		}
 
-		planValue, err := entry.codec.NullSecrets(configValue)
+		planValue, err := entry.codec.secrets.nullSecrets(configValue)
 
 		if err == nil {
-			planValue, _, err = entry.codec.PlanSecretsHash(planValue, configValue, stateValue)
+			planValue, _, err = entry.codec.secrets.planHashes(planValue, configValue, stateValue)
 		}
 
 		if err != nil {
@@ -425,7 +451,7 @@ func TestResourceUpdateKeepsUnchangedSecrets(test *testing.T) {
 			continue
 		}
 
-		if expected.sealed && !reflect.DeepEqual(backend.published["endpoint"], sealed["endpoint"]) {
+		if expected.sealed && !reflect.DeepEqual(backend.published["endpoint"], expected.live["endpoint"]) {
 			test.Errorf("%s: published endpoint = %v, want the sealed live endpoint", name, backend.published["endpoint"])
 		}
 
@@ -510,9 +536,11 @@ func TestResourceImportStateReadsLiveSpec(test *testing.T) {
 	var ctx context.Context = context.Background()
 	var discovering CaptureSpec[testConfig, testResource] = testCaptureSpec
 	var managed CaptureSpec[testConfig, testResource] = testCaptureSpec
+	var sharded CaptureSpec[testConfig, testResource] = testCaptureSpec
 
 	discovering.AutoDiscover = &capture.AutoDiscover{AddNewBindings: true, EvolveIncompatibleCollections: true}
 	managed.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "users"}, Target: "acmeCo/users"}}
+	sharded.Shards = catalog.Shards{"disable": true, "logLevel": "debug", "hotStandbys": int64(1)}
 
 	expectations := map[string]struct {
 		live map[string]any
@@ -538,10 +566,18 @@ func TestResourceImportStateReadsLiveSpec(test *testing.T) {
 			live: map[string]any{
 				"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
 				"bindings": []any{},
-				"shards":   map[string]any{"disable": true},
+				"interval": "5m",
 			},
 			want: testCaptureSpec,
 			warn: true,
+		},
+		"imports the shard settings": {
+			live: map[string]any{
+				"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
+				"bindings": []any{},
+				"shards":   map[string]any{"disable": true, "logLevel": "debug", "hotStandbys": 1},
+			},
+			want: sharded,
 		},
 	}
 
@@ -610,5 +646,108 @@ func TestResourceConfigureRejectsUnknownProviderData(test *testing.T) {
 
 	if !configureResp.Diagnostics.HasError() {
 		test.Error("Configure accepted provider data that is not a *catalog.Session")
+	}
+}
+
+func TestResourceUpdateKeepsUnmanagedLiveSettings(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	expectations := map[string]struct {
+		prior catalog.Shards
+		plan  catalog.Shards
+		want  any
+	}{
+		"keeps the live shards Terraform never set": {nil, nil, map[string]any{"disable": true}},
+		"publishes the planned shards":              {nil, catalog.Shards{"logLevel": "warn"}, map[string]any{"logLevel": "warn"}},
+		"removes the shards the plan removes":       {catalog.Shards{"logLevel": "debug"}, nil, nil},
+	}
+
+	for name, expected := range expectations {
+		var prior CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var planned CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var backend *testBackend = &testBackend{live: map[string]any{
+			"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
+			"bindings": []any{},
+			"shards":   map[string]any{"disable": true},
+		}}
+
+		entry := newTestCaptureEntry(backend)
+
+		prior.Shards = expected.prior
+		planned.Shards = expected.plan
+		planned.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"}}
+
+		priorValue, err := entry.codec.Value("movies", prior)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		planValue, err := entry.codec.Value("movies", planned)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+		entry.Update(ctx, resource.UpdateRequest{
+			State:  tfsdk.State{Schema: entry.codec.Schema(), Raw: priorValue},
+			Plan:   tfsdk.Plan{Schema: entry.codec.Schema(), Raw: planValue},
+			Config: tfsdk.Config{Schema: entry.codec.Schema(), Raw: planValue},
+		}, &updateResp)
+
+		if updateResp.Diagnostics.HasError() {
+			test.Fatalf("%s: update: %v", name, updateResp.Diagnostics)
+		}
+
+		if shards, published := backend.published["shards"]; (expected.want == nil && published) || (expected.want != nil && !reflect.DeepEqual(shards, expected.want)) {
+			test.Errorf("%s: published shards = %v, want %v", name, shards, expected.want)
+		}
+	}
+}
+
+func TestResourceUpdateKeepsResourceMetadata(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
+	var backend *testBackend = &testBackend{live: map[string]any{
+		"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
+		"bindings": []any{
+			map[string]any{"resource": map[string]any{"table": "users", "_meta": map[string]any{"path": []any{"users"}}}, "target": "acmeCo/users"},
+		},
+	}}
+
+	entry := newTestCaptureEntry(backend)
+
+	spec.Bindings = []capture.Binding[testResource]{
+		{Resource: testResource{Table: "users", Priority: 2}, Target: "acmeCo/users"},
+		{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"},
+	}
+
+	value, err := entry.codec.Value("movies", spec)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+	entry.Update(ctx, resource.UpdateRequest{
+		State:  tfsdk.State{Schema: entry.codec.Schema(), Raw: value},
+		Plan:   tfsdk.Plan{Schema: entry.codec.Schema(), Raw: value},
+		Config: tfsdk.Config{Schema: entry.codec.Schema(), Raw: value},
+	}, &updateResp)
+
+	if updateResp.Diagnostics.HasError() {
+		test.Fatalf("update: %v", updateResp.Diagnostics)
+	}
+
+	var want []any = []any{
+		map[string]any{"resource": map[string]any{"table": "users", "priority": 2, "_meta": map[string]any{"path": []any{"users"}}}, "target": "acmeCo/users"},
+		map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"},
+	}
+
+	if !reflect.DeepEqual(backend.published["bindings"], want) {
+		test.Errorf("published bindings = %v, want the live resource path kept on users only", backend.published["bindings"])
 	}
 }

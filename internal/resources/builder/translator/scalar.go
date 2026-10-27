@@ -1,18 +1,23 @@
 package translator
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/big"
+	"reflect"
 
-	"github.com/estuary/terraform-provider-estuary/internal/utils"
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
+	"gopkg.in/yaml.v3"
 )
 
-// scalarNode is a node of a single value, which can also be the item of a plain list.
+// scalarNode is a node of a single value, also usable as a plain list item.
 type scalarNode interface {
 	node
 	elementType() attr.Type
@@ -20,6 +25,12 @@ type scalarNode interface {
 
 // stringNode handles string fields, including named string types such as enums.
 type stringNode struct{}
+
+// yamlStringNode handles named string types written as other YAML scalars, such as a depth written as a number.
+type yamlStringNode struct {
+	stringNode
+	kind reflect.Type
+}
 
 // boolNode handles bool fields.
 type boolNode struct{}
@@ -31,14 +42,19 @@ type integerNode struct{}
 type floatNode struct{}
 
 func (stringNode) attribute(field field) schema.Attribute {
-	var secret bool = utils.IsSensitiveKey(field.key)
+	var validators []validator.String
+
+	if field.enum != nil {
+		validators = append(validators, stringvalidator.OneOf(field.enum...))
+	}
 
 	return schema.StringAttribute{
 		Description: field.description,
 		Required:    !field.optional,
 		Optional:    field.optional,
-		Sensitive:   secret,
-		WriteOnly:   secret,
+		Sensitive:   field.secret,
+		WriteOnly:   field.secret,
+		Validators:  validators,
 	}
 }
 
@@ -62,6 +78,55 @@ func (stringNode) terraformValue(value any, valueType tftypes.Type) (tftypes.Val
 	}
 
 	return tftypes.NewValue(valueType, text), nil
+}
+
+func (node yamlStringNode) attribute(field field) schema.Attribute {
+	var attribute schema.StringAttribute = node.stringNode.attribute(field).(schema.StringAttribute)
+
+	attribute.Validators = append(attribute.Validators, yamlStringValidator{kind: node.kind})
+
+	return attribute
+}
+
+// yamlStringValidator rejects the values a named string type can't decode, such as a depth that isn't a number.
+type yamlStringValidator struct {
+	kind reflect.Type
+}
+
+func (yamlStringValidator) Description(context.Context) string {
+	return "value must decode as the field type"
+}
+
+func (check yamlStringValidator) MarkdownDescription(ctx context.Context) string {
+	return check.Description(ctx)
+}
+
+func (check yamlStringValidator) ValidateString(_ context.Context, validateReq validator.StringRequest, validateResp *validator.StringResponse) {
+	if validateReq.ConfigValue.IsNull() || validateReq.ConfigValue.IsUnknown() {
+		return
+	}
+
+	var node yaml.Node = yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: validateReq.ConfigValue.ValueString()}
+
+	if err := node.Decode(reflect.New(check.kind).Interface()); err != nil {
+		validateResp.Diagnostics.AddAttributeError(validateReq.Path, "Invalid value", err.Error())
+	}
+}
+
+func (node yamlStringNode) terraformValue(value any, valueType tftypes.Type) (tftypes.Value, error) {
+	var decoded reflect.Value = reflect.New(node.kind)
+
+	content, err := yaml.Marshal(value)
+
+	if err == nil {
+		err = yaml.Unmarshal(content, decoded.Interface())
+	}
+
+	if err != nil {
+		return tftypes.Value{}, err
+	}
+
+	return tftypes.NewValue(valueType, decoded.Elem().String()), nil
 }
 
 func (boolNode) attribute(field field) schema.Attribute {
@@ -95,11 +160,38 @@ func (boolNode) terraformValue(value any, valueType tftypes.Type) (tftypes.Value
 }
 
 func (integerNode) attribute(field field) schema.Attribute {
+	var validators []validator.Int64
+
+	if minimum, maximum, bounded := integerRange(field.kind); bounded {
+		validators = append(validators, int64validator.Between(minimum, maximum))
+	}
+
 	return schema.Int64Attribute{
 		Description: field.description,
 		Required:    !field.optional,
 		Optional:    field.optional,
+		Validators:  validators,
 	}
+}
+
+// integerRange returns the range of an integer kind narrower than Int64, reporting false otherwise.
+func integerRange(kind reflect.Type) (int64, int64, bool) {
+	for kind.Kind() == reflect.Pointer {
+		kind = kind.Elem()
+	}
+
+	switch kind.Kind() {
+	case reflect.Int8, reflect.Int16, reflect.Int32:
+		var bits int = kind.Bits()
+
+		return -1 << (bits - 1), 1<<(bits-1) - 1, true
+	case reflect.Uint8, reflect.Uint16, reflect.Uint32:
+		return 0, 1<<kind.Bits() - 1, true
+	case reflect.Uint, reflect.Uint64:
+		return 0, math.MaxInt64, true
+	}
+
+	return 0, 0, false
 }
 
 func (integerNode) elementType() attr.Type {
@@ -174,7 +266,7 @@ func (floatNode) terraformValue(value any, valueType tftypes.Type) (tftypes.Valu
 	return tftypes.NewValue(valueType, number), nil
 }
 
-// bigFloat converts a YAML decoded number, which decodes whole floats as ints, into a Terraform number.
+// bigFloat converts a YAML number, whose whole floats decode as ints, into a Terraform number.
 func bigFloat(value any) (*big.Float, error) {
 	switch number := value.(type) {
 	case int:

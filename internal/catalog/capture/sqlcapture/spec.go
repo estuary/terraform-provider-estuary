@@ -1,10 +1,5 @@
 package sqlcapture
 
-import (
-	"regexp"
-	"strings"
-)
-
 // BackfillMode controls how the preexisting contents of a captured table are backfilled.
 type BackfillMode string
 
@@ -34,26 +29,13 @@ type ResourceAdvanced struct {
 type Resource struct {
 	Namespace  string            `yaml:"namespace"`
 	Stream     string            `yaml:"stream"`
-	Mode       BackfillMode      `yaml:"mode,omitempty"`
+	Mode       BackfillMode      `yaml:"mode,omitempty" enum:",Normal,Precise,Only Changes,Without Primary Key" backfill:"mode"`
 	Priority   int               `yaml:"priority,omitempty"`
 	Advanced   *ResourceAdvanced `yaml:"advanced,omitempty"`
 	PrimaryKey []string          `yaml:"primary_key,omitempty"`
 }
 
-// catalogNameSanitizer matches the characters collection names don't allow, as the connectors sanitize them.
-var catalogNameSanitizer *regexp.Regexp = regexp.MustCompile(`(?i)[^a-z0-9\-_.]`)
-
-// RecommendedName returns namespace/stream lowercased and sanitized, the collection name the connector discovery recommends.
-func (resource Resource) RecommendedName() string {
-	return catalogNameComponent(resource.Namespace) + "/" + catalogNameComponent(resource.Stream)
-}
-
-func catalogNameComponent(name string) string {
-	name = catalogNameSanitizer.ReplaceAllString(strings.ToLower(name), "_")
-
-	if name == "." || name == ".." {
-		return strings.ReplaceAll(name, ".", "_")
-	}
-
-	return name
+// ResourcePath returns the namespace and stream, satisfying capture.ResourcePather.
+func (resource Resource) ResourcePath() []string {
+	return []string{resource.Namespace, resource.Stream}
 }

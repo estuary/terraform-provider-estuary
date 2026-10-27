@@ -54,24 +54,7 @@ func TestSampleAuthVariants(test *testing.T) {
 				test.Fatalf("credentials = %+v, want auth_type %q", config.Credentials, expected.authType)
 			}
 
-			switch expected.authType {
-			case auth.DatabaseAuthTypeUserPassword:
-				if config.Credentials.Password != "<secret>" || config.Credentials.AWSRoleARN != "" {
-					test.Errorf("password credentials = %+v, want password and no role", config.Credentials)
-				}
-			case auth.DatabaseAuthTypeAWSIAM:
-				if config.Credentials.AWSRoleARN == "" || config.Credentials.AWSRegion != "us-east-1" || config.Credentials.Password != "" {
-					test.Errorf("IAM credentials = %+v, want role and region and no password", config.Credentials)
-				}
-			case auth.DatabaseAuthTypeGCPIAM:
-				if config.Credentials.GCPServiceAccountToImpersonate == "" || config.Credentials.GCPWorkloadIdentityPoolAudience == "" || config.Credentials.Password != "" {
-					test.Errorf("GCP IAM credentials = %+v, want service account and audience and no password", config.Credentials)
-				}
-			case auth.DatabaseAuthTypeAzureIAM:
-				if config.Credentials.AzureClientID == "" || config.Credentials.AzureTenantID == "" || config.Credentials.Password != "" {
-					test.Errorf("Azure IAM credentials = %+v, want client and tenant and no password", config.Credentials)
-				}
-			}
+			spectest.AssertDatabaseCredentials(test, *config.Credentials)
 
 			if (config.NetworkTunnel != nil) != expected.sshTunnel {
 				test.Errorf("networkTunnel = %+v, want present = %v", config.NetworkTunnel, expected.sshTunnel)
@@ -164,51 +147,12 @@ func TestSampleFullSpec(test *testing.T) {
 func TestSampleBindings(test *testing.T) {
 	var specs map[string]Spec = spectest.DecodeCaptures[Spec](test, "testdata/full.yaml")
 
-	var bindings []Binding = specs["acmeCo/aurora/mysql-all-options"].Bindings
-
-	expectations := []struct {
-		stream   string
-		mode     sqlcapture.BackfillMode
-		priority int
-		backfill int
-		disable  bool
-	}{
-		{"orders", sqlcapture.BackfillModeAutomatic, 0, 0, false},
-		{"customers", sqlcapture.BackfillModePrecise, 10, 2, false},
-		{"events", sqlcapture.BackfillModeOnlyChanges, -1, 0, false},
-		{"logs", sqlcapture.BackfillModeWithoutKey, 0, 0, true},
-		{"invoices", sqlcapture.BackfillModeNormal, 0, 0, false},
-	}
-
-	if len(bindings) != len(expectations) {
-		test.Fatalf("got %d bindings, want %d", len(bindings), len(expectations))
-	}
-
-	for index, expected := range expectations {
-		var binding Binding = bindings[index]
-
-		if binding.Resource.Stream != expected.stream || binding.Resource.Mode != expected.mode || binding.Resource.Priority != expected.priority {
-			test.Errorf("binding %d resource = %+v, want stream %q mode %q priority %d", index, binding.Resource, expected.stream, expected.mode, expected.priority)
-		}
-
-		if binding.Backfill != expected.backfill || binding.Disable != expected.disable {
-			test.Errorf("binding %d backfill = %d, disable = %v, want %d and %v", index, binding.Backfill, binding.Disable, expected.backfill, expected.disable)
-		}
-	}
-
-	if bindings[2].Resource.Advanced == nil || bindings[2].Resource.Advanced.AdditionalBackfillFilter != "created_at > '2026-01-01'" {
-		test.Errorf("events resource advanced = %+v, want the additional backfill filter", bindings[2].Resource.Advanced)
-	}
-
-	if !slices.Equal(bindings[3].Resource.PrimaryKey, []string{"id"}) {
-		test.Errorf("logs primary_key = %v, want [id]", bindings[3].Resource.PrimaryKey)
-	}
+	spectest.AssertSQLCaptureBindings(test, specs["acmeCo/aurora/mysql-all-options"].Bindings)
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
-	var seenAuthTypes map[auth.DatabaseAuthType]bool = map[auth.DatabaseAuthType]bool{}
-
-	var seenBackfillModes map[sqlcapture.BackfillMode]bool = map[sqlcapture.BackfillMode]bool{}
+	var authTypes *spectest.EnumSamples[auth.DatabaseAuthType] = spectest.NewEnumSamples(test, "auth_type", auth.DatabaseAuthTypes)
+	var backfillModes *spectest.EnumSamples[sqlcapture.BackfillMode] = spectest.NewEnumSamples(test, "backfill mode", sqlcapture.BackfillModes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeCaptures[Spec](test, file)
@@ -217,11 +161,7 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 			var config Config = spec.Endpoint.Connector.Config
 
 			if config.Credentials != nil {
-				if !slices.Contains(auth.DatabaseAuthTypes, config.Credentials.AuthType) {
-					test.Errorf("%s: auth_type %q is not in AuthTypes", name, config.Credentials.AuthType)
-				}
-
-				seenAuthTypes[config.Credentials.AuthType] = true
+				authTypes.Add(name, config.Credentials.AuthType)
 			}
 
 			if config.Advanced != nil {
@@ -235,36 +175,21 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 			}
 
 			for _, binding := range spec.Bindings {
-				if !slices.Contains(sqlcapture.BackfillModes, binding.Resource.Mode) {
-					test.Errorf("%s: mode %q is not in BackfillModes", name, binding.Resource.Mode)
-				}
-
-				seenBackfillModes[binding.Resource.Mode] = true
+				backfillModes.Add(name, binding.Resource.Mode)
 			}
 		}
 	}
 
-	for _, authType := range auth.DatabaseAuthTypes {
-		if !seenAuthTypes[authType] {
-			test.Errorf("auth_type %q has no sample", authType)
-		}
-	}
+	authTypes.AssertAllSampled()
 
-	for _, mode := range sqlcapture.BackfillModes {
-		if !seenBackfillModes[mode] {
-			test.Errorf("backfill mode %q has no sample", mode)
-		}
-	}
+	backfillModes.AssertAllSampled()
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"publicationName is a PostgreSQL connector field": {
-			key: "publicationName",
-			content: `
+			Key: "publicationName",
+			Content: `
 				captures:
 					acmeCo/aurora/publication:
 						endpoint:
@@ -279,8 +204,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"database is not a MySQL connector field": {
-			key: "database",
-			content: `
+			Key: "database",
+			Content: `
 				captures:
 					acmeCo/aurora/database:
 						endpoint:
@@ -295,13 +220,5 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseCaptures[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownCaptureKeys[Spec](test, documents)
 }

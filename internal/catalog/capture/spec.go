@@ -4,8 +4,7 @@ import (
 	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
-
-	"gopkg.in/yaml.v3"
+	"github.com/estuary/terraform-provider-estuary/internal/utils"
 )
 
 // AutoDiscover configures periodic discovery and how its results are applied.
@@ -48,15 +47,9 @@ func (spec Spec[E, R]) ResourcePaths() []string {
 
 // ResourcePath returns the resource path key of a resource document, ignoring unmodeled fields.
 func (Spec[E, R]) ResourcePath(document map[string]any) (string, error) {
-	var resource R
-
-	content, err := yaml.Marshal(document)
+	resource, err := utils.ConvertYAML[R](document, false)
 
 	if err != nil {
-		return "", err
-	}
-
-	if err := yaml.Unmarshal(content, &resource); err != nil {
 		return "", err
 	}
 

@@ -37,7 +37,7 @@ type recording struct {
 
 func recordFlowctl(test *testing.T) (*Client, recording) {
 	var directory string = test.TempDir()
-	var binary string = filepath.Join(directory, "flowctl")
+	var client *Client = fakeFlowctl(test, recordingFlowctl)
 	var record recording = recording{
 		calls:     filepath.Join(directory, "calls"),
 		published: filepath.Join(directory, "published.yaml"),
@@ -50,15 +50,13 @@ func recordFlowctl(test *testing.T) (*Client, recording) {
 	test.Setenv("FLOWCTL_PULLED", pulled)
 	test.Setenv("TMPDIR", record.temporary)
 
-	if err := os.WriteFile(binary, []byte(recordingFlowctl), 0700); err != nil {
-		test.Fatal(err)
-	}
-
 	if err := os.WriteFile(pulled, []byte("collections:\n  "+dashName+":\n    key: [/id]\n    expectPubId: \"0011\"\n"), 0600); err != nil {
 		test.Fatal(err)
 	}
 
-	return NewClient(binary, "<api-token>", "ops/dp/private/acmeCo/example-data-plane"), record
+	client.dataPlane = "ops/dp/private/acmeCo/example-data-plane"
+
+	return client, record
 }
 
 // commandLines returns the recorded calls with workspace paths as $WORKSPACE.
@@ -92,7 +90,7 @@ func TestPublishCaptureCommandLines(test *testing.T) {
 	}
 
 	assertCommandLines(test, record.commandLines(test), []string{
-		"[catalog][pull-specs][--target][$WORKSPACE/resets.flow.yaml][--flat][--overwrite][--name=" + dashName + "]",
+		"[catalog][pull-specs][--name=" + dashName + "][--flat][--overwrite][--target][$WORKSPACE/resets.flow.yaml]",
 		"[catalog][publish][--source][$WORKSPACE/flow.yaml][--auto-approve][--init-data-plane=ops/dp/private/acmeCo/example-data-plane]",
 	})
 

@@ -13,21 +13,16 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-const backfillAttribute string = "backfill"
-const backfillTriggerAttribute string = "trigger"
-const backfillStrategyAttribute string = "strategy"
-const backfillModeAttribute string = "mode"
-
 const dataflowResetStrategy string = "dataflowReset"
 
-// captureBackfill is the capture backfill block: raising its trigger backfills every binding. Not in the catalog spec.
+// captureBackfill is the capture backfill block: raising its trigger backfills every enabled binding. Not in the catalog spec.
 type captureBackfill struct {
 	Trigger  int    `yaml:"trigger,omitempty"`
 	Strategy string `yaml:"strategy,omitempty" enum:"incremental,dataflowReset"`
 }
 
-// captureBindingBackfill is the capture binding backfill block: raising its trigger backfills the binding. Mode mirrors
-// the resource's backfill mode, see backfillModeKey.
+// captureBindingBackfill is the capture binding backfill block: raising its trigger backfills the binding.
+// Mode mirrors the resource's backfill mode, see backfillModeKey.
 type captureBindingBackfill struct {
 	Trigger  int    `yaml:"trigger,omitempty"`
 	Strategy string `yaml:"strategy,omitempty" enum:"incremental,dataflowReset"`
@@ -52,14 +47,13 @@ func backfillRequests(plan tftypes.Value, prior tftypes.Value, captureWide []str
 		return nil, nil, err
 	}
 
-	priorBindings, _, err := bindings(prior)
+	previous, err := indexedBindings(prior)
 
 	if err != nil {
 		return nil, nil, err
 	}
 
 	var planned map[string]tftypes.Value = byCollection(plannedBindings)
-	var previous map[string]tftypes.Value = byCollection(priorBindings)
 
 	for collection, binding := range planned {
 		priorBinding, managed := previous[collection]
@@ -76,13 +70,7 @@ func backfillRequests(plan tftypes.Value, prior tftypes.Value, captureWide []str
 	}
 
 	for collection := range requested {
-		var strategy string = backfillText(plan, backfillStrategyAttribute)
-
-		if binding, isPlanned := planned[collection]; isPlanned && backfillText(binding, backfillStrategyAttribute) != "" {
-			strategy = backfillText(binding, backfillStrategyAttribute)
-		}
-
-		if strategy == dataflowResetStrategy {
+		if bindingStrategy(plan, planned[collection]) == dataflowResetStrategy {
 			resets = append(resets, collection)
 		} else {
 			backfills = append(backfills, collection)
@@ -95,9 +83,52 @@ func backfillRequests(plan tftypes.Value, prior tftypes.Value, captureWide []str
 	return backfills, resets, nil
 }
 
-// captureWide returns the live collections a raised entry trigger backfills: the planned ones, plus the unmanaged ones
-// when bindings are generated, see mergeBindings.
-func captureWide(plan tftypes.Value, prior tftypes.Value, live tftypes.Value, generated bool) ([]string, error) {
+// captureWide returns the collections of the published bindings a raised entry trigger backfills: those bound live.
+// Disabled bindings are left out, as the dashboard does.
+func captureWide(published any, live []any) []string {
+	var collections []string
+	var bound []string
+
+	for _, binding := range live {
+		bound = append(bound, catalog.BindingCollection(binding))
+	}
+
+	items, _ := published.([]any)
+
+	for _, binding := range items {
+		object, _ := binding.(map[string]any)
+
+		if disable, _ := object[disableAttribute].(bool); disable {
+			continue
+		}
+
+		if collection := catalog.BindingCollection(binding); collection != "" && slices.Contains(bound, collection) {
+			collections = append(collections, collection)
+		}
+	}
+
+	return collections
+}
+
+// disabled reports whether a binding value sets disable.
+func disabled(binding tftypes.Value) bool {
+	disable, _ := known[bool](bindingAttribute(binding, disableAttribute))
+
+	return disable
+}
+
+// bindingStrategy returns the backfill strategy of a binding value, else that of the entry.
+func bindingStrategy(entry tftypes.Value, binding tftypes.Value) string {
+	if strategy := backfillText(binding, backfillStrategyAttribute); strategy != "" {
+		return strategy
+	}
+
+	return backfillText(entry, backfillStrategyAttribute)
+}
+
+// pendingResets returns the sorted enabled planned bindings whose backfill strategy, else the entry one,
+// is dataflowReset: raising their trigger, or the entry one, resets their collections.
+func pendingResets(plan tftypes.Value) ([]string, error) {
 	var collections []string
 
 	plannedBindings, _, err := bindings(plan)
@@ -106,33 +137,47 @@ func captureWide(plan tftypes.Value, prior tftypes.Value, live tftypes.Value, ge
 		return nil, err
 	}
 
-	priorBindings, _, err := bindings(prior)
-
-	if err != nil {
-		return nil, err
-	}
-
-	liveBindings, _, err := bindings(live)
-
-	if err != nil {
-		return nil, err
-	}
-
-	var planned map[string]tftypes.Value = byCollection(plannedBindings)
-	var managed map[string]tftypes.Value = byCollection(priorBindings)
-
-	for _, binding := range liveBindings {
+	for _, binding := range plannedBindings {
 		var collection string = bindingCollectionValue(binding)
 
-		_, isPlanned := planned[collection]
-		_, isManaged := managed[collection]
-
-		if collection != "" && (isPlanned || (generated && !isManaged)) {
+		if collection != "" && !disabled(binding) && bindingStrategy(plan, binding) == dataflowResetStrategy {
 			collections = append(collections, collection)
 		}
 	}
 
+	slices.Sort(collections)
+
 	return collections, nil
+}
+
+// backfillChanged reports whether the plan changes the entry backfill block or that of a binding.
+func backfillChanged(plan tftypes.Value, prior tftypes.Value) bool {
+	planned, _ := indexedBindings(plan)
+	previous, _ := indexedBindings(prior)
+
+	if backfillDiffers(plan, prior) {
+		return true
+	}
+
+	for collection, binding := range planned {
+		if backfillDiffers(binding, previous[collection]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// backfillDiffers reports whether the backfill blocks of two values differ, a missing block matching a null one.
+func backfillDiffers(planned tftypes.Value, prior tftypes.Value) bool {
+	var plannedBackfill tftypes.Value = bindingAttribute(planned, backfillAttribute)
+	var priorBackfill tftypes.Value = bindingAttribute(prior, backfillAttribute)
+
+	if plannedBackfill.IsNull() && priorBackfill.IsNull() {
+		return false
+	}
+
+	return !plannedBackfill.Equal(priorBackfill)
 }
 
 // raisesTrigger reports whether the planned backfill trigger is higher than the prior one, or newly set.
@@ -142,12 +187,10 @@ func raisesTrigger(planned tftypes.Value, prior tftypes.Value) bool {
 
 // triggersUnmanaged reports whether the plan sets a backfill trigger on a binding missing from the prior state.
 func triggersUnmanaged(plan tftypes.Value, prior tftypes.Value) bool {
-	plannedBindings, _, _ := bindings(plan)
-	priorBindings, _, _ := bindings(prior)
+	planned, _ := indexedBindings(plan)
+	previous, _ := indexedBindings(prior)
 
-	var previous map[string]tftypes.Value = byCollection(priorBindings)
-
-	for collection, binding := range byCollection(plannedBindings) {
+	for collection, binding := range planned {
 		if _, managed := previous[collection]; !managed && raisesTrigger(binding, tftypes.Value{}) {
 			return true
 		}
@@ -174,13 +217,11 @@ func validateBackfillTriggers(plan tftypes.Value, state tftypes.Value) diag.Diag
 		return diagnostics
 	}
 
-	stateBindings, _, err := bindings(state)
+	previous, err := indexedBindings(state)
 
 	if err != nil {
 		return diagnostics
 	}
-
-	var previous map[string]tftypes.Value = byCollection(stateBindings)
 
 	diagnostics.Append(validateBackfillTrigger(path.Root(backfillAttribute).AtName(backfillTriggerAttribute), "the capture", plan, state)...)
 
@@ -189,6 +230,12 @@ func validateBackfillTriggers(plan tftypes.Value, state tftypes.Value) diag.Diag
 		var attributePath path.Path = path.Root(bindingsAttribute).AtListIndex(index).AtName(backfillAttribute).AtName(backfillTriggerAttribute)
 
 		diagnostics.Append(validateBackfillTrigger(attributePath, collection, binding, previous[collection])...)
+
+		if disabled(binding) && raisesTrigger(binding, previous[collection]) {
+			diagnostics.AddAttributeError(attributePath, "Backfill trigger raised on a disabled binding",
+				fmt.Sprintf("backfill.trigger of %s is raised, but the binding is disabled, so there is nothing to backfill. "+
+					"Set disable = false or remove the disable property in the same change to enable and backfill it, or keep the trigger at its current value.", collection))
+		}
 	}
 
 	return diagnostics
@@ -247,13 +294,13 @@ func modeBackfills(planned any, live []any, key string) map[string]string {
 	for _, binding := range live {
 		mode, _ := utils.Lookup(binding, "resource")[key].(string)
 
-		modes[bindingCollection(binding)] = mode
+		modes[catalog.BindingCollection(binding)] = mode
 	}
 
 	bindings, _ := planned.([]any)
 
 	for _, binding := range bindings {
-		var collection string = bindingCollection(binding)
+		var collection string = catalog.BindingCollection(binding)
 
 		mode, _ := utils.Lookup(binding, "resource")[key].(string)
 		liveMode, isLive := modes[collection]
@@ -294,7 +341,7 @@ func keepBackfills(planned any, live []any, backfills []string) {
 		object, _ := binding.(map[string]any)
 		counter, _ := object[backfillAttribute].(int)
 
-		counters[bindingCollection(binding)] = counter
+		counters[catalog.BindingCollection(binding)] = counter
 	}
 
 	bindings, _ := planned.([]any)
@@ -306,7 +353,7 @@ func keepBackfills(planned any, live []any, backfills []string) {
 			continue
 		}
 
-		var collection string = bindingCollection(binding)
+		var collection string = catalog.BindingCollection(binding)
 		var counter int = counters[collection]
 
 		if slices.Contains(backfills, collection) {
@@ -330,30 +377,11 @@ func backfillSetting(owner tftypes.Value, attribute string) tftypes.Value {
 	return blockAttribute(bindingAttribute(owner, backfillAttribute), attribute, tftypes.DynamicPseudoType)
 }
 
-// blockAttribute returns an attribute of an object value, null when absent and unknown when the object is.
-func blockAttribute(block tftypes.Value, attribute string, attributeType tftypes.Type) tftypes.Value {
-	var attributes map[string]tftypes.Value
-
-	if !block.IsKnown() {
-		return tftypes.NewValue(attributeType, tftypes.UnknownValue)
-	}
-
-	if block.IsNull() || block.As(&attributes) != nil {
-		return tftypes.NewValue(attributeType, nil)
-	}
-
-	if value, found := attributes[attribute]; found {
-		return value
-	}
-
-	return tftypes.NewValue(attributeType, nil)
-}
-
 // integer converts a number value, reporting false when null or unknown.
 func integer(value tftypes.Value) (int64, bool) {
-	var number big.Float
+	number, isNumber := known[big.Float](value)
 
-	if !value.IsKnown() || value.IsNull() || value.As(&number) != nil {
+	if !isNumber {
 		return 0, false
 	}
 
@@ -364,13 +392,7 @@ func integer(value tftypes.Value) (int64, bool) {
 
 // backfillText returns a string attribute of the owner's backfill block, empty when unset.
 func backfillText(owner tftypes.Value, attribute string) string {
-	var text string
-
-	value := backfillSetting(owner, attribute)
-
-	if value.IsKnown() && !value.IsNull() {
-		_ = value.As(&text)
-	}
+	text, _ := known[string](backfillSetting(owner, attribute))
 
 	return text
 }

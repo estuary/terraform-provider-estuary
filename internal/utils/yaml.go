@@ -1,6 +1,10 @@
 package utils
 
-import "gopkg.in/yaml.v3"
+import (
+	"bytes"
+
+	"gopkg.in/yaml.v3"
+)
 
 // Lookup returns the object nested under keys, nil when any key is missing or not an object.
 func Lookup(value any, keys ...string) map[string]any {
@@ -17,17 +21,24 @@ func Lookup(value any, keys ...string) map[string]any {
 
 // YAMLDocument converts value to an untyped YAML document through its YAML tags.
 func YAMLDocument(value any) (map[string]any, error) {
-	var document map[string]any
+	return ConvertYAML[map[string]any](value, false)
+}
+
+// ConvertYAML converts value to T through their YAML tags, strict failing on keys T doesn't map.
+func ConvertYAML[T any](value any, strict bool) (T, error) {
+	var converted T
 
 	content, err := yaml.Marshal(value)
 
 	if err != nil {
-		return nil, err
+		return converted, err
 	}
 
-	if err := yaml.Unmarshal(content, &document); err != nil {
-		return nil, err
-	}
+	var decoder *yaml.Decoder = yaml.NewDecoder(bytes.NewReader(content))
 
-	return document, nil
+	decoder.KnownFields(strict)
+
+	err = decoder.Decode(&converted)
+
+	return converted, err
 }

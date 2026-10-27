@@ -113,6 +113,18 @@ func TestDiscoverLogsNoSecret(test *testing.T) {
 	assertNoSecretLogged(test, &output, "mongodb://host:27017")
 }
 
+func TestDiscoverLogsMaskSensitiveKeys(test *testing.T) {
+	var output bytes.Buffer
+	var client *Client = fakeFlowctl(test, "#!/bin/sh\neval spec=\\${$#}\necho 'captures: {}' > \"$spec\"\n")
+	var ctx context.Context = catalog.WithSecrets(tflogtest.RootLogger(context.Background(), &output), logSecrets[2])
+
+	if _, err := client.DiscoverCapture(ctx, "acmeCo/capture", logSpec()); err != nil {
+		test.Fatal(err)
+	}
+
+	assertNoSecretLogged(test, &output, "mongodb://host:27017")
+}
+
 func TestExecCommandMasksEncodedSecretsInErrors(test *testing.T) {
 	var client *Client = fakeFlowctl(test, "#!/bin/sh\nprintf 'config:\\n  key: |\\n    MIIEpAIBAAKCAQEAsecretbody\\n  password: '\"'\"'it'\"''\"'s: secret'\"'\"'\\n' >&2\nexit 1\n")
 

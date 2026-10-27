@@ -148,10 +148,8 @@ func TestSampleBindings(test *testing.T) {
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
 	var host *regexp.Regexp = regexp.MustCompile(`^[^/:]+.snowflakecomputing.com$`)
-
-	var seenAuthTypes map[AuthType]bool = map[AuthType]bool{}
-
-	var seenTimestampTypes map[TimestampType]bool = map[TimestampType]bool{}
+	var authTypes *spectest.EnumSamples[AuthType] = spectest.NewEnumSamples(test, "auth_type", AuthTypes)
+	var timestampTypes *spectest.EnumSamples[TimestampType] = spectest.NewEnumSamples(test, "timestamp_type", TimestampTypes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
@@ -165,9 +163,7 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 				test.Errorf("%s: host %q must be an account URL ending in .snowflakecomputing.com", name, config.Host)
 			}
 
-			if !slices.Contains(AuthTypes, credentials.AuthType) {
-				test.Errorf("%s: auth_type %q is not in AuthTypes", name, credentials.AuthType)
-			}
+			authTypes.Add(name, credentials.AuthType)
 
 			if credentials.AuthType == AuthTypeJWT && (credentials.User == "" || credentials.PrivateKey == "" || credentials.Password != "") {
 				test.Errorf("%s: jwt credentials need user and private_key and no password", name)
@@ -177,41 +173,24 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 				test.Errorf("%s: user_password credentials need user and password and no private_key", name)
 			}
 
-			if !slices.Contains(TimestampTypes, config.TimestampType) {
-				test.Errorf("%s: timestamp_type %q is not in TimestampTypes", name, config.TimestampType)
-			}
+			timestampTypes.Add(name, config.TimestampType)
 
 			if config.DBTJobTrigger != nil && config.DBTJobTrigger.Mode != "" && !slices.Contains(materialization.DBTJobTriggerModes, config.DBTJobTrigger.Mode) {
 				test.Errorf("%s: dbt_job_trigger mode %q is not in DBTJobTriggerModes", name, config.DBTJobTrigger.Mode)
 			}
-
-			seenAuthTypes[credentials.AuthType] = true
-
-			seenTimestampTypes[config.TimestampType] = true
 		}
 	}
 
-	for _, authType := range AuthTypes {
-		if !seenAuthTypes[authType] {
-			test.Errorf("auth_type %q has no sample", authType)
-		}
-	}
+	authTypes.AssertAllSampled()
 
-	for _, timestampType := range TimestampTypes {
-		if !seenTimestampTypes[timestampType] {
-			test.Errorf("timestamp_type %q has no sample", timestampType)
-		}
-	}
+	timestampTypes.AssertAllSampled()
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"camel case private key from the docs": {
-			key: "privateKey",
-			content: `
+			Key: "privateKey",
+			Content: `
 				materializations:
 					acmeCo/snowflake/typo:
 						endpoint:
@@ -230,8 +209,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"namespace is an Iceberg resource field": {
-			key: "namespace",
-			content: `
+			Key: "namespace",
+			Content: `
 				materializations:
 					acmeCo/snowflake/namespace:
 						endpoint:
@@ -255,13 +234,5 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseMaterializations[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownMaterializationKeys[Spec](test, documents)
 }

@@ -159,6 +159,7 @@ Each resource manages a capture or a materialization of one Estuary connector. S
 | [`estuary_materialization_postgres`](internal/resources/materializationpostgres/README.md) | Materialization | [PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) |
 | [`estuary_source_aurora_mysql`](internal/resources/sourceauroramysql/README.md) | Capture | [Amazon Aurora for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/#amazon-aurora) |
 | [`estuary_source_aurora_postgres`](internal/resources/sourceaurorapostgres/README.md) | Capture | [Amazon Aurora for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-aurora-postgres/) |
+| [`estuary_source_dynamodb`](internal/resources/sourcedynamodb/README.md) | Capture | [Amazon DynamoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/amazon-dynamodb/) |
 | [`estuary_source_mongodb`](internal/resources/sourcemongodb/README.md) | Capture | [MongoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/) |
 | [`estuary_source_rds_mysql`](internal/resources/sourcerdsmysql/README.md) | Capture | [Amazon RDS for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/amazon-rds-mysql/) |
 | [`estuary_source_rds_postgres`](internal/resources/sourcerdspostgres/README.md) | Capture | [Amazon RDS for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-rds-postgres/) |

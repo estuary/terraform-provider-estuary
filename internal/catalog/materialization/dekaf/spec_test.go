@@ -2,7 +2,6 @@ package dekaf
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
@@ -88,29 +87,20 @@ func TestSampleVariants(test *testing.T) {
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
-	var seenVariants map[Variant]bool = map[Variant]bool{}
-
+	var variants *spectest.EnumSamples[Variant] = spectest.NewEnumSamples(test, "variant", Variants)
 	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
 
 	for name, spec := range specs {
 		var endpoint Endpoint = spec.Endpoint.Dekaf
 
-		if !slices.Contains(Variants, endpoint.Variant) {
-			test.Errorf("%s: variant %q is not in Variants", name, endpoint.Variant)
-		}
+		variants.Add(name, endpoint.Variant)
 
 		if !slices.Contains(DeletionModes, endpoint.Config.Deletions) {
 			test.Errorf("%s: deletions %q is not in DeletionModes", name, endpoint.Config.Deletions)
 		}
-
-		seenVariants[endpoint.Variant] = true
 	}
 
-	for _, variant := range Variants {
-		if !seenVariants[variant] {
-			test.Errorf("variant %q has no sample", variant)
-		}
-	}
+	variants.AssertAllSampled()
 }
 
 func TestExplicitDefaultsAreEmitted(test *testing.T) {
@@ -152,21 +142,22 @@ func TestExplicitDefaultsAreEmitted(test *testing.T) {
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	var document []byte = []byte(`
-		materializations:
-			acmeCo/dekaf/typo:
-				endpoint:
-					dekaf:
-						variant: generic
-						config:
-							token: <auth-token>
-							strict_topic_name: true
-				bindings: []
-	`)
-
-	_, err := spectest.ParseMaterializations[Spec](document)
-
-	if err == nil || !strings.Contains(err.Error(), "field strict_topic_name not found") {
-		test.Fatalf("error = %v, want strict decoding to reject the misspelled strict_topic_name key", err)
+	documents := map[string]spectest.UnknownKey{
+		"misspelled strict_topic_names": {
+			Key: "strict_topic_name",
+			Content: `
+				materializations:
+					acmeCo/dekaf/typo:
+						endpoint:
+							dekaf:
+								variant: generic
+								config:
+									token: <auth-token>
+									strict_topic_name: true
+						bindings: []
+			`,
+		},
 	}
+
+	spectest.AssertUnknownMaterializationKeys[Spec](test, documents)
 }

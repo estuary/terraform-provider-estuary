@@ -2,7 +2,6 @@ package icebergdelta
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/auth"
@@ -169,9 +168,8 @@ func TestSampleAlternatives(test *testing.T) {
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
-	var seenAuthTypes map[auth.AWSAuthType]bool = map[auth.AWSAuthType]bool{}
-
-	var seenCatalogTypes map[CatalogType]bool = map[CatalogType]bool{}
+	var authTypes *spectest.EnumSamples[auth.AWSAuthType] = spectest.NewEnumSamples(test, "auth_type", auth.AWSAuthTypes)
+	var catalogTypes *spectest.EnumSamples[CatalogType] = spectest.NewEnumSamples(test, "catalog_type", CatalogTypes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
@@ -180,42 +178,23 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 			var config Config = spec.Endpoint.Connector.Config
 
 			if config.Credentials != nil {
-				if !slices.Contains(auth.AWSAuthTypes, config.Credentials.AuthType) {
-					test.Errorf("%s: auth_type %q is not in auth.AWSAuthTypes", name, config.Credentials.AuthType)
-				}
-
-				seenAuthTypes[config.Credentials.AuthType] = true
+				authTypes.Add(name, config.Credentials.AuthType)
 			}
 
-			if !slices.Contains(CatalogTypes, config.Catalog.CatalogType) {
-				test.Errorf("%s: catalog_type %q is not in CatalogTypes", name, config.Catalog.CatalogType)
-			}
-
-			seenCatalogTypes[config.Catalog.CatalogType] = true
+			catalogTypes.Add(name, config.Catalog.CatalogType)
 		}
 	}
 
-	for _, authType := range auth.AWSAuthTypes {
-		if !seenAuthTypes[authType] {
-			test.Errorf("auth_type %q has no sample", authType)
-		}
-	}
+	authTypes.AssertAllSampled()
 
-	for _, catalogType := range CatalogTypes {
-		if !seenCatalogTypes[catalogType] {
-			test.Errorf("catalog_type %q has no sample", catalogType)
-		}
-	}
+	catalogTypes.AssertAllSampled()
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"merge connector compute block": {
-			key: "compute",
-			content: `
+			Key: "compute",
+			Content: `
 				materializations:
 					acmeCo/iceberg/merge:
 						endpoint:
@@ -233,8 +212,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"snake case access key under credentials": {
-			key: "aws_access_key_id",
-			content: `
+			Key: "aws_access_key_id",
+			Content: `
 				materializations:
 					acmeCo/iceberg/typo:
 						endpoint:
@@ -254,13 +233,5 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseMaterializations[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownMaterializationKeys[Spec](test, documents)
 }

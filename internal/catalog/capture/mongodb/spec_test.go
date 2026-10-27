@@ -140,7 +140,7 @@ func TestSampleBindings(test *testing.T) {
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
-	var seenCaptureModes map[CaptureMode]bool = map[CaptureMode]bool{}
+	var captureModes *spectest.EnumSamples[CaptureMode] = spectest.NewEnumSamples(test, "captureMode", CaptureModes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeCaptures[Spec](test, file)
@@ -155,34 +155,25 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 			for _, binding := range spec.Bindings {
 				var mode CaptureMode = binding.Resource.CaptureMode
 
-				if mode != "" && !slices.Contains(CaptureModes, mode) {
-					test.Errorf("%s: captureMode %q is not in CaptureModes", name, mode)
+				if mode != "" {
+					captureModes.Add(name, mode)
 				}
 
 				if (mode == CaptureModeBatchSnapshot || mode == CaptureModeBatchIncremental) && binding.Resource.CursorField == "" {
 					test.Errorf("%s: %s binding %s has no cursorField, which batch modes require", name, mode, binding.Resource.Collection)
 				}
-
-				seenCaptureModes[mode] = true
 			}
 		}
 	}
 
-	for _, mode := range CaptureModes {
-		if !seenCaptureModes[mode] {
-			test.Errorf("captureMode %q has no sample", mode)
-		}
-	}
+	captureModes.AssertAllSampled()
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"credentials is a SQL capture field": {
-			key: "credentials",
-			content: `
+			Key: "credentials",
+			Content: `
 				captures:
 					acmeCo/mongodb/credentials:
 						endpoint:
@@ -198,8 +189,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"stream is a SQL capture resource field": {
-			key: "stream",
-			content: `
+			Key: "stream",
+			Content: `
 				captures:
 					acmeCo/mongodb/stream:
 						endpoint:
@@ -218,15 +209,7 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseCaptures[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownCaptureKeys[Spec](test, documents)
 }
 
 func TestResourcePath(test *testing.T) {

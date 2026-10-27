@@ -101,17 +101,12 @@ func TestMaterializationFilesKeepConnectorConfigInline(test *testing.T) {
 }
 
 func TestPublishDiscoveredCaptureDiscoversBeforePublishing(test *testing.T) {
-	var directory string = test.TempDir()
-	var binary string = filepath.Join(directory, "flowctl")
-	var calls string = filepath.Join(directory, "calls")
-	var script string = "#!/bin/sh\necho \"$*\" >> \"$FLOWCTL_CALLS\"\n"
-	var client *Client = NewClient(binary, "<api-token>", "ops/dp/private/acmeCo/example-data-plane")
+	var calls string = filepath.Join(test.TempDir(), "calls")
+	var client *Client = fakeFlowctl(test, "#!/bin/sh\necho \"$*\" >> \"$FLOWCTL_CALLS\"\n")
+
+	client.dataPlane = "ops/dp/private/acmeCo/example-data-plane"
 
 	test.Setenv("FLOWCTL_CALLS", calls)
-
-	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
-		test.Fatal(err)
-	}
 
 	spec := capture.Spec[endpoint.ConnectorSpec[map[string]any], map[string]any]{
 		AutoDiscover: &capture.AutoDiscover{AddNewBindings: true},

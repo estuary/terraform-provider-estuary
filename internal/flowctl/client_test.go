@@ -12,13 +12,7 @@ import (
 )
 
 func TestExecCommandMasksSecretsInErrors(test *testing.T) {
-	var binary string = filepath.Join(test.TempDir(), "flowctl")
-	var script string = "#!/bin/sh\necho \"invalid password hunter2 for token $FLOW_AUTH_TOKEN\" >&2\nexit 1\n"
-	var client *Client = NewClient(binary, "<api-token>", "")
-
-	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
-		test.Fatal(err)
-	}
+	var client *Client = fakeFlowctl(test, "#!/bin/sh\necho \"invalid password hunter2 for token $FLOW_AUTH_TOKEN\" >&2\nexit 1\n")
 
 	_, err := client.execCommand(catalog.WithSecrets(context.Background(), "hunter2"), "catalog", "publish")
 
@@ -38,19 +32,13 @@ func TestExecCommandMasksSecretsInErrors(test *testing.T) {
 }
 
 func TestRunOnSpecReturnsTheWrittenSpec(test *testing.T) {
-	var binary string = filepath.Join(test.TempDir(), "flowctl")
-	var script string = "#!/bin/sh\neval spec=\\${$#}\necho \"args: $*\" > \"$spec\"\n"
-	var client *Client = NewClient(binary, "<api-token>", "")
+	var client *Client = fakeFlowctl(test, "#!/bin/sh\neval spec=\\${$#}\necho \"args: $*\" > \"$spec\"\n")
 	var workspace string
-
-	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
-		test.Fatal(err)
-	}
 
 	err := inWorkspace(map[string][]byte{"dekaf.config.yaml": []byte("token: x")}, func(directory string) error {
 		workspace = directory
 
-		content, err := client.runOnSpec(context.Background(), directory, "--target", "catalog", "pull-specs")
+		content, err := client.runOnSpec(context.Background(), directory, specFile, "--target", "catalog", "pull-specs")
 
 		if err != nil {
 			return err

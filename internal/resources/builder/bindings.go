@@ -6,13 +6,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-const bindingsAttribute string = "bindings"
-const bindingTargetAttribute string = "target"
-const bindingSourceAttribute string = "source"
-const bindingNameAttribute string = "name"
-
-const resourceMetaKey string = "_meta"
-
 // mergeBindings merges planned bindings over live ones, keeping unmanaged ones and dropping removed managed ones.
 // New planned bindings follow, in plan order.
 func mergeBindings(planned []any, previous []any, live []any) []any {
@@ -22,15 +15,15 @@ func mergeBindings(planned []any, previous []any, live []any) []any {
 	var merged []any
 
 	for _, binding := range planned {
-		pending[bindingCollection(binding)] = binding
+		pending[catalog.BindingCollection(binding)] = binding
 	}
 
 	for _, binding := range previous {
-		managed[bindingCollection(binding)] = true
+		managed[catalog.BindingCollection(binding)] = true
 	}
 
 	for _, binding := range live {
-		var collection string = bindingCollection(binding)
+		var collection string = catalog.BindingCollection(binding)
 
 		if plannedBinding, found := pending[collection]; found {
 			merged = append(merged, plannedBinding)
@@ -41,7 +34,7 @@ func mergeBindings(planned []any, previous []any, live []any) []any {
 	}
 
 	for _, binding := range planned {
-		if _, found := pending[bindingCollection(binding)]; found {
+		if _, found := pending[catalog.BindingCollection(binding)]; found {
 			merged = append(merged, binding)
 		}
 	}
@@ -54,8 +47,8 @@ func keepResourceMetadata(planned any, live []any) {
 	var metadata map[string]any = map[string]any{}
 
 	for _, binding := range live {
-		if meta, found := utils.Lookup(binding, "resource")[resourceMetaKey]; found {
-			metadata[bindingCollection(binding)] = meta
+		if meta, found := utils.Lookup(binding, "resource")[catalog.ResourceMetaKey]; found {
+			metadata[catalog.BindingCollection(binding)] = meta
 		}
 	}
 
@@ -64,8 +57,8 @@ func keepResourceMetadata(planned any, live []any) {
 	for _, binding := range bindings {
 		var resource map[string]any = utils.Lookup(binding, "resource")
 
-		if meta, found := metadata[bindingCollection(binding)]; found && resource != nil && resource[resourceMetaKey] == nil {
-			resource[resourceMetaKey] = meta
+		if meta, found := metadata[catalog.BindingCollection(binding)]; found && resource != nil && resource[catalog.ResourceMetaKey] == nil {
+			resource[catalog.ResourceMetaKey] = meta
 		}
 	}
 }
@@ -82,23 +75,6 @@ func addsNewBindings(spec any) bool {
 	adder, isAdder := spec.(catalog.NewBindingsAdder)
 
 	return isAdder && adder.AddsNewBindings()
-}
-
-// bindingCollection returns a binding document's collection: the capture target or materialization source.
-func bindingCollection(binding any) string {
-	object, _ := binding.(map[string]any)
-
-	if target, isName := object["target"].(string); isName {
-		return target
-	}
-
-	if source, isName := object["source"].(string); isName {
-		return source
-	}
-
-	name, _ := utils.Lookup(object, "source")["name"].(string)
-
-	return name
 }
 
 // bindings returns an entry's bindings and list type, nil type when null.
@@ -138,19 +114,22 @@ func byCollection(items []tftypes.Value) map[string]tftypes.Value {
 	return indexed
 }
 
+// indexedBindings returns an entry's binding values by collection.
+func indexedBindings(value tftypes.Value) (map[string]tftypes.Value, error) {
+	items, _, err := bindings(value)
+
+	return byCollection(items), err
+}
+
 // bindingCollectionValue returns a binding value's collection, empty when unknown.
 func bindingCollectionValue(binding tftypes.Value) string {
-	var collection string
-
 	for _, attribute := range []string{bindingTargetAttribute, bindingSourceAttribute} {
-		if value := bindingAttribute(binding, attribute); value.IsKnown() && !value.IsNull() {
-			_ = value.As(&collection)
-
+		if collection, isKnown := known[string](bindingAttribute(binding, attribute)); isKnown {
 			return collection
 		}
 	}
 
-	return collection
+	return ""
 }
 
 // withBindingNames sets each binding name to its collection, unknown while the collection is.
@@ -181,21 +160,7 @@ func withBindingNames(value tftypes.Value) (tftypes.Value, error) {
 
 // bindingAttribute returns a binding attribute, unknown when the binding is.
 func bindingAttribute(binding tftypes.Value, attribute string) tftypes.Value {
-	var attributes map[string]tftypes.Value
-
-	if !binding.IsKnown() {
-		return tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
-	}
-
-	if binding.IsNull() || binding.As(&attributes) != nil {
-		return tftypes.NewValue(tftypes.String, nil)
-	}
-
-	if value, found := attributes[attribute]; found {
-		return value
-	}
-
-	return tftypes.NewValue(tftypes.String, nil)
+	return blockAttribute(binding, attribute, tftypes.String)
 }
 
 // providerOnly reports whether path is applied by the provider but absent from the catalog spec: the entry

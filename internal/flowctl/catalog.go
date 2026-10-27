@@ -80,7 +80,7 @@ func (client *Client) ReadSpec(ctx context.Context, name string) (map[string]any
 	var spec map[string]any
 
 	err := inWorkspace(nil, func(directory string) error {
-		content, err := client.runOnSpec(ctx, directory, "--target", "catalog", "pull-specs", flagValue("--name", name), "--flat", "--overwrite")
+		content, err := client.runOnSpec(ctx, directory, specFile, "--target", "catalog", "pull-specs", flagValue("--name", name), "--flat", "--overwrite")
 
 		if err == nil {
 			spec, err = pulledSpec(content, name, directory)

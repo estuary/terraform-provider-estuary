@@ -1,7 +1,6 @@
 package builder
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"reflect"
@@ -11,7 +10,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
-	"gopkg.in/yaml.v3"
 )
 
 // Connector identifies a connector resource by its type name suffix, default image and catalog connector name.
@@ -177,19 +175,9 @@ func (codec *Codec[D, S]) Document(value tftypes.Value) (map[string]any, error) 
 
 // decode decodes a YAML value into T, strict failing on unknown keys.
 func decode[T any](value any, strict bool) (T, error) {
-	var decoded T
-
-	content, err := yaml.Marshal(value)
+	decoded, err := utils.ConvertYAML[T](value, strict)
 
 	if err != nil {
-		return decoded, err
-	}
-
-	var decoder *yaml.Decoder = yaml.NewDecoder(bytes.NewReader(content))
-
-	decoder.KnownFields(strict)
-
-	if err := decoder.Decode(&decoded); err != nil {
 		return decoded, fmt.Errorf("decoding spec: %w", err)
 	}
 

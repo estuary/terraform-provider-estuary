@@ -3,12 +3,10 @@ package flowctl
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,11 +53,11 @@ func withDeclaredBindings(content []byte, name string, declared []any, identifie
 			continue
 		}
 
-		var target string = bindingTarget(binding)
-		var previous string = bindingTarget(discovered[position])
+		var target string = catalog.BindingCollection(binding)
+		var previous string = catalog.BindingCollection(discovered[position])
 
-		if meta, hasMeta := utils.Lookup(discovered[position], "resource")["_meta"]; hasMeta && utils.Lookup(binding, "resource") != nil {
-			utils.Lookup(binding, "resource")["_meta"] = meta
+		if meta, hasMeta := utils.Lookup(discovered[position], "resource")[catalog.ResourceMetaKey]; hasMeta && utils.Lookup(binding, "resource") != nil {
+			utils.Lookup(binding, "resource")[catalog.ResourceMetaKey] = meta
 		}
 
 		if spec, isDiscovered := collections[previous]; isDiscovered && target != previous {
@@ -88,14 +86,7 @@ func bindingKey(binding any, identifier catalog.BindingsIdentifier) (string, err
 		}
 	}
 
-	return "target:" + bindingTarget(binding), nil
-}
-
-func bindingTarget(binding any) string {
-	object, _ := binding.(map[string]any)
-	target, _ := object["target"].(string)
-
-	return target
+	return "target:" + catalog.BindingCollection(binding), nil
 }
 
 // withResets adds the live spec of each collection with reset set, so the control plane runs a dataflow reset,
@@ -184,13 +175,9 @@ func materializationFiles(name string, spec catalog.MaterializationSpec) (map[st
 
 // publish publishes files after the optional prepare step completes them, the data plane applying only to new entries.
 func (client *Client) publish(ctx context.Context, files map[string][]byte, prepare func(ctx context.Context, directory string) error) error {
-	ctx, cancel := context.WithTimeout(ctx, connectorTimeout)
+	ctx, cancel := client.connectorContext(ctx, "Publishing spec", files)
 
 	defer cancel()
-
-	logContext, secrets := client.maskedContext(ctx)
-
-	tflog.Debug(logContext, "Publishing spec", map[string]any{"spec": maskedSpec(files[specFile], secrets)})
 
 	return inWorkspace(files, func(directory string) error {
 		if prepare != nil {
@@ -207,19 +194,13 @@ func (client *Client) publish(ctx context.Context, files map[string][]byte, prep
 
 // addDiscovered discovers every resource of the binding-less capture, then lays the declared bindings over them.
 func (client *Client) addDiscovered(ctx context.Context, directory string, name string, declared []any, identifier catalog.BindingsIdentifier) error {
-	content, err := client.runOnSpec(ctx, directory, "--source", client.withDataPlane([]string{"discover", "--flat"}, "--data-plane")...)
-
-	if err != nil {
+	if _, err := client.discover(ctx, directory); err != nil {
 		return err
 	}
 
-	content, err = withDeclaredBindings(content, name, declared, identifier)
-
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(filepath.Join(directory, specFile), content, 0600)
+	return rewriteSpec(directory, func(content []byte) ([]byte, error) {
+		return withDeclaredBindings(content, name, declared, identifier)
+	})
 }
 
 // addResetsStep returns the step adding the collections to reset, nil without any.
@@ -235,35 +216,21 @@ func (client *Client) addResetsStep(resets []string) func(ctx context.Context, d
 
 // addResets pulls the collections to reset into the workspace and adds them with reset set, see withResets.
 func (client *Client) addResets(ctx context.Context, directory string, collections []string) error {
-	var arguments []string = []string{"catalog", "pull-specs", "--target", filepath.Join(directory, resetsFile), "--flat", "--overwrite"}
+	var arguments []string = []string{"catalog", "pull-specs"}
 
 	for _, collection := range collections {
 		arguments = append(arguments, flagValue("--name", collection))
 	}
 
-	if _, err := client.execCommand(ctx, arguments...); err != nil {
-		return err
-	}
-
-	pulled, err := os.ReadFile(filepath.Join(directory, resetsFile))
-
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", resetsFile, err)
-	}
-
-	spec, err := os.ReadFile(filepath.Join(directory, specFile))
-
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", specFile, err)
-	}
-
-	content, err := withResets(spec, pulled, collections)
+	pulled, err := client.runOnSpec(ctx, directory, resetsFile, "--target", append(arguments, "--flat", "--overwrite")...)
 
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(directory, specFile), content, 0600)
+	return rewriteSpec(directory, func(spec []byte) ([]byte, error) {
+		return withResets(spec, pulled, collections)
+	})
 }
 
 // PublishCapture publishes the capture spec, dataflow resetting the resets collections.

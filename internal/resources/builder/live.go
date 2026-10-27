@@ -23,7 +23,7 @@ func (entryResource *entryResource[D, S]) newLiveReader(ctx context.Context, sta
 
 		read = true
 
-		name, err := attributeValue(state, tftypes.NewAttributePath().WithAttributeName("name"))
+		name, err := attributeValue(state, tftypes.NewAttributePath().WithAttributeName(nameAttribute))
 
 		var text string
 
@@ -60,10 +60,10 @@ func (entryResource *entryResource[D, S]) liveValue(name string, sealed map[stri
 func liveDocument(sealed map[string]any) map[string]any {
 	var live map[string]any = catalog.WithoutSecrets(sealed)
 
-	liveBindings, _ := live["bindings"].([]any)
+	liveBindings, _ := live[bindingsAttribute].([]any)
 
 	for _, binding := range liveBindings {
-		delete(utils.Lookup(binding, "resource"), resourceMetaKey)
+		delete(utils.Lookup(binding, "resource"), catalog.ResourceMetaKey)
 	}
 
 	delete(utils.Lookup(live, "source"), "targetNaming")

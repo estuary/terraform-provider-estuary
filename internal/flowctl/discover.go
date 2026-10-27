@@ -6,7 +6,6 @@ import (
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,12 +27,17 @@ func discoveredResources(content []byte, name string) (map[string]map[string]any
 	var resources map[string]map[string]any = map[string]map[string]any{}
 
 	for _, binding := range discovered.Captures[name].Bindings {
-		if target, _ := binding["target"].(string); target != "" {
+		if target := catalog.BindingCollection(binding); target != "" {
 			resources[target] = utils.Lookup(binding, "resource")
 		}
 	}
 
 	return resources, nil
+}
+
+// discover runs flowctl discover on the workspace spec file and returns the discovered spec.
+func (client *Client) discover(ctx context.Context, directory string) ([]byte, error) {
+	return client.runOnSpec(ctx, directory, specFile, "--source", client.withDataPlane([]string{"discover", "--flat"}, "--data-plane")...)
 }
 
 // DiscoverCapture discovers the capture on the client data plane, returning each binding resource by target.
@@ -46,16 +50,12 @@ func (client *Client) DiscoverCapture(ctx context.Context, name string, spec cat
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, connectorTimeout)
+	ctx, cancel := client.connectorContext(ctx, "Discovering capture", files)
 
 	defer cancel()
 
-	logContext, _ := client.maskedContext(ctx)
-
-	tflog.Debug(logContext, "Discovering capture", map[string]any{"spec": string(files[specFile])})
-
 	err = inWorkspace(files, func(directory string) error {
-		content, err := client.runOnSpec(ctx, directory, "--source", client.withDataPlane([]string{"discover", "--flat"}, "--data-plane")...)
+		content, err := client.discover(ctx, directory)
 
 		if err == nil {
 			resources, err = discoveredResources(content, name)

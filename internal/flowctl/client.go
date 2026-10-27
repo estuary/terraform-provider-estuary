@@ -11,9 +11,7 @@ import (
 	"time"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
-	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"gopkg.in/yaml.v3"
 )
 
 const commandTimeout time.Duration = 5 * time.Minute
@@ -27,23 +25,6 @@ type Client struct {
 }
 
 var _ catalog.Backend = (*Client)(nil)
-
-// maskedSpec returns the spec file content masked for logs, see utils.MaskDocument, empty when it doesn't parse.
-func maskedSpec(content []byte, secrets []string) string {
-	var document any
-
-	if err := yaml.Unmarshal(content, &document); err != nil {
-		return "<unparsable spec>"
-	}
-
-	masked, err := yaml.Marshal(utils.MaskDocument(document, secrets))
-
-	if err != nil {
-		return "<unparsable spec>"
-	}
-
-	return string(masked)
-}
 
 // flagValue joins a flag and its value in one argument, so flowctl never reads a dash-leading value as a flag.
 func flagValue(flag string, value string) string {
@@ -81,7 +62,7 @@ func (client *Client) maskedContext(ctx context.Context) (context.Context, []str
 		return ctx, secrets
 	}
 
-	return tflog.MaskLogStrings(ctx, utils.SecretForms(secrets)...), secrets
+	return tflog.MaskLogStrings(ctx, secretForms(secrets)...), secrets
 }
 
 // execCommand runs flowctl, masking the token and ctx secrets in logs and errors.
@@ -113,7 +94,7 @@ func (client *Client) execCommand(ctx context.Context, arguments ...string) ([]b
 	})
 
 	if err := command.Run(); err != nil {
-		var output string = utils.MaskStrings(stderr.String(), secrets)
+		var output string = maskStrings(stderr.String(), secrets)
 		return nil, fmt.Errorf("flowctl %s: %w\nstderr: %s", strings.Join(arguments, " "), err, output)
 	}
 
@@ -128,21 +109,51 @@ func (client *Client) withDataPlane(arguments []string, flag string) []string {
 	return append(arguments, flagValue(flag, client.dataPlane))
 }
 
-// runOnSpec runs flowctl on the workspace spec file passed with specFlag and returns the resulting spec.
-func (client *Client) runOnSpec(ctx context.Context, directory string, specFlag string, arguments ...string) ([]byte, error) {
-	var path string = filepath.Join(directory, specFile)
+// runOnSpec runs flowctl on the workspace file passed with fileFlag and returns its resulting content.
+func (client *Client) runOnSpec(ctx context.Context, directory string, file string, fileFlag string, arguments ...string) ([]byte, error) {
+	var path string = filepath.Join(directory, file)
 
-	if _, err := client.execCommand(ctx, append(arguments, specFlag, path)...); err != nil {
+	if _, err := client.execCommand(ctx, append(arguments, fileFlag, path)...); err != nil {
 		return nil, err
 	}
 
 	content, err := os.ReadFile(path)
 
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", specFile, err)
+		return nil, fmt.Errorf("reading %s: %w", file, err)
 	}
 
 	return content, nil
+}
+
+// rewriteSpec replaces the workspace spec file content with what rewrite returns for it.
+func rewriteSpec(directory string, rewrite func(content []byte) ([]byte, error)) error {
+	var path string = filepath.Join(directory, specFile)
+
+	content, err := os.ReadFile(path)
+
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", specFile, err)
+	}
+
+	content, err = rewrite(content)
+
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, content, 0600)
+}
+
+// connectorContext returns ctx bounded by the connector timeout, logging message with the masked spec of files.
+func (client *Client) connectorContext(ctx context.Context, message string, files map[string][]byte) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(ctx, connectorTimeout)
+
+	logContext, secrets := client.maskedContext(ctx)
+
+	tflog.Debug(logContext, message, map[string]any{"spec": maskedSpec(files[specFile], secrets)})
+
+	return ctx, cancel
 }
 
 // NewClient creates a flowctl Client, an empty dataPlane using the account default. Catalog names include the tenant.

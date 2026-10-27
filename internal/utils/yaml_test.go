@@ -53,3 +53,25 @@ func TestYAMLDocument(test *testing.T) {
 		test.Errorf("YAMLDocument = %v, %v, want an error for a value that is not an object", document, err)
 	}
 }
+
+func TestConvertYAML(test *testing.T) {
+	type resource struct {
+		Table string `yaml:"table"`
+	}
+
+	expectations := map[string]struct {
+		strict bool
+		fails  bool
+	}{
+		"lenient ignores unknown keys": {false, false},
+		"strict rejects unknown keys":  {true, true},
+	}
+
+	for name, expected := range expectations {
+		converted, err := ConvertYAML[resource](map[string]any{"table": "orders", "priority": 2}, expected.strict)
+
+		if (err != nil) != expected.fails || (!expected.fails && converted.Table != "orders") {
+			test.Errorf("%s: ConvertYAML = %v, %v, want an error %v", name, converted, err, expected.fails)
+		}
+	}
+}

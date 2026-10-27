@@ -142,13 +142,10 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"credentials is a MySQL capture field": {
-			key: "credentials",
-			content: `
+			Key: "credentials",
+			Content: `
 				materializations:
 					acmeCo/mysql/credentials:
 						endpoint:
@@ -165,8 +162,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"schema is a PostgreSQL resource field": {
-			key: "schema",
-			content: `
+			Key: "schema",
+			Content: `
 				materializations:
 					acmeCo/mysql/schema:
 						endpoint:
@@ -186,13 +183,5 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseMaterializations[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownMaterializationKeys[Spec](test, documents)
 }

@@ -121,7 +121,7 @@ func TestSampleBindings(test *testing.T) {
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
-	var seenAuthTypes map[auth.DatabaseAuthType]bool = map[auth.DatabaseAuthType]bool{}
+	var authTypes *spectest.EnumSamples[auth.DatabaseAuthType] = spectest.NewEnumSamples(test, "auth_type", auth.DatabaseAuthTypes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
@@ -136,9 +136,7 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 			if config.Credentials != nil {
 				var credentials auth.DatabaseCredentials = *config.Credentials
 
-				if !slices.Contains(auth.DatabaseAuthTypes, credentials.AuthType) {
-					test.Errorf("%s: auth_type %q is not in DatabaseAuthTypes", name, credentials.AuthType)
-				}
+				authTypes.Add(name, credentials.AuthType)
 
 				if credentials.AuthType == auth.DatabaseAuthTypeUserPassword && credentials.Password == "" {
 					test.Errorf("%s: UserPassword credentials need a password", name)
@@ -147,8 +145,6 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 				if credentials.AuthType == auth.DatabaseAuthTypeAWSIAM && (credentials.AWSRegion == "" || credentials.AWSRoleARN == "") {
 					test.Errorf("%s: AWSIAM credentials need aws_region and aws_role_arn", name)
 				}
-
-				seenAuthTypes[credentials.AuthType] = true
 			}
 
 			if config.Advanced != nil && config.Advanced.SSLMode != "" && !slices.Contains(sslmode.PostgresModes, config.Advanced.SSLMode) {
@@ -157,21 +153,14 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 		}
 	}
 
-	for _, authType := range []auth.DatabaseAuthType{auth.DatabaseAuthTypeUserPassword, auth.DatabaseAuthTypeAWSIAM} {
-		if !seenAuthTypes[authType] {
-			test.Errorf("auth_type %q has no sample", authType)
-		}
-	}
+	authTypes.AssertSampled(auth.DatabaseAuthTypeUserPassword, auth.DatabaseAuthTypeAWSIAM)
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"timezone is a MySQL materialization field": {
-			key: "timezone",
-			content: `
+			Key: "timezone",
+			Content: `
 				materializations:
 					acmeCo/postgres/timezone:
 						endpoint:
@@ -188,8 +177,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"stream is a SQL capture resource field": {
-			key: "stream",
-			content: `
+			Key: "stream",
+			Content: `
 				materializations:
 					acmeCo/postgres/stream:
 						endpoint:
@@ -210,13 +199,5 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseMaterializations[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownMaterializationKeys[Spec](test, documents)
 }

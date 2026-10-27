@@ -1,8 +1,6 @@
 package dynamodb
 
 import (
-	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -133,7 +131,7 @@ func TestSampleBindings(test *testing.T) {
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
-	var seenAuthTypes map[auth.AWSAuthType]bool = map[auth.AWSAuthType]bool{}
+	var authTypes *spectest.EnumSamples[auth.AWSAuthType] = spectest.NewEnumSamples(test, "auth_type", auth.AWSAuthTypes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeCaptures[Spec](test, file)
@@ -141,21 +139,9 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 		for name, spec := range specs {
 			var config Config = spec.Endpoint.Connector.Config
 
-			var credentials auth.AWSCredentials = config.Credentials
+			authTypes.Add(name, config.Credentials.AuthType)
 
-			if !slices.Contains(auth.AWSAuthTypes, credentials.AuthType) {
-				test.Errorf("%s: auth_type %q is not in AWSAuthTypes", name, credentials.AuthType)
-			}
-
-			if credentials.AuthType == auth.AWSAuthTypeAccessKey && (credentials.AWSAccessKeyID == "" || credentials.AWSSecretAccessKey == "") {
-				test.Errorf("%s: AWSAccessKey credentials need aws_access_key_id and aws_secret_access_key", name)
-			}
-
-			if credentials.AuthType == auth.AWSAuthTypeIAM && (credentials.AWSRoleARN == "" || credentials.AWSRegion == "") {
-				test.Errorf("%s: AWSIAM credentials need aws_role_arn and aws_region", name)
-			}
-
-			seenAuthTypes[credentials.AuthType] = true
+			spectest.AssertAWSCredentials(test, name, config.Credentials)
 
 			if config.Advanced != nil && config.Advanced.IdleBackoffMax != "" {
 				duration, err := time.ParseDuration(config.Advanced.IdleBackoffMax)
@@ -167,21 +153,14 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 		}
 	}
 
-	for _, authType := range auth.AWSAuthTypes {
-		if !seenAuthTypes[authType] {
-			test.Errorf("auth_type %q has no sample", authType)
-		}
-	}
+	authTypes.AssertAllSampled()
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"address is a database capture field": {
-			key: "address",
-			content: `
+			Key: "address",
+			Content: `
 				captures:
 					acmeCo/dynamodb/address:
 						endpoint:
@@ -194,8 +173,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"awsAccessKeyId is the hidden legacy access key": {
-			key: "awsAccessKeyId",
-			content: `
+			Key: "awsAccessKeyId",
+			Content: `
 				captures:
 					acmeCo/dynamodb/legacy:
 						endpoint:
@@ -209,8 +188,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"stream is a SQL capture resource field": {
-			key: "stream",
-			content: `
+			Key: "stream",
+			Content: `
 				captures:
 					acmeCo/dynamodb/stream:
 						endpoint:
@@ -227,13 +206,5 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseCaptures[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownCaptureKeys[Spec](test, documents)
 }

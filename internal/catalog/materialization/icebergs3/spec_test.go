@@ -2,7 +2,6 @@ package icebergs3
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
@@ -241,9 +240,8 @@ func TestSampleSharedOptions(test *testing.T) {
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
-	var seenCatalogAuth map[CatalogAuthType]bool = map[CatalogAuthType]bool{}
-
-	var seenEMRAuth map[EMRAuthType]bool = map[EMRAuthType]bool{}
+	var catalogAuthTypes *spectest.EnumSamples[CatalogAuthType] = spectest.NewEnumSamples(test, "catalog auth_type", CatalogAuthTypes)
+	var emrAuthTypes *spectest.EnumSamples[EMRAuthType] = spectest.NewEnumSamples(test, "EMR auth_type", EMRAuthTypes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
@@ -256,19 +254,11 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 			}
 
 			if config.Credentials != nil {
-				if !slices.Contains(CatalogAuthTypes, config.Credentials.AuthType) {
-					test.Errorf("%s: catalog auth_type %q is not in CatalogAuthTypes", name, config.Credentials.AuthType)
-				}
-
-				seenCatalogAuth[config.Credentials.AuthType] = true
+				catalogAuthTypes.Add(name, config.Credentials.AuthType)
 			}
 
 			if config.Compute.Credentials != nil {
-				if !slices.Contains(EMRAuthTypes, config.Compute.Credentials.AuthType) {
-					test.Errorf("%s: EMR auth_type %q is not in EMRAuthTypes", name, config.Compute.Credentials.AuthType)
-				}
-
-				seenEMRAuth[config.Compute.Credentials.AuthType] = true
+				emrAuthTypes.Add(name, config.Compute.Credentials.AuthType)
 			}
 
 			if config.Advanced != nil {
@@ -281,27 +271,16 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 		}
 	}
 
-	for _, authType := range CatalogAuthTypes {
-		if !seenCatalogAuth[authType] {
-			test.Errorf("catalog auth_type %q has no sample", authType)
-		}
-	}
+	catalogAuthTypes.AssertAllSampled()
 
-	for _, authType := range EMRAuthTypes {
-		if !seenEMRAuth[authType] {
-			test.Errorf("EMR auth_type %q has no sample", authType)
-		}
-	}
+	emrAuthTypes.AssertAllSampled()
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"delta_updates is not a merge connector field": {
-			key: "delta_updates",
-			content: `
+			Key: "delta_updates",
+			Content: `
 				materializations:
 					acmeCo/iceberg/delta:
 						endpoint:
@@ -321,8 +300,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"misspelled compute key": {
-			key: "applicationId",
-			content: `
+			Key: "applicationId",
+			Content: `
 				materializations:
 					acmeCo/iceberg/typo:
 						endpoint:
@@ -340,13 +319,5 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseMaterializations[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownMaterializationKeys[Spec](test, documents)
 }

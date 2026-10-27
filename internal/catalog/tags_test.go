@@ -20,6 +20,24 @@ type taggedSpec struct {
 	Labels      map[string]string `yaml:"labels"`
 }
 
+func TestIsSensitiveKey(test *testing.T) {
+	expectations := map[string]bool{
+		"password":        true,
+		"privateKey":      true,
+		"ssl_client_key":  true,
+		"api_key":         true,
+		"sslmode":         false,
+		"aws_access_key":  false,
+		"ssl_server_cert": false,
+	}
+
+	for key, want := range expectations {
+		if got := catalog.IsSensitiveKey(key); got != want {
+			test.Errorf("%s: IsSensitiveKey = %v, want %v", key, got, want)
+		}
+	}
+}
+
 func TestSecretField(test *testing.T) {
 	expectations := map[string]bool{
 		"Password":    true,

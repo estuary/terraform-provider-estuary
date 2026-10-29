@@ -18,6 +18,35 @@ type taggedSpec struct {
 	Ports       int               `yaml:"ports" enum:"1,2"`
 	Keys        []string          `yaml:"keys" secret:"true"`
 	Labels      map[string]string `yaml:"labels"`
+	Address     string            `yaml:"address" credentials:"forbidden"`
+	Hosts       []string          `yaml:"hosts" credentials:"forbidden"`
+	Mode        string            `yaml:"mode,omitempty" backfill:"mode" description:"Backfill mode."`
+	Counter     int               `yaml:"counter" backfill:"mode"`
+	Inlined     struct{}          `yaml:",inline"`
+}
+
+func TestFieldOptions(test *testing.T) {
+	expectations := map[string]struct {
+		inline      bool
+		omitEmpty   bool
+		description string
+		mode        bool
+	}{
+		"Mode":     {false, true, "Backfill mode.", true},
+		"Counter":  {false, false, "", false},
+		"Inlined":  {true, false, "", false},
+		"Password": {false, true, "", false},
+	}
+
+	for name, expected := range expectations {
+		field, _ := reflect.TypeOf(taggedSpec{}).FieldByName(name)
+
+		if catalog.FieldInline(field) != expected.inline || catalog.FieldOmitEmpty(field) != expected.omitEmpty ||
+			catalog.FieldDescription(field) != expected.description || catalog.BackfillModeField(field) != expected.mode {
+			test.Errorf("%s: inline %v, omitempty %v, description %q, backfill mode %v, want %+v", name, catalog.FieldInline(field),
+				catalog.FieldOmitEmpty(field), catalog.FieldDescription(field), catalog.BackfillModeField(field), expected)
+		}
+	}
 }
 
 func TestIsSensitiveKey(test *testing.T) {
@@ -85,6 +114,10 @@ func TestValidateTags(test *testing.T) {
 		"Labels":   true,
 		"Ports":    false,
 		"Keys":     false,
+		"Address":  true,
+		"Hosts":    false,
+		"Mode":     true,
+		"Counter":  false,
 	}
 
 	for name, valid := range expectations {
@@ -92,6 +125,22 @@ func TestValidateTags(test *testing.T) {
 
 		if err := catalog.ValidateTags(field); (err == nil) != valid {
 			test.Errorf("%s: ValidateTags = %v, want valid %v", name, err, valid)
+		}
+	}
+}
+
+func TestForbidsCredentials(test *testing.T) {
+	expectations := map[string]bool{
+		"Address":  true,
+		"Hosts":    false,
+		"Password": false,
+	}
+
+	for name, want := range expectations {
+		field, _ := reflect.TypeOf(taggedSpec{}).FieldByName(name)
+
+		if got := catalog.ForbidsCredentials(field); got != want {
+			test.Errorf("%s: ForbidsCredentials = %v, want %v", name, got, want)
 		}
 	}
 }

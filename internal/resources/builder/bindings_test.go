@@ -3,6 +3,8 @@ package builder
 import (
 	"reflect"
 	"testing"
+
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 )
 
 func TestMergeBindings(test *testing.T) {
@@ -44,7 +46,7 @@ func TestMergeBindings(test *testing.T) {
 	}
 
 	for name, expected := range expectations {
-		if got := mergeBindings(expected.planned, expected.previous, expected.live); !reflect.DeepEqual(got, expected.want) {
+		if got := mergeBindings(expected.planned, expected.previous, expected.live, catalog.BindingCollection); !reflect.DeepEqual(got, expected.want) {
 			test.Errorf("%s: mergeBindings = %v, want %v", name, got, expected.want)
 		}
 	}

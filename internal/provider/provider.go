@@ -22,6 +22,7 @@ type EstuaryProvider struct {
 	version string
 }
 
+// EstuaryProviderModel is the provider configuration block.
 type EstuaryProviderModel struct {
 	Backend     types.String `tfsdk:"backend"`
 	Token       types.String `tfsdk:"token"`
@@ -112,7 +113,7 @@ func (estuaryProvider *EstuaryProvider) Configure(ctx context.Context, configure
 	})
 
 	if err != nil {
-		configureResp.Diagnostics.AddError("Unsupported Estuary backend.", err.Error())
+		configureResp.Diagnostics.AddError("Unsupported Estuary backend", err.Error())
 		return
 	}
 
@@ -132,7 +133,7 @@ func (estuaryProvider *EstuaryProvider) Resources(_ context.Context) []func() re
 
 // DataSources returns the provider data sources.
 func (estuaryProvider *EstuaryProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{}
+	return dataSources
 }
 
 // valueOr returns the attribute value when set, fallback otherwise.

@@ -2,12 +2,9 @@ package builder
 
 import (
 	"context"
-	"errors"
-	"maps"
 	"reflect"
-	"slices"
-	"strings"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
@@ -18,7 +15,7 @@ import (
 // resource metadata, backfill counters and the encrypted endpoint when unchanged. It returns the resets and a
 // copy of the live spec, nil when the entry doesn't exist.
 func (entryResource *entryResource[D, S]) mergeLive(ctx context.Context, catalogName string, document map[string]any, generated bool, plan tftypes.Value, prior tftypes.Value) ([]string, map[string]any, error) {
-	live, err := entryResource.session.Backend.ReadSpec(ctx, catalogName)
+	live, err := entryResource.readSealed(ctx, catalogName)
 
 	if err != nil || live == nil {
 		return nil, nil, err
@@ -36,85 +33,95 @@ func (entryResource *entryResource[D, S]) mergeLive(ctx context.Context, catalog
 		return nil, nil, err
 	}
 
+	keepUnmanagedKeys(document, priorDocument, live)
+
+	resets, err := entryResource.mergeLiveBindings(document, priorDocument, live, generated, plan, prior)
+
+	if err == nil {
+		err = entryResource.keepSealedEndpoint(ctx, catalogName, document, priorDocument, live, plan, prior)
+	}
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return resets, original, nil
+}
+
+// keepUnmanagedKeys copies the live keys the plan doesn't set and Terraform didn't manage.
+func keepUnmanagedKeys(document map[string]any, priorDocument map[string]any, live map[string]any) {
 	for key, value := range live {
 		if _, planned := document[key]; !planned && priorDocument[key] == nil {
 			document[key] = value
 		}
 	}
+}
 
-	current, _ := live[bindingsAttribute].([]any)
+// mergeLiveBindings sets the published bindings, see newPlannedPublication, with the live resource metadata and
+// backfill counters, plus one for each backfill. It returns the resets, failing on backfill mode changes without a
+// backfill.
+func (entryResource *entryResource[D, S]) mergeLiveBindings(document map[string]any, priorDocument map[string]any, live map[string]any, generated bool, plan tftypes.Value, prior tftypes.Value) ([]string, error) {
+	var current []any = catalog.Bindings(live)
 
-	if generated {
-		planned, _ := document[bindingsAttribute].([]any)
-		previous, _ := priorDocument[bindingsAttribute].([]any)
+	publication, err := newPlannedPublication(catalog.Bindings(document), catalog.Bindings(priorDocument), current, generated, plan, prior,
+		entryResource.catalogType.backfillModeKey)
 
-		document[bindingsAttribute] = mergeBindings(planned, previous, current)
+	if err == nil {
+		err = missingModesError(publication.missingModes)
 	}
-
-	keepResourceMetadata(document[bindingsAttribute], current)
-
-	var wide []string = captureWide(document[bindingsAttribute], current)
-
-	backfills, resets, err := backfillRequests(plan, prior, wide)
 
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	if holder, isHolder := any(*new(D)).(backfillModeHolder); isHolder {
-		missing, err := unbackfilledModes(document[bindingsAttribute], current, holder.resourceBackfillMode(), plan, prior, wide)
+	keepResourceMetadata(publication.published, current)
+	keepBackfills(publication.published, current, publication.backfills)
 
-		if err != nil {
-			return nil, nil, err
-		}
-
-		var details []string
-
-		for _, collection := range slices.Sorted(maps.Keys(missing)) {
-			details = append(details, modeBackfillDetail(collection, missing[collection]))
-		}
-
-		if len(details) > 0 {
-			return nil, nil, errors.New(strings.Join(details, "\n"))
-		}
-
-		for collection := range modeBackfills(document[bindingsAttribute], current, holder.resourceBackfillMode()) {
-			if !slices.Contains(backfills, collection) {
-				backfills = append(backfills, collection)
-			}
-		}
+	if generated {
+		document[catalog.BindingsKey] = publication.published
 	}
 
-	keepBackfills(document[bindingsAttribute], current, backfills)
+	return publication.resets, nil
+}
 
+// keepSealedEndpoint publishes the sealed live endpoint while the plan changes neither the endpoint nor its secrets,
+// so unchanged secrets aren't sent again. A live image other than the planned one, such as one changed outside
+// Terraform while refreshes failed, is never kept.
+func (entryResource *entryResource[D, S]) keepSealedEndpoint(ctx context.Context, catalogName string, document map[string]any, priorDocument map[string]any, live map[string]any, plan tftypes.Value, prior tftypes.Value) error {
 	if entryResource.codec.secrets.changed(plan, prior) {
 		tflog.Debug(ctx, "Publishing the planned endpoint, its secrets changed", map[string]any{"name": catalogName})
 
-		return resets, original, nil
+		return nil
 	}
 
 	plannedDocument, err := entryResource.codec.Document(plan)
 
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
-	if !reflect.DeepEqual(plannedDocument["endpoint"], priorDocument["endpoint"]) {
+	if !reflect.DeepEqual(plannedDocument[catalog.EndpointKey], priorDocument[catalog.EndpointKey]) {
 		tflog.Debug(ctx, "Publishing the planned endpoint, it changed", map[string]any{"name": catalogName, "planned": endpointYAML(plannedDocument), "prior": endpointYAML(priorDocument)})
 
-		return resets, original, nil
+		return nil
+	}
+
+	if catalog.ConnectorImage(live) != catalog.ConnectorImage(plannedDocument) {
+		tflog.Debug(ctx, "Publishing the planned endpoint, the live image differs", map[string]any{"name": catalogName})
+
+		return nil
 	}
 
 	tflog.Debug(ctx, "Keeping the sealed live endpoint", map[string]any{"name": catalogName})
 
-	document["endpoint"] = live["endpoint"]
+	document[catalog.EndpointKey] = live[catalog.EndpointKey]
 
-	return resets, original, nil
+	return nil
 }
 
 // endpointYAML returns a document's endpoint as YAML for logs, safe since plans never hold write-only values.
 func endpointYAML(document map[string]any) string {
-	content, err := yaml.Marshal(document["endpoint"])
+	content, err := yaml.Marshal(document[catalog.EndpointKey])
 
 	if err != nil {
 		return err.Error()

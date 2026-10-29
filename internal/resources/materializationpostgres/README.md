@@ -2,7 +2,7 @@
 
 [Back to the provider documentation](../../../README.md)
 
-This resource manages a [PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) materialization connector. Each binding materializes one Estuary collection into a PostgreSQL table, which the connector creates unless it created it before. The same connector also materializes into Amazon Aurora, Amazon RDS, Google Cloud SQL and other PostgreSQL-compatible databases.
+This resource manages a [PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) materialization connector. Each binding materializes one Estuary collection into a PostgreSQL table, which the connector creates unless it created it before. The same connector also materializes into Google Cloud SQL and other PostgreSQL-compatible databases. Amazon Aurora and Amazon RDS have their own resources, [`estuary_materialization_aurora_postgres`](../materializationaurorapostgres/README.md) and [`estuary_materialization_rds_postgres`](../materializationrdspostgres/README.md), matching the Estuary dashboard.
 
 ## Table of Contents
 
@@ -15,6 +15,7 @@ This resource manages a [PostgreSQL](https://docs.estuary.dev/reference/Connecto
   - [`config.dbt_job_trigger`](#configdbt_job_trigger)
   - [`config.network_tunnel`](#confignetwork_tunnel)
   - [`config.advanced`](#configadvanced)
+  - [`backfill`](#backfill)
   - [`bindings`](#bindings)
   - [`bindings.backfill`](#bindingsbackfill)
   - [`bindings.resource`](#bindingsresource)
@@ -81,7 +82,7 @@ AWS IAM authentication with hard deletes, following a capture so its new collect
 
 ```hcl
 resource "estuary_materialization_postgres" "replica" {
-  name = "aurora/replica"
+  name = "replica"
 
   source = {
     capture            = "acmeCo/aurora/source-amazon-aurora-postgres"
@@ -96,7 +97,7 @@ resource "estuary_materialization_postgres" "replica" {
   on_incompatible_schema_change = "disableBinding"
 
   config = {
-    address     = "replica.cluster-123456789.us-east-1.rds.amazonaws.com:5432"
+    address     = "123.4.567.89:5432"
     user        = "flow_materialize"
     database    = "replica"
     hard_delete = true
@@ -188,12 +189,13 @@ resource "estuary_materialization_postgres" "private" {
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | Yes | Materialization name (e.g., `analytics`). The provider `tenant` is added in front and `/materialize-postgres` at the end, unless they're already there. |
-| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/materialize-postgres:v5`, see [Connector Versions](../../../README.md#connector-versions). |
+| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/materialize-postgres:v5`, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
 | `source` | Object | No | Settings of the bindings Estuary adds, optionally following a capture. See [`source`](#source). |
 | `target_naming` | Object | No | How Estuary names the tables of the bindings it adds. See [`target_naming`](#target_naming). |
 | `on_incompatible_schema_change` | String | No | What an automated change, such as a capture discovery, does when it's incompatible with a materialized table: `backfill` (default) backfills the affected bindings, `disableBinding` disables them, `disableTask` disables the materialization, and `abort` stops the automated change. Bindings can override it. See [Schema Evolution](https://docs.estuary.dev/concepts/advanced/evolutions/#what-do-schema-evolutions-do). |
 | `config` | Object | Yes | Connection, authentication and default schema of the database. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Materialized collections, one per binding. See [`bindings`](#bindings). |
+| `backfill` | Object | No | Backfill control of the whole materialization. See [`backfill`](#backfill). |
 | `shards` | Dynamic | No | Shard settings of the materialization, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
 
 > [!WARNING]
@@ -205,10 +207,10 @@ resource "estuary_materialization_postgres" "private" {
 |---|---|---|---|
 | `capture` | String | No | Full name of a capture whose bindings the materialization follows (e.g., `acmeCo/aurora/source-amazon-aurora-postgres`). The provider `tenant` isn't added to it. Each collection added to the capture gets a binding here, and bindings removed from the capture are kept. |
 | `delta_updates` | Bool | No | Whether added bindings use delta updates. Defaults to `false`. |
-| `fields_recommended` | String | No | `fields.recommended` of added bindings: `"0"`, `"1"`, `"2"`, … or `"unlimited"`, see [`bindings.fields`](#bindingsfields). |
+| `fields_recommended` | String | No | `fields.recommended` of added bindings: `"0"`, `"1"`, `"2"`, … or `"unlimited"`, see [`bindings.fields`](#bindingsfields). Defaults to `"unlimited"`. |
 
 > [!TIP]
-> With `capture` set, Terraform manages only the bindings in your configuration and keeps the ones Estuary adds, see [Bindings Lifecycle](../../../README.md#bindings-lifecycle). The other settings only apply to bindings added after they're set, never to existing ones.
+> With `capture` set, Terraform manages only the bindings in your configuration and keeps the ones Estuary adds, see [Bindings Lifecycle](../../../README.md#bindings-lifecycle). The other settings only apply to bindings added after they're set, never to existing ones. Bindings Estuary adds get only these settings and [`target_naming`](#target_naming), not per-binding ones such as `fields.require` or `on_incompatible_schema_change`: declare a binding to give it those, and the plan warns about it when `capture` is set.
 
 ### `target_naming`
 
@@ -249,7 +251,7 @@ resource "estuary_materialization_postgres" "private" {
 | `aws_region` | String | With `AWSIAM` | AWS region of the database (e.g., `us-east-1`). |
 | `aws_role_arn` | String | With `AWSIAM` | ARN of the IAM role Estuary assumes to connect, see the [AWS IAM guide](https://docs.estuary.dev/guides/iam-auth/aws/). |
 | `gcp_service_account_to_impersonate` | String | With `GCPIAM` | Email of the Google Cloud service account used for IAM authentication. |
-| `gcp_workload_identity_pool_audience` | String | With `GCPIAM` | Audience of the workload identity pool, in the form `//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/<pool>/providers/<provider>`. |
+| `gcp_workload_identity_pool_audience` | String | With `GCPIAM` | Audience of the workload identity pool, in the form `//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/<pool>/providers/<provider>`. |
 | `azure_client_id` | String | With `AzureIAM` | Client ID of the Azure app registration used for Microsoft Entra authentication. |
 | `azure_tenant_id` | String | With `AzureIAM` | Azure tenant ID of the app registration. |
 
@@ -285,6 +287,14 @@ resource "estuary_materialization_postgres" "private" {
 | `sslmode` | String | No | Overrides the PostgreSQL `sslmode` connection parameter: `disable`, `allow`, `prefer`, `require`, `verify-ca` or `verify-full`. |
 | `no_flow_document` | Bool | No | Stops requiring the `flow_document` field in bindings with standard updates. Defaults to `false`, see [Field Selection](../../../README.md#field-selection). |
 | `feature_flags` | String | No | Connector settings for edge cases and experimental features, see [Feature Flags](https://docs.estuary.dev/guides/advanced-usage/feature-flags/). Intended for Estuary internal use: change them only as directed by Estuary support. |
+
+### `backfill`
+
+Backfill control of the whole materialization, as the dashboard's **Backfill** button under **Source Collections → Advanced options**. See [Backfill Control](../../../README.md#backfill-control).
+
+| Attribute | Type | Required | Description |
+|---|---|---|---|
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the materialization, those Estuary adds through `source.capture` included: each table is truncated and materialized again from its collection. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
 
 ### `bindings`
 

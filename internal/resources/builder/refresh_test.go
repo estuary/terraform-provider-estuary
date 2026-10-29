@@ -109,7 +109,13 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 			continue
 		}
 
-		if !readResp.State.Raw.Equal(want) {
+		stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		if !stateWithoutLive.Equal(want) {
 			test.Errorf("%s: refreshed state = %v, want %v", name, readResp.State.Raw, want)
 		}
 	}
@@ -154,7 +160,13 @@ func TestResourceReadRefreshesTheEntry(test *testing.T) {
 		test.Fatalf("read: %v", readResp.Diagnostics)
 	}
 
-	if !readResp.State.Raw.Equal(want) {
+	stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if !stateWithoutLive.Equal(want) {
 		test.Errorf("refreshed state = %v, want the live image, host, port and no auto discover %v", readResp.State.Raw, want)
 	}
 }
@@ -180,7 +192,13 @@ func TestResourceReadKeepsZeroValues(test *testing.T) {
 
 	entry.Read(context.Background(), resource.ReadRequest{State: readResp.State}, &readResp)
 
-	if readResp.Diagnostics.HasError() || !readResp.State.Raw.Equal(stateValue) {
+	stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if readResp.Diagnostics.HasError() || !stateWithoutLive.Equal(stateValue) {
 		test.Errorf("refreshed state = %v (%v), want disable = false kept as the live spec omits it", readResp.State.Raw, readResp.Diagnostics)
 	}
 }
@@ -224,7 +242,13 @@ func TestResourceReadLiveEntry(test *testing.T) {
 			test.Errorf("%s: warned = %v, want %v", name, warned, expected.warn)
 		}
 
-		if !expected.removed && !readResp.State.Raw.Equal(stateValue) {
+		stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		if !expected.removed && !stateWithoutLive.Equal(stateValue) {
 			test.Errorf("%s: state = %v, want it unchanged", name, readResp.State.Raw)
 		}
 	}
@@ -387,7 +411,7 @@ func TestCodecBindingChanges(test *testing.T) {
 	var path *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(0)
 	var users capture.Binding[testResource] = capture.Binding[testResource]{Resource: testResource{Table: "users"}, Target: "acmeCo/users"}
 
-	codec, err := NewCodec[captureDocument[testConfig, testResource]](testNamedConnector)
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
 
 	if err != nil {
 		test.Fatal(err)
@@ -442,13 +466,15 @@ func TestResourceModifyPlanWarnsAboutDiscoveredBindings(test *testing.T) {
 
 	expectations := map[string]struct {
 		autoDiscover *capture.AutoDiscover
+		prior        *capture.AutoDiscover
 		created      bool
 		want         int
 	}{
-		"warns on creation adding new bindings":  {&capture.AutoDiscover{AddNewBindings: true}, true, 1},
-		"skips creation not adding new bindings": {&capture.AutoDiscover{}, true, 0},
-		"skips creation without auto discover":   {nil, true, 0},
-		"skips updates even adding new bindings": {&capture.AutoDiscover{AddNewBindings: true}, false, 0},
+		"warns on creation adding new bindings":         {&capture.AutoDiscover{AddNewBindings: true}, nil, true, 1},
+		"skips creation not adding new bindings":        {&capture.AutoDiscover{}, nil, true, 0},
+		"skips creation without auto discover":          {nil, nil, true, 0},
+		"warns on updates starting to add new bindings": {&capture.AutoDiscover{AddNewBindings: true}, &capture.AutoDiscover{}, false, 1},
+		"skips updates already adding new bindings":     {&capture.AutoDiscover{AddNewBindings: true}, &capture.AutoDiscover{AddNewBindings: true}, false, 0},
 	}
 
 	for name, expected := range expectations {
@@ -468,7 +494,11 @@ func TestResourceModifyPlanWarnsAboutDiscoveredBindings(test *testing.T) {
 		var stateValue tftypes.Value = tftypes.NewValue(entry.codec.Schema().Type().TerraformType(ctx), nil)
 
 		if !expected.created {
-			stateValue = planValue
+			spec.AutoDiscover = expected.prior
+
+			if stateValue, err = entry.codec.Value("movies", spec); err != nil {
+				test.Fatal(err)
+			}
 		}
 
 		var modifyPlanReq resource.ModifyPlanRequest = resource.ModifyPlanRequest{
@@ -483,7 +513,7 @@ func TestResourceModifyPlanWarnsAboutDiscoveredBindings(test *testing.T) {
 		var found int
 
 		for _, warning := range modifyPlanResp.Diagnostics.Warnings() {
-			if warning.Summary() == "Auto discovery adds unmanaged bindings in acmeCo/movies/source-test" && strings.Contains(warning.Detail(), "declare a binding to manage it") {
+			if warning.Summary() == "Auto discovery adds unmanaged bindings in acmeCo/movies/source-test" && strings.Contains(warning.Detail(), "to manage one, declare it in bindings") {
 				found++
 			}
 		}
@@ -538,7 +568,13 @@ func TestResourceReadRefreshesSetShardSettings(test *testing.T) {
 			test.Fatalf("%s: read: %v", name, readResp.Diagnostics)
 		}
 
-		if !readResp.State.Raw.Equal(want) {
+		stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		if !stateWithoutLive.Equal(want) {
 			test.Errorf("%s: refreshed state = %v, want %v", name, readResp.State.Raw, want)
 		}
 	}
@@ -684,7 +720,75 @@ func TestResourceReadRefreshesLiveOnlyFields(test *testing.T) {
 		test.Fatalf("read: %v", readResp.Diagnostics)
 	}
 
-	if !readResp.State.Raw.Equal(want) {
+	stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if !stateWithoutLive.Equal(want) {
 		test.Errorf("refreshed state = %v, want the live only fields, without the empty ones nor the secrets", readResp.State.Raw)
+	}
+}
+
+func TestCodecLiveValueNullsUnencryptedSecrets(test *testing.T) {
+	var sealed map[string]any = liveCapture()
+
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	sealed["endpoint"] = map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com", "password": "hunter2"}}}
+
+	live, _, err := codec.liveValue("movies", sealed)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	password, err := attributeValue(live, tftypes.NewAttributePath().WithAttributeName("config").WithAttributeName("password"))
+
+	if err != nil || !password.IsNull() {
+		test.Errorf("live password = %v (%v), want null so refreshes never store it", password, err)
+	}
+
+	if host, _ := attributeValue(live, tftypes.NewAttributePath().WithAttributeName("config").WithAttributeName("host")); host.IsNull() {
+		test.Error("live host is null, want only secrets nulled")
+	}
+}
+
+func TestCodecLiveValueRedactsCredentials(test *testing.T) {
+	type credentialsConfig struct {
+		Address  string `yaml:"address" credentials:"forbidden"`
+		Password string `yaml:"password,omitempty"`
+	}
+
+	var sealed map[string]any = liveCapture()
+	var addressPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName("config").WithAttributeName("address")
+
+	codec, err := newCodec[captureDocument[credentialsConfig, testResource]](testNamedConnector, captureType[testResource]())
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	sealed["endpoint"] = map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"address": "mongodb://flow_capture:secret@123.4.567.89:27017"}}}
+
+	live, redactedPaths, err := codec.liveValue("movies", sealed)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	address, _ := attributeValue(live, addressPath)
+
+	if !address.Equal(tftypes.NewValue(tftypes.String, "mongodb://***@123.4.567.89:27017")) {
+		test.Errorf("live address = %v, want the credentials redacted", address)
+	}
+
+	if len(redactedPaths) != 1 || !redactedPaths[0].Equal(addressPath) {
+		test.Errorf("redacted paths = %v, want config.address", redactedPaths)
 	}
 }

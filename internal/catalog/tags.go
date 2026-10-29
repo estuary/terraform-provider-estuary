@@ -3,11 +3,12 @@ package catalog
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 )
 
 // sensitiveKeys are key fragments naming a secret.
-var sensitiveKeys = []string{
+var sensitiveKeys []string = []string{
 	"password",
 	"secret",
 	"token",
@@ -33,6 +34,30 @@ func FieldKey(field reflect.StructField) string {
 	return strings.Split(field.Tag.Get("yaml"), ",")[0]
 }
 
+// FieldInline reports whether a spec field's yaml tag inlines its struct fields into the parent.
+func FieldInline(field reflect.StructField) bool {
+	return yamlOption(field, "inline")
+}
+
+// FieldOmitEmpty reports whether a spec field's yaml tag omits its empty value.
+func FieldOmitEmpty(field reflect.StructField) bool {
+	return yamlOption(field, "omitempty")
+}
+
+// FieldDescription returns a spec field's description tag, empty without one.
+func FieldDescription(field reflect.StructField) string {
+	return field.Tag.Get("description")
+}
+
+// BackfillModeField reports whether a string field is a binding resource's backfill mode, by its backfill:"mode" tag.
+func BackfillModeField(field reflect.StructField) bool {
+	return stringField(field) && field.Tag.Get("backfill") == "mode"
+}
+
+func yamlOption(field reflect.StructField, option string) bool {
+	return slices.Contains(strings.Split(field.Tag.Get("yaml"), ",")[1:], option)
+}
+
 // SecretField reports whether a string field is secret, by its secret tag or its key.
 func SecretField(field reflect.StructField) bool {
 	return stringField(field) && (field.Tag.Get("secret") == "true" || IsSensitiveKey(FieldKey(field)))
@@ -49,13 +74,18 @@ func EnumValues(field reflect.StructField) ([]string, bool) {
 	return strings.Split(values, ","), true
 }
 
-// ValidateTags rejects secret and enum tags on non-string fields.
-func ValidateTags(field reflect.StructField) error {
-	_, secret := field.Tag.Lookup("secret")
-	_, enum := field.Tag.Lookup("enum")
+// ForbidsCredentials reports whether a string field, such as a connection URI, must not embed credentials, by its
+// credentials:"forbidden" tag.
+func ForbidsCredentials(field reflect.StructField) bool {
+	return stringField(field) && field.Tag.Get("credentials") == "forbidden"
+}
 
-	if (secret || enum) && !stringField(field) {
-		return fmt.Errorf("field %s: secret and enum tags only apply to strings, not %s", field.Name, field.Type)
+// ValidateTags rejects secret, enum, credentials and backfill tags on non-string fields.
+func ValidateTags(field reflect.StructField) error {
+	for _, tag := range []string{"secret", "enum", "credentials", "backfill"} {
+		if _, found := field.Tag.Lookup(tag); found && !stringField(field) {
+			return fmt.Errorf("field %s: secret, enum, credentials and backfill tags only apply to strings, not %s", field.Name, field.Type)
+		}
 	}
 
 	return nil

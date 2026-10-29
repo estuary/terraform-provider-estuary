@@ -8,8 +8,7 @@ variable "ssh_private_key" {
   sensitive = true
 }
 
-# Capture of two tables with password authentication, adding every new table
-# of the included database as it's discovered.
+# Password authentication with automatic discovery.
 resource "estuary_source_rds_mysql" "shop" {
   name = "rds"
 
@@ -50,8 +49,7 @@ resource "estuary_source_rds_mysql" "shop" {
   ]
 }
 
-# AWS IAM authentication, capturing every change event, with a high priority
-# table and a table captured without a backfill.
+# IAM authentication capturing every change event.
 resource "estuary_source_rds_mysql" "events" {
   name = "rds/events"
 
@@ -88,7 +86,7 @@ resource "estuary_source_rds_mysql" "events" {
   ]
 }
 
-# Connection through an SSH bastion host, verifying the server certificate.
+# SSH tunnel with a verified server certificate.
 resource "estuary_source_rds_mysql" "private" {
   name = "rds/private"
 

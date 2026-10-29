@@ -9,7 +9,7 @@ terraform {
   }
 }
 
-# The token is read from the FLOW_AUTH_TOKEN environment variable when unset. Check the project README for more details
+# Provider for the acmeCo/ tenant, authenticated by FLOW_AUTH_TOKEN.
 provider "estuary" {
   tenant = "acmeCo/"
 }

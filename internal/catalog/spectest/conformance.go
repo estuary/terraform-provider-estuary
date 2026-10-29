@@ -3,6 +3,7 @@ package spectest
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -228,7 +229,7 @@ func schemaRequired(schema map[string]any, root map[string]any) []string {
 
 // dropsValidZero reports whether a field omits a valid zero value, such as false or 0, when written.
 func dropsValidZero(field reflect.StructField) bool {
-	var omitEmpty bool = slices.Contains(strings.Split(field.Tag.Get("yaml"), ",")[1:], "omitempty")
+	var omitEmpty bool = catalog.FieldOmitEmpty(field)
 
 	switch field.Type.Kind() {
 	case reflect.Bool, reflect.Int, reflect.Int64, reflect.Float64:
@@ -266,7 +267,9 @@ func mappedFields(mapped reflect.Type) map[string]reflect.StructField {
 
 		var name string = catalog.FieldKey(field)
 
-		if name != "" && name != "-" {
+		if catalog.FieldInline(field) {
+			maps.Copy(fields, mappedFields(field.Type))
+		} else if name != "" && name != "-" {
 			fields[name] = field
 		}
 	}

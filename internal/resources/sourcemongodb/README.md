@@ -16,6 +16,7 @@ This resource manages a [MongoDB](https://docs.estuary.dev/reference/Connectors/
   - [`bindings`](#bindings)
   - [`bindings.backfill`](#bindingsbackfill)
   - [`bindings.resource`](#bindingsresource)
+- [Data Source](#data-source)
 
 ## Example Usage
 
@@ -157,10 +158,11 @@ resource "estuary_source_mongodb" "private" {
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | Yes | Capture name (e.g., `mongodb`). The provider `tenant` is added in front and `/source-mongodb` at the end, unless they're already there. |
-| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-mongodb:v3`, see [Connector Versions](../../../README.md#connector-versions). |
+| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-mongodb:v3`, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the deployment for new collections and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Connection and discovery settings of the MongoDB deployment. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Captured collections, one per binding. See [`bindings`](#bindings). |
+| `live_bindings` | List of Objects | Read-only | Every live binding, the declared ones and those discovery (`auto_discover`) adds, with the attributes of [`bindings`](#bindings). Refreshed on each plan, and planned with the binding changes the apply publishes. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
 | `shards` | Dynamic | No | Shard settings of the capture, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
 
@@ -183,14 +185,14 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, those Terraform doesn't manage included. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `address` | String | Yes | Connection URI of the deployment, without the username and password (e.g., `mongodb://my-mongo.test?authSource=admin`). |
+| `address` | String | Yes | Connection URI of the deployment, holding only the host and connection options (e.g., `mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin`). The plan rejects credentials in it, such as `user:password@` or a password option, as state and logs would hold them in plain text: set them in `user` and `password`. Credentials found in the live value, such as an address pasted in the dashboard, show as `***`, and the next apply replaces them with the configured value. |
 | `user` | String | Yes | Database user to connect as. |
 | `password` | String | Yes | Password of the database user. Write-only, see the note above. |
 | `password_hash` | String | Read-only | Salted hash of `password`, used to detect when it changes. |
@@ -247,3 +249,21 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 | `capture_mode` | String | No | How the collection is captured: `Change Stream Incremental` (default), `Batch Snapshot` or `Batch Incremental`. |
 | `cursor_field` | String | No | Field used as the cursor of batch capture modes, which require it. It should be indexed. With `Batch Incremental`, every document must have it and its values must strictly increase. |
 | `poll_schedule` | String | No | Polling schedule of a batch binding, overriding `config.poll_schedule`. Same format, defaults to `config.poll_schedule`. |
+
+## Data Source
+
+`data "estuary_source_mongodb"` reads the live bindings of a capture by name without managing it, such as a capture managed in another configuration or outside Terraform:
+
+```hcl
+data "estuary_source_mongodb" "source" {
+  name = "mongodb"
+}
+```
+
+| Attribute | Type | Required | Description |
+|---|---|---|---|
+| `name` | String | Yes | Capture name, as in the resource: the provider `tenant` is added in front and `/source-mongodb` at the end, unless they're already there. |
+| `live_bindings` | List of Objects | Read-only | Every live binding of the capture, with the attributes of [`bindings`](#bindings). |
+
+> [!WARNING]
+> For a capture managed in the same configuration, use the resource's `live_bindings` instead. A data source referencing the resource is read at apply whenever the capture has changes, so everything built from it shows as known after apply. Reading fails when the capture doesn't exist, rather than listing no bindings.

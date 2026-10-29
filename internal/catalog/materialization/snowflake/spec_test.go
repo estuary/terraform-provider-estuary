@@ -120,29 +120,14 @@ func TestSampleBindings(test *testing.T) {
 
 	var bindings []Binding = specs["acmeCo/analytics/materialize-snowflake"].Bindings
 
-	expectations := []struct {
-		resource Resource
-		exclude  []string
-	}{
-		{Resource{Table: "orders"}, nil},
-		{Resource{Table: "customers", Schema: "crm", Clustering: "region,created_at"}, nil},
-		{Resource{Table: "events", DeltaUpdates: true}, []string{"payload"}},
-	}
+	spectest.AssertMaterializationResources(test, bindings, []Resource{
+		{Table: "orders"},
+		{Table: "customers", Schema: "crm", Clustering: "region,created_at"},
+		{Table: "events", DeltaUpdates: true},
+	})
 
-	if len(bindings) != len(expectations) {
-		test.Fatalf("got %d bindings, want %d", len(bindings), len(expectations))
-	}
-
-	for index, expected := range expectations {
-		var binding Binding = bindings[index]
-
-		if binding.Resource != expected.resource {
-			test.Errorf("binding %d resource = %+v, want %+v", index, binding.Resource, expected.resource)
-		}
-
-		if expected.exclude != nil && (binding.Fields == nil || !slices.Equal(binding.Fields.Exclude, expected.exclude)) {
-			test.Errorf("binding %d fields = %+v, want exclude %v", index, binding.Fields, expected.exclude)
-		}
+	if bindings[2].Fields == nil || !slices.Equal(bindings[2].Fields.Exclude, []string{"payload"}) {
+		test.Errorf("events fields = %+v, want exclude [payload]", bindings[2].Fields)
 	}
 }
 
@@ -150,6 +135,7 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 	var host *regexp.Regexp = regexp.MustCompile(`^[^/:]+.snowflakecomputing.com$`)
 	var authTypes *spectest.EnumSamples[AuthType] = spectest.NewEnumSamples(test, "auth_type", AuthTypes)
 	var timestampTypes *spectest.EnumSamples[TimestampType] = spectest.NewEnumSamples(test, "timestamp_type", TimestampTypes)
+	var dbtModes *spectest.EnumSamples[materialization.DBTJobTriggerMode] = spectest.NewEnumSamples(test, "dbt_job_trigger mode", materialization.DBTJobTriggerModes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
@@ -175,8 +161,8 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 
 			timestampTypes.Add(name, config.TimestampType)
 
-			if config.DBTJobTrigger != nil && config.DBTJobTrigger.Mode != "" && !slices.Contains(materialization.DBTJobTriggerModes, config.DBTJobTrigger.Mode) {
-				test.Errorf("%s: dbt_job_trigger mode %q is not in DBTJobTriggerModes", name, config.DBTJobTrigger.Mode)
+			if config.DBTJobTrigger != nil && config.DBTJobTrigger.Mode != "" {
+				dbtModes.Add(name, config.DBTJobTrigger.Mode)
 			}
 		}
 	}

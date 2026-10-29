@@ -20,6 +20,7 @@ It runs the same connector as [`estuary_source_aurora_postgres`](../sourceaurora
   - [`bindings`](#bindings)
   - [`bindings.backfill`](#bindingsbackfill)
   - [`bindings.resource`](#bindingsresource)
+- [Data Source](#data-source)
 
 ## Example Usage
 
@@ -171,10 +172,11 @@ resource "estuary_source_rds_postgres" "private" {
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | Yes | Capture name (e.g., `rds`). The provider `tenant` is added in front and `/source-amazon-rds-postgres` at the end, unless they're already there. |
-| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-amazon-rds-postgres:v3`, see [Connector Versions](../../../README.md#connector-versions). |
+| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-amazon-rds-postgres:v3`, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the database for new tables and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Connection, authentication and replication settings of the database. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Captured tables, one per binding. See [`bindings`](#bindings). |
+| `live_bindings` | List of Objects | Read-only | Every live binding, the declared ones and those discovery (`auto_discover`) adds, with the attributes of [`bindings`](#bindings). Refreshed on each plan, and planned with the binding changes the apply publishes. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
 | `shards` | Dynamic | No | Shard settings of the capture, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
 
@@ -197,7 +199,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, those Terraform doesn't manage included. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
@@ -225,7 +227,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | `aws_region` | String | With `AWSIAM` | AWS region of the instance (e.g., `us-east-1`). |
 | `aws_role_arn` | String | With `AWSIAM` | ARN of the IAM role Estuary assumes to connect, see the [AWS IAM guide](https://docs.estuary.dev/guides/iam-auth/aws/). |
 | `gcp_service_account_to_impersonate` | String | With `GCPIAM` | Email of the Google Cloud service account used for IAM authentication. |
-| `gcp_workload_identity_pool_audience` | String | With `GCPIAM` | Audience of the workload identity pool, in the form `//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/<pool>/providers/<provider>`. |
+| `gcp_workload_identity_pool_audience` | String | With `GCPIAM` | Audience of the workload identity pool, in the form `//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/<pool>/providers/<provider>`. |
 | `azure_client_id` | String | With `AzureIAM` | Client ID of the Azure app registration used for Microsoft Entra authentication. |
 | `azure_tenant_id` | String | With `AzureIAM` | Azure tenant ID of the app registration. |
 
@@ -306,3 +308,21 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 | `primary_key` | List of Strings | No | Columns used to order the backfill and merge changes, overriding the collection key. Rarely needed. |
 | `advanced` | Object | No | Rarely needed options of the binding. |
 | `advanced.additional_backfill_filter` | String | No | SQL filter clause applied to every backfill query of the table, so the rows it excludes are never backfilled. It can't be used with the `Precise` mode, and combines with `config.advanced.min_backfill_xid`. Setting or changing it requires a backfill of the binding. Contact Estuary support before using it. |
+
+## Data Source
+
+`data "estuary_source_rds_postgres"` reads the live bindings of a capture by name without managing it, such as a capture managed in another configuration or outside Terraform:
+
+```hcl
+data "estuary_source_rds_postgres" "source" {
+  name = "rds"
+}
+```
+
+| Attribute | Type | Required | Description |
+|---|---|---|---|
+| `name` | String | Yes | Capture name, as in the resource: the provider `tenant` is added in front and `/source-amazon-rds-postgres` at the end, unless they're already there. |
+| `live_bindings` | List of Objects | Read-only | Every live binding of the capture, with the attributes of [`bindings`](#bindings). |
+
+> [!WARNING]
+> For a capture managed in the same configuration, use the resource's `live_bindings` instead. A data source referencing the resource is read at apply whenever the capture has changes, so everything built from it shows as known after apply. Reading fails when the capture doesn't exist, rather than listing no bindings.

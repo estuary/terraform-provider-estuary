@@ -13,9 +13,7 @@ variable "dbt_api_key" {
   sensitive = true
 }
 
-# Materialization of three collections with password authentication: one into
-# another schema with a reduced field selection keyed by other fields, and one
-# with delta updates that skips the documents published before 2026.
+# Password authentication with per-binding field selection and delta updates.
 resource "estuary_materialization_postgres" "analytics" {
   name = "analytics"
 
@@ -60,13 +58,9 @@ resource "estuary_materialization_postgres" "analytics" {
   ]
 }
 
-# AWS IAM authentication with hard deletes, following a capture so its new
-# collections are materialized as they're added, into tables named after their
-# source schema and table. An incompatible schema change disables the affected
-# binding instead of backfilling it, and one table materializes every field and
-# gets an index.
+# IAM authentication following a capture, with hard deletes.
 resource "estuary_materialization_postgres" "replica" {
-  name = "aurora/replica"
+  name = "replica"
 
   source = {
     capture            = "acmeCo/aurora/source-amazon-aurora-postgres"
@@ -81,7 +75,7 @@ resource "estuary_materialization_postgres" "replica" {
   on_incompatible_schema_change = "disableBinding"
 
   config = {
-    address     = "replica.cluster-123456789.us-east-1.rds.amazonaws.com:5432"
+    address     = "123.4.567.89:5432"
     user        = "flow_materialize"
     database    = "replica"
     hard_delete = true
@@ -107,8 +101,7 @@ resource "estuary_materialization_postgres" "replica" {
   ]
 }
 
-# Connection through an SSH bastion host, triggering a dbt Cloud job when new
-# data is materialized.
+# SSH tunnel with a dbt Cloud job trigger.
 resource "estuary_materialization_postgres" "private" {
   name = "warehouse"
 

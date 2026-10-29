@@ -5,18 +5,27 @@ import (
 )
 
 const nameAttribute string = "name"
+const imageAttribute string = "image"
 const disableAttribute string = "disable"
 const shardsAttribute string = "shards"
 
 const bindingsAttribute string = "bindings"
+const bindingResourceAttribute string = "resource"
 const bindingTargetAttribute string = "target"
 const bindingSourceAttribute string = "source"
 const bindingNameAttribute string = "name"
+const liveBindingsAttribute string = "live_bindings"
 
 const backfillAttribute string = "backfill"
 const backfillTriggerAttribute string = "trigger"
 const backfillStrategyAttribute string = "strategy"
 const backfillModeAttribute string = "mode"
+
+// bindingsPath is the path of the bindings attribute.
+var bindingsPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(bindingsAttribute)
+
+// liveBindingsPath is the path of the live_bindings attribute.
+var liveBindingsPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(liveBindingsAttribute)
 
 // known converts a value, reporting false when it is null, unknown or of another type.
 func known[T any](value tftypes.Value) (T, bool) {

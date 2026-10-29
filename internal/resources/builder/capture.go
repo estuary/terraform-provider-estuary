@@ -7,6 +7,8 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/capture"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/builder/translator"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 )
@@ -18,24 +20,64 @@ type CaptureSpec[C, R any] = capture.Spec[endpoint.ConnectorSpec[C], R]
 type captureDocument[C, R any] struct {
 	Name         string                `yaml:"name"`
 	Image        string                `yaml:"image,omitempty"`
-	AutoDiscover *capture.AutoDiscover `yaml:"autoDiscover,omitempty"`
-	Config       C                     `yaml:"config"`
-	Bindings     []captureBinding[R]   `yaml:"bindings"`
-	Shards       catalog.Shards        `yaml:"shards,omitempty"`
-	Backfill     *captureBackfill      `yaml:"backfill,omitempty"`
+	AutoDiscover *capture.AutoDiscover `yaml:"autoDiscover,omitempty" description:"Periodically checks the source for new resources and schema changes."`
+	Config       C                     `yaml:"config" description:"Connection, authentication and capture settings of the source."`
+	Bindings     []captureBinding[R]   `yaml:"bindings" description:"Captured resources, one per binding."`
+	Shards       catalog.Shards        `yaml:"shards,omitempty" description:"Shard settings of the capture, with Estuary keys such as logLevel and disable."`
+	Backfill     *captureBackfill      `yaml:"backfill,omitempty" description:"Backfill control of the whole capture."`
 }
 
 // captureBinding is the Terraform shape of a capture binding, with its backfill settings in a backfill block.
 type captureBinding[R any] struct {
-	Resource R                       `yaml:"resource"`
+	Resource R                       `yaml:"resource" description:"Source resource the binding captures, such as a table or collection."`
 	Target   string                  `yaml:"target"`
-	Disable  bool                    `yaml:"disable,omitempty"`
-	Backfill *captureBindingBackfill `yaml:"backfill,omitempty"`
+	Disable  bool                    `yaml:"disable,omitempty" description:"Stops capturing the resource while keeping the binding in the capture."`
+	Backfill *captureBindingBackfill `yaml:"backfill,omitempty" description:"Backfill control of the binding."`
+}
+
+// captureAddedBindings describes the bindings auto discovery adds.
+var captureAddedBindings addedBindings = addedBindings{
+	setting:  path.Root("auto_discover").AtName("add_new_bindings"),
+	summary:  "Auto discovery adds unmanaged bindings",
+	origin:   "discovered resource",
+	growth:   "later discoveries find new ones",
+	readding: "the next discovery may add them back as long as their source resources exist",
+	stopping: "capturing",
+}
+
+// captureType returns the capture catalog type of binding resource R: it lists every live binding, and holds each
+// binding backfill mode in its backfill block rather than in its resource.
+func captureType[R any]() catalogType {
+	var key string = backfillModeKey[R]()
+
+	return catalogType{
+		name:              "capture",
+		added:             captureAddedBindings,
+		publish:           publishCapture,
+		listsLiveBindings: true,
+		backfillModeKey:   key,
+		adjustAttributes:  adjustCaptureAttributes[R],
+		toSpecShape: func(document map[string]any) {
+			if key != "" {
+				moveField(document[bindingsAttribute], backfillAttribute, backfillModeAttribute, bindingResourceAttribute, key)
+			}
+		},
+		toTerraformShape: func(document map[string]any) {
+			if key != "" {
+				moveField(document[bindingsAttribute], bindingResourceAttribute, key, backfillAttribute, backfillModeAttribute)
+			}
+		},
+	}
 }
 
 // NewCapture returns the resource factory of a connector capture.
 func NewCapture[C, R any](connector Connector) func() resource.Resource {
-	return newResource[captureDocument[C, R], CaptureSpec[C, R]](connector, "capture", publishCapture)
+	return newResource[captureDocument[C, R], CaptureSpec[C, R]](connector, captureType[R]())
+}
+
+// NewCaptureDataSource returns the data source factory reading the live bindings of a connector capture by name.
+func NewCaptureDataSource[C, R any](connector Connector) func() datasource.DataSource {
+	return newDataSource[captureDocument[C, R], CaptureSpec[C, R]](connector, captureType[R]())
 }
 
 // Spec returns the capture catalog name and spec, nesting image and config under endpoint.connector.
@@ -85,9 +127,9 @@ func (captureDocument[C, R]) FromSpec(name string, spec CaptureSpec[C, R]) captu
 	}
 }
 
-// adjustAttributes moves the resource backfill mode into the binding backfill block, and makes the target optional
-// when resources have a resource path.
-func (captureDocument[C, R]) adjustAttributes(attributes map[string]schema.Attribute) {
+// adjustCaptureAttributes moves the resource backfill mode into the binding backfill block, and makes the target
+// optional when resources have a resource path.
+func adjustCaptureAttributes[R any](attributes map[string]schema.Attribute) {
 	var resource R
 
 	bindings, isList := attributes[bindingsAttribute].(schema.ListNestedAttribute)
@@ -96,7 +138,7 @@ func (captureDocument[C, R]) adjustAttributes(attributes map[string]schema.Attri
 		return
 	}
 
-	resourceAttribute, hasResource := bindings.NestedObject.Attributes["resource"].(schema.SingleNestedAttribute)
+	resourceAttribute, hasResource := bindings.NestedObject.Attributes[bindingResourceAttribute].(schema.SingleNestedAttribute)
 	block, hasBlock := bindings.NestedObject.Attributes[backfillAttribute].(schema.SingleNestedAttribute)
 
 	if hasResource && hasBlock {
@@ -121,25 +163,6 @@ func (captureDocument[C, R]) adjustAttributes(attributes map[string]schema.Attri
 	}
 
 	attributes[bindingsAttribute] = bindings
-}
-
-// resourceBackfillMode returns the spec key of the resource backfill mode, empty without one.
-func (captureDocument[C, R]) resourceBackfillMode() string {
-	return backfillModeKey[R]()
-}
-
-// toSpecShape moves each binding backfill mode from its backfill block into its resource.
-func (captureDocument[C, R]) toSpecShape(document map[string]any) {
-	if key := backfillModeKey[R](); key != "" {
-		moveField(document[bindingsAttribute], backfillAttribute, backfillModeAttribute, "resource", key)
-	}
-}
-
-// toTerraformShape moves each binding backfill mode from its resource into its backfill block.
-func (captureDocument[C, R]) toTerraformShape(document map[string]any) {
-	if key := backfillModeKey[R](); key != "" {
-		moveField(document[bindingsAttribute], "resource", key, backfillAttribute, backfillModeAttribute)
-	}
 }
 
 func publishCapture(ctx context.Context, backend catalog.Backend, name string, document map[string]any, publication publication) error {

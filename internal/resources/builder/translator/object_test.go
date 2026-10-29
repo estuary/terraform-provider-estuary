@@ -3,6 +3,7 @@ package translator
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
@@ -115,6 +116,92 @@ func TestObjectReadsYAMLStringTypesFromOtherScalars(test *testing.T) {
 
 		if err != nil || !value.Equal(tftypes.NewValue(objectType, map[string]tftypes.Value{"recommended": tftypes.NewValue(tftypes.String, want)})) {
 			test.Errorf("recommended %v = %v (%v), want %q", written, value, err, want)
+		}
+	}
+}
+
+func TestObjectRejectsCredentialsInForbiddingFields(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	type fields struct {
+		Address string `yaml:"address" credentials:"forbidden"`
+	}
+
+	object, err := NewObject(reflect.TypeFor[fields]())
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	attribute, _ := object.Attributes()["address"].(schema.StringAttribute)
+
+	expectations := map[string]bool{
+		"mongodb+srv://cluster0.123456789.mongodb.net":                               true,
+		"mongodb://123.4.567.89:27017/?authSource=admin&tls=true":                    true,
+		"mongodb://123.4.567.89:27017/?authMechanismProperties=SERVICE_NAME:mongodb": true,
+		"123.4.567.89:27017": true,
+		"mongodb://flow_capture:secret@123.4.567.89:27017":                                           false,
+		"mongodb+srv://flow_capture@cluster0.123456789.mongodb.net":                                  false,
+		"flow_capture:secret@123.4.567.89:27017":                                                     false,
+		"mongodb:/flow_capture:secret@123.4.567.89:27017":                                            false,
+		"mongodb://flow_capture:sec/ret@123.4.567.89:27017":                                          false,
+		"mongodb://flow_capture:sec?ret@123.4.567.89:27017":                                          false,
+		"mongodb://flow_capture:sec#ret@123.4.567.89:27017":                                          false,
+		"mongodb://123.4.567.89:27017/db#user@fragment":                                              false,
+		"mongodb://123.4.567.89:27017/?tlsCertificateKeyFilePassword=x":                              false,
+		"mongodb://123.4.567.89:27017/?authSource=admin&password=secret":                             false,
+		"mongodb://123.4.567.89:27017/?authSource=admin;tlsCertificateKeyFilePassword=x":             false,
+		"mongodb://123.4.567.89:27017/?PASSWORD=x":                                                   false,
+		"mongodb://123.4.567.89:27017/?%70assword=x":                                                 false,
+		"mongodb://123.4.567.89:27017/?authMechanismProperties=AWS_SESSION_TOKEN:abc":                false,
+		"mongodb://123.4.567.89:27017/?authMechanismProperties=SERVICE_NAME:a,AWS_SESSION_TOKEN:abc": false,
+		"mongodb://***@123.4.567.89:27017":                                                           false,
+		"mongodb://123.4.567.89:27017/?password=***":                                                 false,
+		"flow_capture:secret@123.4.567.89:27017/?appName=http://x":                                   false,
+	}
+
+	for address, valid := range expectations {
+		var validateResp validator.StringResponse
+
+		for _, check := range attribute.Validators {
+			check.ValidateString(ctx, validator.StringRequest{Path: path.Root("address"), ConfigValue: types.StringValue(address)}, &validateResp)
+		}
+
+		if validateResp.Diagnostics.HasError() == valid {
+			test.Errorf("address %q: diagnostics %v, want valid %v", address, validateResp.Diagnostics, valid)
+		}
+
+		for _, diagnostic := range validateResp.Diagnostics {
+			if strings.Contains(diagnostic.Detail(), "secret") || strings.Contains(diagnostic.Summary(), "secret") {
+				test.Errorf("address %q: diagnostic %q echoes the credentials", address, diagnostic.Detail())
+			}
+		}
+	}
+}
+
+func TestRedactCredentials(test *testing.T) {
+	expectations := map[string]string{
+		"mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin":                                 "mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin",
+		"mongodb://flow_capture:secret@123.4.567.89:27017":                                              "mongodb://***@123.4.567.89:27017",
+		"mongodb://flow_capture:sec/ret@123.4.567.89:27017/db":                                          "mongodb://***@123.4.567.89:27017/db",
+		"flow_capture:secret@123.4.567.89:27017":                                                        "***@123.4.567.89:27017",
+		"mongodb://***@123.4.567.89:27017":                                                              "mongodb://***@123.4.567.89:27017",
+		"mongodb://123.4.567.89:27017/?authSource=admin&password=secret#frag":                           "mongodb://123.4.567.89:27017/?authSource=admin&password=***",
+		"mongodb://123.4.567.89:27017/?tls=true;tlsCertificateKeyFilePassword=secret":                   "mongodb://123.4.567.89:27017/?tls=true;tlsCertificateKeyFilePassword=***",
+		"mongodb://123.4.567.89:27017/?authMechanismProperties=SERVICE_NAME:a,AWS_SESSION_TOKEN:secret": "mongodb://123.4.567.89:27017/?authMechanismProperties=SERVICE_NAME:a,AWS_SESSION_TOKEN:***",
+		"flow_capture:secret@123.4.567.89:27017/?appName=http://x":                                      "***@123.4.567.89:27017/?appName=http://x",
+		"flow_capture:sec://ret@123.4.567.89:27017":                                                     "***@123.4.567.89:27017",
+		"mongodb://123.4.567.89:27017/?password=sec#ret":                                                "mongodb://123.4.567.89:27017/?password=***",
+		"mongodb://123.4.567.89:27017/?tls=true#fragment":                                               "mongodb://123.4.567.89:27017/?tls=true#fragment",
+	}
+
+	for value, want := range expectations {
+		if got := RedactCredentials(value); got != want {
+			test.Errorf("RedactCredentials(%q) = %q, want %q", value, got, want)
+		}
+
+		if again := RedactCredentials(want); again != want {
+			test.Errorf("RedactCredentials(%q) = %q, want it stable", want, again)
 		}
 	}
 }

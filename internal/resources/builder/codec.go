@@ -4,11 +4,16 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"regexp"
+	"strings"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/builder/translator"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
@@ -25,32 +30,54 @@ type Document[D, S any] interface {
 	FromSpec(name string, spec S) D
 }
 
-// attributesAdjuster is implemented by documents changing their inferred attributes.
-type attributesAdjuster interface {
-	adjustAttributes(attributes map[string]schema.Attribute)
-}
-
-// backfillModeHolder is implemented by documents whose binding resources hold a backfill mode.
-type backfillModeHolder interface {
-	resourceBackfillMode() string
-}
-
-// shapeMover is implemented by documents placing fields elsewhere than their spec, moving them in both directions.
-type shapeMover interface {
-	toSpecShape(document map[string]any)
-	toTerraformShape(document map[string]any)
-}
-
 // Codec converts a catalog entry between Terraform values and its catalog spec.
 type Codec[D Document[D, S], S any] struct {
-	root      *translator.Object
-	schema    schema.Schema
-	secrets   secrets
-	valueType tftypes.Type
+	catalogType catalogType
+	root        *translator.Object
+	schema      schema.Schema
+	secrets     secrets
+	valueType   tftypes.Type
 }
 
-// NewCodec builds the node tree and Terraform schema from the spec YAML tags.
-func NewCodec[D Document[D, S], S any](connector Connector) (*Codec[D, S], error) {
+// nameDescription describes the name attribute of the resources and data sources of a catalog type.
+func (catalogType catalogType) nameDescription() string {
+	return "Catalog name of the " + catalogType.name + " (e.g., shop). The provider adds the tenant in front and the " +
+		"connector name at the end, unless they're already there."
+}
+
+// imageTagPattern matches an OCI image tag.
+const imageTagPattern string = `[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}`
+
+// repository returns the default image without its tag, reporting false when it has none.
+func (connector Connector) repository() (string, bool) {
+	var separator int = strings.LastIndex(connector.Image, ":")
+
+	if separator <= 0 || strings.Contains(connector.Image[separator:], "/") {
+		return "", false
+	}
+
+	return connector.Image[:separator], true
+}
+
+// typeName returns the Terraform type name of the connector under the provider type name.
+func (connector Connector) typeName(providerTypeName string) string {
+	return providerTypeName + "_" + connector.TypeName
+}
+
+// catalogName returns the full catalog name of name, with the session tenant, empty until configured, and the
+// connector name.
+func (connector Connector) catalogName(session *catalog.Session, name string) string {
+	var tenant string
+
+	if session != nil {
+		tenant = session.Tenant
+	}
+
+	return catalog.CatalogName(tenant, name, connector.ConnectorName)
+}
+
+// newCodec builds the node tree and Terraform schema from the spec YAML tags.
+func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogType) (*Codec[D, S], error) {
 	root, err := translator.NewObject(reflect.TypeFor[D]())
 
 	if err != nil {
@@ -59,18 +86,17 @@ func NewCodec[D Document[D, S], S any](connector Connector) (*Codec[D, S], error
 
 	var attributes map[string]schema.Attribute = root.Attributes()
 
-	if _, found := attributes["name"]; !found {
+	if _, found := attributes[nameAttribute]; !found {
 		return nil, fmt.Errorf("building %s schema: the document has no name", connector.TypeName)
 	}
 
-	attributes["name"] = schema.StringAttribute{
-		Description: "Estuary object name, e.g. acmeCo/orders. The tenant is prefixed and the connector name appended unless already present. " +
-			"Changing the resulting catalog name replaces the catalog entry.",
-		Required: true,
+	attributes[nameAttribute] = schema.StringAttribute{
+		Description: catalogType.nameDescription() + " Changing the resulting catalog name replaces the " + catalogType.name + ".",
+		Required:    true,
 	}
 
-	if adjuster, isAdjuster := any(*new(D)).(attributesAdjuster); isAdjuster {
-		adjuster.adjustAttributes(attributes)
+	if catalogType.adjustAttributes != nil {
+		catalogType.adjustAttributes(attributes)
 	}
 
 	if bindings, isList := attributes[bindingsAttribute].(schema.ListNestedAttribute); isList {
@@ -81,6 +107,10 @@ func NewCodec[D Document[D, S], S any](connector Connector) (*Codec[D, S], error
 		}
 
 		attributes[bindingsAttribute] = bindings
+
+		if catalogType.listsLiveBindings {
+			attributes[liveBindingsAttribute] = liveBindingsSchema(bindings)
+		}
 	}
 
 	if shards, isDynamic := attributes[shardsAttribute].(schema.DynamicAttribute); isDynamic {
@@ -89,16 +119,22 @@ func NewCodec[D Document[D, S], S any](connector Connector) (*Codec[D, S], error
 		attributes[shardsAttribute] = shards
 	}
 
-	if _, found := attributes["image"]; found {
-		if connector.Image == "" {
-			return nil, fmt.Errorf("building %s schema: the connector has no default image", connector.TypeName)
+	if _, found := attributes[imageAttribute]; found {
+		repository, isTagged := connector.repository()
+
+		if !isTagged {
+			return nil, fmt.Errorf("building %s schema: the connector has no default image with a tag", connector.TypeName)
 		}
 
-		attributes["image"] = schema.StringAttribute{
-			Description: "Connector image, defaulting to " + connector.Image + ".",
+		attributes[imageAttribute] = schema.StringAttribute{
+			Description: "Connector image, defaulting to " + connector.Image + ". Only the tag can change, e.g. " + repository + ":dev.",
 			Optional:    true,
 			Computed:    true,
 			Default:     stringdefault.StaticString(connector.Image),
+			Validators: []validator.String{
+				stringvalidator.RegexMatches(regexp.MustCompile(`^`+regexp.QuoteMeta(repository)+`:`+imageTagPattern+`$`),
+					"must be "+repository+" with a tag, such as "+connector.Image),
+			},
 		}
 	}
 
@@ -107,10 +143,11 @@ func NewCodec[D Document[D, S], S any](connector Connector) (*Codec[D, S], error
 	}
 
 	return &Codec[D, S]{
-		root:      root,
-		schema:    resourceSchema,
-		secrets:   secrets{schema: resourceSchema},
-		valueType: resourceSchema.Type().TerraformType(context.Background()),
+		catalogType: catalogType,
+		root:        root,
+		schema:      resourceSchema,
+		secrets:     secrets{schema: resourceSchema},
+		valueType:   resourceSchema.Type().TerraformType(context.Background()),
 	}, nil
 }
 
@@ -145,10 +182,10 @@ func (codec *Codec[D, S]) Spec(value tftypes.Value) (string, S, error) {
 		return "", empty, err
 	}
 
-	if mover, isMover := any(*new(D)).(shapeMover); isMover {
+	if codec.catalogType.toSpecShape != nil {
 		object, _ := converted.(map[string]any)
 
-		mover.toSpecShape(object)
+		codec.catalogType.toSpecShape(object)
 	}
 
 	document, err := decode[D](converted, true)
@@ -194,8 +231,8 @@ func (codec *Codec[D, S]) Value(name string, spec S) (tftypes.Value, error) {
 		return tftypes.Value{}, err
 	}
 
-	if mover, isMover := any(document).(shapeMover); isMover {
-		mover.toTerraformShape(decoded)
+	if codec.catalogType.toTerraformShape != nil {
+		codec.catalogType.toTerraformShape(decoded)
 	}
 
 	value, err := codec.root.TerraformValue(decoded, codec.valueType)

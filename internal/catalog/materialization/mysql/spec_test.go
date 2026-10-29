@@ -1,7 +1,6 @@
 package mysql
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: ImageMySQL, Name: ConnectorNameMySQL}, spectest.Connector{Image: ImageAmazonAurora, Name: ConnectorNameAmazonAurora}, spectest.Connector{Image: ImageAmazonRDS, Name: ConnectorNameAmazonRDS})
 }
 
 func TestEnumTagsMatchLists(test *testing.T) {
@@ -22,14 +21,17 @@ func TestSampleVariants(test *testing.T) {
 	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
 
 	expectations := map[string]struct {
+		image     string
 		sslMode   sslmode.MySQL
 		timezone  string
 		sshTunnel bool
 	}{
-		"acmeCo/mysql/password":   {"", "", false},
-		"acmeCo/mysql/verify-ca":  {sslmode.MySQLVerifyCA, "", false},
-		"acmeCo/mysql/ssh-tunnel": {"", "", true},
-		"acmeCo/mysql/timezone":   {"", "America/New_York", false},
+		"acmeCo/mysql/password":     {ImageMySQL, "", "", false},
+		"acmeCo/mysql/verify-ca":    {ImageMySQL, sslmode.MySQLVerifyCA, "", false},
+		"acmeCo/mysql/ssh-tunnel":   {ImageMySQL, "", "", true},
+		"acmeCo/aurora/mysql-tls":   {ImageAmazonAurora, sslmode.MySQLRequired, "", false},
+		"acmeCo/rds/mysql-password": {ImageAmazonRDS, "", "", false},
+		"acmeCo/rds/mysql-timezone": {ImageAmazonRDS, "", "America/New_York", false},
 	}
 
 	if len(specs) != len(expectations) {
@@ -45,6 +47,10 @@ func TestSampleVariants(test *testing.T) {
 			}
 
 			var config Config = spec.Endpoint.Connector.Config
+
+			if spec.Endpoint.Connector.Image != expected.image {
+				test.Errorf("image = %q, want %q", spec.Endpoint.Connector.Image, expected.image)
+			}
 
 			var sslMode sslmode.MySQL
 
@@ -96,24 +102,16 @@ func TestSampleBindings(test *testing.T) {
 
 	var bindings []Binding = specs["acmeCo/analytics/materialize-mysql"].Bindings
 
-	expectations := []Resource{
+	spectest.AssertMaterializationResources(test, bindings, []Resource{
 		{Table: "orders"},
 		{Table: "customers", AdditionalTableCreateSQL: "CREATE INDEX customers_email ON customers (email);"},
 		{Table: "events", DeltaUpdates: true},
-	}
-
-	if len(bindings) != len(expectations) {
-		test.Fatalf("got %d bindings, want %d", len(bindings), len(expectations))
-	}
-
-	for index, expected := range expectations {
-		if bindings[index].Resource != expected {
-			test.Errorf("binding %d resource = %+v, want %+v", index, bindings[index].Resource, expected)
-		}
-	}
+	})
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
+	var sslModes *spectest.EnumSamples[sslmode.MySQL] = spectest.NewEnumSamples(test, "sslmode", sslmode.MySQLModes)
+
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
 
@@ -130,8 +128,8 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 
 			var sslMode sslmode.MySQL = config.Advanced.SSLMode
 
-			if sslMode != "" && !slices.Contains(sslmode.MySQLModes, sslMode) {
-				test.Errorf("%s: sslmode %q is not in sslmode.MySQLModes", name, sslMode)
+			if sslMode != "" {
+				sslModes.Add(name, sslMode)
 			}
 
 			if (sslMode == sslmode.MySQLVerifyCA || sslMode == sslmode.MySQLVerifyIdentity) && config.Advanced.SSLServerCA == "" {

@@ -2,9 +2,11 @@ package builder
 
 import (
 	"context"
+	"sync"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
@@ -13,46 +15,45 @@ type liveReader func() (tftypes.Value, bool)
 
 // newLiveReader returns the liveReader of the entry in state, skipping entries not created yet.
 func (entryResource *entryResource[D, S]) newLiveReader(ctx context.Context, state tftypes.Value) liveReader {
-	var live tftypes.Value
-	var found, read bool
+	return sync.OnceValues(func() (tftypes.Value, bool) {
+		name, isKnown := known[string](blockAttribute(state, nameAttribute, tftypes.String))
 
-	return func() (tftypes.Value, bool) {
-		if read {
-			return live, found
+		if !isKnown {
+			return tftypes.Value{}, false
 		}
 
-		read = true
+		live, err := entryResource.readLiveValue(ctx, name)
 
-		name, err := attributeValue(state, tftypes.NewAttributePath().WithAttributeName(nameAttribute))
-
-		var text string
-
-		if err != nil || name.As(&text) != nil || entryResource.session == nil || entryResource.session.Backend == nil {
-			return live, found
-		}
-
-		sealed, err := entryResource.session.Backend.ReadSpec(ctx, entryResource.catalogName(text))
-
-		if err != nil || sealed == nil {
-			return live, found
-		}
-
-		live, err = entryResource.liveValue(text, sealed)
-		found = err == nil
-
-		return live, found
-	}
+		return live, err == nil
+	})
 }
 
-// liveValue returns the Terraform value of a sealed live spec, without its encrypted secrets.
-func (entryResource *entryResource[D, S]) liveValue(name string, sealed map[string]any) (tftypes.Value, error) {
+// liveValue returns the Terraform value of a sealed live spec without its secrets, see withoutLiveSecrets,
+// returning the paths whose credentials it redacted.
+func (codec *Codec[D, S]) liveValue(name string, sealed map[string]any) (tftypes.Value, []*tftypes.AttributePath, error) {
 	liveSpec, err := decode[S](liveDocument(sealed), false)
 
 	if err != nil {
-		return tftypes.Value{}, err
+		return tftypes.Value{}, nil, err
 	}
 
-	return entryResource.codec.Value(name, liveSpec)
+	value, err := codec.Value(name, liveSpec)
+
+	if err != nil {
+		return tftypes.Value{}, nil, err
+	}
+
+	return codec.secrets.withoutLiveSecrets(value)
+}
+
+// redactedCredentialsWarning explains the credentials redacted from the live spec of an entry.
+func redactedCredentialsWarning(diagnostics *diag.Diagnostics, catalogName string, paths []*tftypes.AttributePath) {
+	for _, redactedPath := range paths {
+		diagnostics.AddAttributeWarning(attributePath(redactedPath), "Credentials in "+attributePath(redactedPath).String()+" of "+catalogName,
+			"Estuary holds credentials in this connection string, so Terraform shows them as *** instead of storing them. "+
+				"The next apply publishes the configured value, which must hold only the host and connection options; set "+
+				"the credentials in user and password.")
+	}
 }
 
 // liveDocument returns a sealed live spec without encrypted secrets, control plane binding metadata, or the deprecated
@@ -60,13 +61,11 @@ func (entryResource *entryResource[D, S]) liveValue(name string, sealed map[stri
 func liveDocument(sealed map[string]any) map[string]any {
 	var live map[string]any = catalog.WithoutSecrets(sealed)
 
-	liveBindings, _ := live[bindingsAttribute].([]any)
-
-	for _, binding := range liveBindings {
-		delete(utils.Lookup(binding, "resource"), catalog.ResourceMetaKey)
+	for _, binding := range catalog.Bindings(live) {
+		delete(catalog.BindingResource(binding), catalog.ResourceMetaKey)
 	}
 
-	delete(utils.Lookup(live, "source"), "targetNaming")
+	delete(utils.Lookup(live, catalog.SourceKey), "targetNaming")
 
 	return live
 }

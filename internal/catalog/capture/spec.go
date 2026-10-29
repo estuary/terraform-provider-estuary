@@ -9,8 +9,8 @@ import (
 
 // AutoDiscover configures periodic discovery and how its results are applied.
 type AutoDiscover struct {
-	AddNewBindings                bool `yaml:"addNewBindings,omitempty"`
-	EvolveIncompatibleCollections bool `yaml:"evolveIncompatibleCollections,omitempty"`
+	AddNewBindings                bool `yaml:"addNewBindings,omitempty" description:"Adds a binding for each resource discovery finds in the source that isn't declared, when the capture is created and on each later discovery. Terraform doesn't manage those bindings; declare a binding to manage it."`
+	EvolveIncompatibleCollections bool `yaml:"evolveIncompatibleCollections,omitempty" description:"Automatically updates the target collections when the source schema changes in a way they can't accept."`
 }
 
 // Binding maps a captured resource to its collection.

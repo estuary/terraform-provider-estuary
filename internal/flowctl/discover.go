@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
-	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,7 +27,7 @@ func discoveredResources(content []byte, name string) (map[string]map[string]any
 
 	for _, binding := range discovered.Captures[name].Bindings {
 		if target := catalog.BindingCollection(binding); target != "" {
-			resources[target] = utils.Lookup(binding, "resource")
+			resources[target] = catalog.BindingResource(binding)
 		}
 	}
 

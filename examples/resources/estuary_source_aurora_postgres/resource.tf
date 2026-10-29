@@ -8,8 +8,7 @@ variable "ssh_private_key" {
   sensitive = true
 }
 
-# Capture of two tables with password authentication, adding every new table
-# of the included schema as it's discovered.
+# Password authentication with automatic discovery.
 resource "estuary_source_aurora_postgres" "shop" {
   name = "aurora"
 
@@ -51,8 +50,7 @@ resource "estuary_source_aurora_postgres" "shop" {
   ]
 }
 
-# AWS IAM authentication, capturing every change event, with a high priority
-# table and a table captured without a backfill.
+# IAM authentication capturing every change event.
 resource "estuary_source_aurora_postgres" "events" {
   name = "aurora/events"
 
@@ -89,8 +87,7 @@ resource "estuary_source_aurora_postgres" "events" {
   ]
 }
 
-# Connection through an SSH bastion host, with a dedicated publication and
-# replication slot.
+# SSH tunnel with a dedicated publication and slot.
 resource "estuary_source_aurora_postgres" "private" {
   name = "aurora/private"
 

@@ -6,32 +6,36 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 )
 
 // MaterializationSpec is the catalog spec of a connector materialization with config C and binding resource R.
 type MaterializationSpec[C, R any] = materialization.Spec[endpoint.ConnectorSpec[C], R]
 
+// materializationDocument is the Terraform shape of a connector materialization, plus a backfill block the catalog spec
+// doesn't hold.
 type materializationDocument[C, R any] struct {
 	Name                        string `yaml:"name"`
 	Image                       string `yaml:"image,omitempty"`
 	materialization.SpecOptions `yaml:",inline"`
-	Config                      C                           `yaml:"config"`
-	Bindings                    []MaterializationBinding[R] `yaml:"bindings"`
+	Config                      C                           `yaml:"config" description:"Connection, authentication and default settings of the destination."`
+	Bindings                    []MaterializationBinding[R] `yaml:"bindings" description:"Materialized collections, one per binding."`
+	Backfill                    *MaterializationBackfill    `yaml:"backfill,omitempty" description:"Backfill control of the whole materialization."`
 }
 
 // MaterializationBinding is the Terraform shape of a materialization binding, with its source flattened beside the time
 // filters. Exported for documents of non-connector endpoints.
 type MaterializationBinding[R any] struct {
-	Resource                   R                                          `yaml:"resource"`
-	Source                     string                                     `yaml:"source"`
-	NotBefore                  string                                     `yaml:"notBefore,omitempty"`
-	NotAfter                   string                                     `yaml:"notAfter,omitempty"`
-	Disable                    bool                                       `yaml:"disable,omitempty"`
-	Priority                   int                                        `yaml:"priority,omitempty"`
-	Fields                     *materialization.BindingFields             `yaml:"fields,omitempty"`
-	OnIncompatibleSchemaChange materialization.OnIncompatibleSchemaChange `yaml:"onIncompatibleSchemaChange,omitempty" enum:"backfill,disableBinding,disableTask,abort"`
-	Backfill                   *MaterializationBackfill                   `yaml:"backfill,omitempty"`
+	Resource                   R                                          `yaml:"resource" description:"Destination resource the collection is materialized into, such as a table."`
+	Source                     string                                     `yaml:"source" description:"Estuary collection the binding materializes. The provider tenant is not added to it. Changing it replaces the binding."`
+	NotBefore                  string                                     `yaml:"notBefore,omitempty" description:"Materializes only the documents published at or after this RFC 3339 time. It only filters: changing it does not reprocess documents already read."`
+	NotAfter                   string                                     `yaml:"notAfter,omitempty" description:"Materializes only the documents published before this RFC 3339 time. It only filters, like not_before."`
+	Disable                    bool                                       `yaml:"disable,omitempty" description:"Stops materializing the collection while keeping the binding. Defaults to false."`
+	Priority                   int                                        `yaml:"priority,omitempty" description:"Processing order among bindings: all ready documents of a higher-priority binding are processed before any of a lower one. Defaults to 0 and can be negative."`
+	Fields                     *materialization.BindingFields             `yaml:"fields,omitempty" description:"Collection fields materialized as columns. Omit it to use the default selection of Estuary."`
+	OnIncompatibleSchemaChange materialization.OnIncompatibleSchemaChange `yaml:"onIncompatibleSchemaChange,omitempty" enum:"backfill,disableBinding,disableTask,abort" description:"Overrides the on_incompatible_schema_change of the materialization for this binding: backfill, disableBinding, disableTask or abort."`
+	Backfill                   *MaterializationBackfill                   `yaml:"backfill,omitempty" description:"Backfill control of the binding."`
 }
 
 func publishMaterialization(ctx context.Context, backend catalog.Backend, name string, document map[string]any, _ publication) error {
@@ -43,9 +47,29 @@ func NewMaterialization[C, R any](connector Connector) func() resource.Resource 
 	return NewMaterializationFromDocument[materializationDocument[C, R]](connector)
 }
 
+// materializationAddedBindings describes the bindings a source capture adds, which only get the source and target
+// naming settings.
+var materializationAddedBindings addedBindings = addedBindings{
+	setting: path.Root("source").AtName("capture"),
+	summary: "Source capture adds unmanaged bindings",
+	origin:  "collection of the capture",
+	growth:  "the capture adds new collections",
+	limits: "They get only source.delta_updates, source.fields_recommended and target_naming, not per-binding overrides " +
+		"such as fields.require, priority or on_incompatible_schema_change.",
+	readding: "Estuary may add them back as long as the capture has their collections",
+	stopping: "materializing",
+}
+
+// materializationType is the materialization catalog type.
+var materializationType catalogType = catalogType{
+	name:    "materialization",
+	added:   materializationAddedBindings,
+	publish: publishMaterialization,
+}
+
 // NewMaterializationFromDocument returns the resource factory of a non-connector materialization, such as Dekaf.
 func NewMaterializationFromDocument[D Document[D, S], S catalog.MaterializationSpec](connector Connector) func() resource.Resource {
-	return newResource[D, S](connector, "materialization", publishMaterialization)
+	return newResource[D, S](connector, materializationType)
 }
 
 // Spec returns the materialization catalog name and spec, nesting image and config under endpoint.connector.

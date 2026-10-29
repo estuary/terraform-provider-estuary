@@ -153,6 +153,8 @@ func TestSampleBindings(test *testing.T) {
 func TestSamplesFollowConnectorRules(test *testing.T) {
 	var authTypes *spectest.EnumSamples[auth.DatabaseAuthType] = spectest.NewEnumSamples(test, "auth_type", auth.DatabaseAuthTypes)
 	var backfillModes *spectest.EnumSamples[sqlcapture.BackfillMode] = spectest.NewEnumSamples(test, "backfill mode", sqlcapture.BackfillModes)
+	var sslModes *spectest.EnumSamples[sslmode.MySQL] = spectest.NewEnumSamples(test, "sslmode", sslmode.MySQLModes)
+	var statementTimeouts *spectest.EnumSamples[StatementTimeout] = spectest.NewEnumSamples(test, "statement_timeout", StatementTimeouts)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeCaptures[Spec](test, file)
@@ -165,13 +167,11 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 			}
 
 			if config.Advanced != nil {
-				if config.Advanced.SSLMode != "" && !slices.Contains(sslmode.MySQLModes, config.Advanced.SSLMode) {
-					test.Errorf("%s: sslmode %q is not in sslmode.MySQLModes", name, config.Advanced.SSLMode)
+				if config.Advanced.SSLMode != "" {
+					sslModes.Add(name, config.Advanced.SSLMode)
 				}
 
-				if !slices.Contains(StatementTimeouts, config.Advanced.StatementTimeout) {
-					test.Errorf("%s: statement_timeout %q is not in StatementTimeouts", name, config.Advanced.StatementTimeout)
-				}
+				statementTimeouts.Add(name, config.Advanced.StatementTimeout)
 			}
 
 			for _, binding := range spec.Bindings {

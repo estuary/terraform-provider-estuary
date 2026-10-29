@@ -31,7 +31,7 @@ func (entryResource *entryResource[D, S]) planTargets(ctx context.Context, plan 
 		return plan, nil
 	}
 
-	if paths, known := entryResource.resourcePaths(plan); known {
+	if paths, isKnown := entryResource.resourcePaths(plan); isKnown {
 		resolved, err = entryResource.resolveTargets(ctx, unset, paths, plan, config, state, readLive)
 	}
 
@@ -66,8 +66,10 @@ func (entryResource *entryResource[D, S]) resolveTargets(ctx context.Context, un
 		}
 	}
 
-	if missing := missingTargets(unset, paths, targets); missing != nil && config.IsFullyKnown() && entryResource.session != nil && entryResource.session.Backend != nil {
-		discovered, err := entryResource.discoverTargets(ctx, plan, config)
+	backend, unconfigured := entryResource.backend()
+
+	if missing := missingTargets(unset, paths, targets); missing != nil && config.IsFullyKnown() && unconfigured == nil {
+		discovered, err := entryResource.discoverTargets(ctx, backend, plan, config)
 
 		if err != nil {
 			return nil, err
@@ -91,7 +93,7 @@ func (entryResource *entryResource[D, S]) resolveTargets(ctx context.Context, un
 
 // discoverTargets returns discovered targets by resource path, discovering without bindings or autoDiscover so every
 // resource is returned.
-func (entryResource *entryResource[D, S]) discoverTargets(ctx context.Context, plan tftypes.Value, config tftypes.Value) (map[string]string, error) {
+func (entryResource *entryResource[D, S]) discoverTargets(ctx context.Context, backend catalog.Backend, plan tftypes.Value, config tftypes.Value) (map[string]string, error) {
 	var targets map[string]string = map[string]string{}
 
 	value, err := entryResource.codec.secrets.withConfigSecrets(plan, config)
@@ -124,7 +126,7 @@ func (entryResource *entryResource[D, S]) discoverTargets(ctx context.Context, p
 
 	ctx = catalog.WithSecrets(ctx, entryResource.codec.secrets.values(value)...)
 
-	discovered, err := entryResource.session.Backend.DiscoverCapture(ctx, entryResource.catalogName(name), catalog.RawCapture{"endpoint": document["endpoint"], "bindings": []any{}})
+	discovered, err := backend.DiscoverCapture(ctx, entryResource.catalogName(name), catalog.RawCapture{catalog.EndpointKey: document[catalog.EndpointKey], catalog.BindingsKey: []any{}})
 
 	if err != nil {
 		return nil, fmt.Errorf("discovering the default binding targets: %w", err)
@@ -194,9 +196,9 @@ func (entryResource *entryResource[D, S]) pathTargets(value tftypes.Value) map[s
 	var targets map[string]string = map[string]string{}
 
 	items, _, err := bindings(value)
-	paths, known := entryResource.resourcePaths(value)
+	paths, isKnown := entryResource.resourcePaths(value)
 
-	if err != nil || !known || len(paths) != len(items) {
+	if err != nil || !isKnown || len(paths) != len(items) {
 		return targets
 	}
 

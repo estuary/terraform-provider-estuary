@@ -33,7 +33,7 @@ func TestSampleAuthVariants(test *testing.T) {
 		"acmeCo/iceberg/rest-iam":               {auth.AWSAuthTypeIAM, CatalogTypeREST, ""},
 		"acmeCo/iceberg/glue-access-key":        {auth.AWSAuthTypeAccessKey, CatalogTypeGlue, ""},
 		"acmeCo/iceberg/glue-iam":               {auth.AWSAuthTypeIAM, CatalogTypeGlue, ""},
-		"acmeCo/iceberg/glue-iam-cross-account": {auth.AWSAuthTypeIAM, CatalogTypeGlue, "210987654321"},
+		"acmeCo/iceberg/glue-iam-cross-account": {auth.AWSAuthTypeIAM, CatalogTypeGlue, "123456789013"},
 	}
 
 	for name, expected := range expectations {

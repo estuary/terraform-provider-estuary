@@ -2,39 +2,38 @@ package builder
 
 import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
-	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 // mergeBindings merges planned bindings over live ones, keeping unmanaged ones and dropping removed managed ones.
-// New planned bindings follow, in plan order.
-func mergeBindings(planned []any, previous []any, live []any) []any {
-	var pending map[string]any = map[string]any{}
+// New planned bindings follow, in plan order. Collection returns the collection identifying a binding.
+func mergeBindings[B any](planned []B, previous []B, live []B, collection func(B) string) []B {
+	var pending map[string]B = map[string]B{}
 	var managed map[string]bool = map[string]bool{}
 
-	var merged []any
+	var merged []B
 
 	for _, binding := range planned {
-		pending[catalog.BindingCollection(binding)] = binding
+		pending[collection(binding)] = binding
 	}
 
 	for _, binding := range previous {
-		managed[catalog.BindingCollection(binding)] = true
+		managed[collection(binding)] = true
 	}
 
 	for _, binding := range live {
-		var collection string = catalog.BindingCollection(binding)
+		var key string = collection(binding)
 
-		if plannedBinding, found := pending[collection]; found {
+		if plannedBinding, found := pending[key]; found {
 			merged = append(merged, plannedBinding)
-			delete(pending, collection)
-		} else if !managed[collection] {
+			delete(pending, key)
+		} else if !managed[key] {
 			merged = append(merged, binding)
 		}
 	}
 
 	for _, binding := range planned {
-		if _, found := pending[catalog.BindingCollection(binding)]; found {
+		if _, found := pending[collection(binding)]; found {
 			merged = append(merged, binding)
 		}
 	}
@@ -42,24 +41,24 @@ func mergeBindings(planned []any, previous []any, live []any) []any {
 	return merged
 }
 
-// keepResourceMetadata copies control-plane resource metadata, such as the path, from live into planned bindings.
-func keepResourceMetadata(planned any, live []any) {
-	var metadata map[string]any = map[string]any{}
+// mergedBindings returns the binding documents publishing planned bindings over live ones writes, merged with the
+// unmanaged live ones when the control plane generates bindings, and their entryWide collections.
+func mergedBindings(planned []any, previous []any, live []any, generated bool) ([]any, []string) {
+	var published []any = planned
 
-	for _, binding := range live {
-		if meta, found := utils.Lookup(binding, "resource")[catalog.ResourceMetaKey]; found {
-			metadata[catalog.BindingCollection(binding)] = meta
-		}
+	if generated {
+		published = mergeBindings(planned, previous, live, catalog.BindingCollection)
 	}
 
-	bindings, _ := planned.([]any)
+	return published, entryWide(published, live)
+}
 
-	for _, binding := range bindings {
-		var resource map[string]any = utils.Lookup(binding, "resource")
+// keepResourceMetadata copies control-plane resource metadata, such as the path, from live into planned bindings.
+func keepResourceMetadata(planned []any, live []any) {
+	var liveBindings map[string]map[string]any = catalog.BindingsByCollection(live)
 
-		if meta, found := metadata[catalog.BindingCollection(binding)]; found && resource != nil && resource[catalog.ResourceMetaKey] == nil {
-			resource[catalog.ResourceMetaKey] = meta
-		}
+	for _, binding := range planned {
+		catalog.KeepResourceMeta(liveBindings[catalog.BindingCollection(binding)], binding)
 	}
 }
 
@@ -70,7 +69,7 @@ func generatesBindings(spec any) bool {
 	return isGenerator && generator.GeneratesBindings()
 }
 
-// addsNewBindings reports whether discovery binds every resource the spec doesn't.
+// addsNewBindings reports whether Estuary binds every resource the spec doesn't, such as discovered resources.
 func addsNewBindings(spec any) bool {
 	adder, isAdder := spec.(catalog.NewBindingsAdder)
 
@@ -158,7 +157,8 @@ func withBindingNames(value tftypes.Value) (tftypes.Value, error) {
 	})
 }
 
-// bindingAttribute returns a binding attribute, unknown when the binding is.
+// bindingAttribute returns a string attribute of a binding value, unknown when the binding is. Other attributes use
+// blockAttribute with their type.
 func bindingAttribute(binding tftypes.Value, attribute string) tftypes.Value {
 	return blockAttribute(binding, attribute, tftypes.String)
 }

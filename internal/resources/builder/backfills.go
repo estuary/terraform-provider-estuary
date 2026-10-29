@@ -13,30 +13,43 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-const dataflowResetStrategy string = "dataflowReset"
+// backfillStrategy is how a raised capture backfill trigger backfills a binding. Not in the catalog spec.
+type backfillStrategy string
 
 // captureBackfill is the capture backfill block: raising its trigger backfills every enabled binding. Not in the catalog spec.
 type captureBackfill struct {
-	Trigger  int    `yaml:"trigger,omitempty"`
-	Strategy string `yaml:"strategy,omitempty" enum:"incremental,dataflowReset"`
+	Trigger  int              `yaml:"trigger,omitempty" description:"Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. A provider control Estuary never sees, not its backfill counter: each raise adds one to each binding's live counter. Starts at 1 and only goes up."`
+	Strategy backfillStrategy `yaml:"strategy,omitempty" enum:"incremental,dataflowReset" description:"Default backfill strategy of the bindings: 'incremental' (default) captures again into the existing collection, 'dataflowReset' resets the collection, backfilling its materializations and truncating their tables. Changing it alone publishes nothing."`
 }
 
 // captureBindingBackfill is the capture binding backfill block: raising its trigger backfills the binding.
 // Mode mirrors the resource's backfill mode, see backfillModeKey.
 type captureBindingBackfill struct {
-	Trigger  int    `yaml:"trigger,omitempty"`
-	Strategy string `yaml:"strategy,omitempty" enum:"incremental,dataflowReset"`
-	Mode     string `yaml:"mode,omitempty"`
+	Trigger  int              `yaml:"trigger,omitempty" description:"Raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter. Starts at 1 and only goes up, and can't be raised on a disabled binding."`
+	Strategy backfillStrategy `yaml:"strategy,omitempty" enum:"incremental,dataflowReset" description:"Overrides the backfill.strategy of the capture for this binding: 'incremental' or 'dataflowReset'. Changing it alone publishes nothing."`
+	Mode     string           `yaml:"mode,omitempty"`
 }
 
-// MaterializationBackfill is the materialization binding backfill block: raising its trigger backfills the binding.
+const (
+	incrementalStrategy   backfillStrategy = "incremental"
+	dataflowResetStrategy backfillStrategy = "dataflowReset"
+)
+
+// backfillStrategies lists every backfill strategy, useful for schema validators.
+var backfillStrategies []backfillStrategy = []backfillStrategy{
+	incrementalStrategy,
+	dataflowResetStrategy,
+}
+
+// MaterializationBackfill is the materialization and binding backfill block: raising its trigger backfills the binding,
+// or every enabled binding of the materialization. Not in the catalog spec.
 type MaterializationBackfill struct {
-	Trigger int `yaml:"trigger,omitempty"`
+	Trigger int `yaml:"trigger,omitempty" description:"Raise it to backfill the binding, or every enabled binding of the materialization: each table is truncated and materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter. Starts at 1 and only goes up."`
 }
 
 // backfillRequests returns the sorted collections to backfill and to reset, from raised binding triggers and, for
-// every captureWide collection, a raised entry trigger. Each binding uses its own strategy, else the entry one.
-func backfillRequests(plan tftypes.Value, prior tftypes.Value, captureWide []string) ([]string, []string, error) {
+// every entryWide collection, a raised entry trigger. Each binding uses its own strategy, else the entry one.
+func backfillRequests(plan tftypes.Value, prior tftypes.Value, wide []string) ([]string, []string, error) {
 	var backfills []string
 	var resets []string
 	var requested map[string]bool = map[string]bool{}
@@ -58,13 +71,13 @@ func backfillRequests(plan tftypes.Value, prior tftypes.Value, captureWide []str
 	for collection, binding := range planned {
 		priorBinding, managed := previous[collection]
 
-		if collection != "" && (managed || slices.Contains(captureWide, collection)) && raisesTrigger(binding, priorBinding) {
+		if collection != "" && (managed || slices.Contains(wide, collection)) && raisesTrigger(binding, priorBinding) {
 			requested[collection] = true
 		}
 	}
 
 	if prior.Type() != nil && !prior.IsNull() && raisesTrigger(plan, prior) {
-		for _, collection := range captureWide {
+		for _, collection := range wide {
 			requested[collection] = true
 		}
 	}
@@ -83,26 +96,20 @@ func backfillRequests(plan tftypes.Value, prior tftypes.Value, captureWide []str
 	return backfills, resets, nil
 }
 
-// captureWide returns the collections of the published bindings a raised entry trigger backfills: those bound live.
+// entryWide returns the collections of the published bindings a raised entry trigger backfills: those bound live.
 // Disabled bindings are left out, as the dashboard does.
-func captureWide(published any, live []any) []string {
+func entryWide(published []any, live []any) []string {
 	var collections []string
-	var bound []string
+	var bound map[string]map[string]any = catalog.BindingsByCollection(live)
 
-	for _, binding := range live {
-		bound = append(bound, catalog.BindingCollection(binding))
-	}
-
-	items, _ := published.([]any)
-
-	for _, binding := range items {
+	for _, binding := range published {
 		object, _ := binding.(map[string]any)
 
-		if disable, _ := object[disableAttribute].(bool); disable {
+		if disable, _ := object[catalog.DisableKey].(bool); disable {
 			continue
 		}
 
-		if collection := catalog.BindingCollection(binding); collection != "" && slices.Contains(bound, collection) {
+		if collection := catalog.BindingCollection(binding); collection != "" && bound[collection] != nil {
 			collections = append(collections, collection)
 		}
 	}
@@ -112,18 +119,18 @@ func captureWide(published any, live []any) []string {
 
 // disabled reports whether a binding value sets disable.
 func disabled(binding tftypes.Value) bool {
-	disable, _ := known[bool](bindingAttribute(binding, disableAttribute))
+	disable, _ := known[bool](blockAttribute(binding, disableAttribute, tftypes.Bool))
 
 	return disable
 }
 
 // bindingStrategy returns the backfill strategy of a binding value, else that of the entry.
-func bindingStrategy(entry tftypes.Value, binding tftypes.Value) string {
+func bindingStrategy(entry tftypes.Value, binding tftypes.Value) backfillStrategy {
 	if strategy := backfillText(binding, backfillStrategyAttribute); strategy != "" {
-		return strategy
+		return backfillStrategy(strategy)
 	}
 
-	return backfillText(entry, backfillStrategyAttribute)
+	return backfillStrategy(backfillText(entry, backfillStrategyAttribute))
 }
 
 // pendingResets returns the sorted enabled planned bindings whose backfill strategy, else the entry one,
@@ -170,8 +177,8 @@ func backfillChanged(plan tftypes.Value, prior tftypes.Value) bool {
 
 // backfillDiffers reports whether the backfill blocks of two values differ, a missing block matching a null one.
 func backfillDiffers(planned tftypes.Value, prior tftypes.Value) bool {
-	var plannedBackfill tftypes.Value = bindingAttribute(planned, backfillAttribute)
-	var priorBackfill tftypes.Value = bindingAttribute(prior, backfillAttribute)
+	var plannedBackfill tftypes.Value = blockAttribute(planned, backfillAttribute, tftypes.DynamicPseudoType)
+	var priorBackfill tftypes.Value = blockAttribute(prior, backfillAttribute, tftypes.DynamicPseudoType)
 
 	if plannedBackfill.IsNull() && priorBackfill.IsNull() {
 		return false
@@ -182,7 +189,10 @@ func backfillDiffers(planned tftypes.Value, prior tftypes.Value) bool {
 
 // raisesTrigger reports whether the planned backfill trigger is higher than the prior one, or newly set.
 func raisesTrigger(planned tftypes.Value, prior tftypes.Value) bool {
-	return raisesValue(backfillSetting(planned, backfillTriggerAttribute), prior)
+	trigger, set := integer(backfillSetting(planned, backfillTriggerAttribute))
+	previous, wasSet := integer(backfillSetting(prior, backfillTriggerAttribute))
+
+	return set && (!wasSet || trigger > previous)
 }
 
 // triggersUnmanaged reports whether the plan sets a backfill trigger on a binding missing from the prior state.
@@ -199,16 +209,8 @@ func triggersUnmanaged(plan tftypes.Value, prior tftypes.Value) bool {
 	return false
 }
 
-// raisesValue reports whether trigger is higher than the prior backfill trigger, or newly set.
-func raisesValue(trigger tftypes.Value, prior tftypes.Value) bool {
-	planned, set := integer(trigger)
-	previous, wasSet := integer(backfillSetting(prior, backfillTriggerAttribute))
-
-	return set && (!wasSet || planned > previous)
-}
-
 // validateBackfillTriggers validates the entry and binding backfill triggers, see validateBackfillTrigger.
-func validateBackfillTriggers(plan tftypes.Value, state tftypes.Value) diag.Diagnostics {
+func validateBackfillTriggers(plan tftypes.Value, state tftypes.Value, catalogType catalogType) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
 
 	plannedBindings, _, err := bindings(plan)
@@ -223,7 +225,7 @@ func validateBackfillTriggers(plan tftypes.Value, state tftypes.Value) diag.Diag
 		return diagnostics
 	}
 
-	diagnostics.Append(validateBackfillTrigger(path.Root(backfillAttribute).AtName(backfillTriggerAttribute), "the capture", plan, state)...)
+	diagnostics.Append(validateBackfillTrigger(path.Root(backfillAttribute).AtName(backfillTriggerAttribute), "the "+catalogType.name, plan, state)...)
 
 	for index, binding := range plannedBindings {
 		var collection string = bindingCollectionValue(binding)
@@ -234,7 +236,7 @@ func validateBackfillTriggers(plan tftypes.Value, state tftypes.Value) diag.Diag
 		if disabled(binding) && raisesTrigger(binding, previous[collection]) {
 			diagnostics.AddAttributeError(attributePath, "Backfill trigger raised on a disabled binding",
 				fmt.Sprintf("backfill.trigger of %s is raised, but the binding is disabled, so there is nothing to backfill. "+
-					"Set disable = false or remove the disable property in the same change to enable and backfill it, or keep the trigger at its current value.", collection))
+					"To enable and backfill it, set disable = false or remove disable in the same change. Otherwise, keep the trigger at its current value.", collection))
 		}
 	}
 
@@ -251,8 +253,8 @@ func validateBackfillTrigger(attributePath path.Path, owner string, planned tfty
 
 	if !backfillSetting(planned, backfillTriggerAttribute).IsKnown() {
 		diagnostics.AddAttributeError(attributePath, "Backfill trigger unknown at plan time",
-			"backfill.trigger must be known at plan time, as a number written in the configuration or a variable. "+
-				"A value only known at apply time, such as timestamp(), would backfill on every apply.")
+			"backfill.trigger must be known at plan time, such as a number written in the configuration or a variable. "+
+				"A value known only at apply time, such as timestamp(), would backfill on every apply.")
 
 		return diagnostics
 	}
@@ -265,7 +267,7 @@ func validateBackfillTrigger(attributePath path.Path, owner string, planned tfty
 
 	if trigger < 1 {
 		diagnostics.AddAttributeError(attributePath, "Invalid backfill trigger",
-			fmt.Sprintf("backfill.trigger is %d, it must be 1 or greater.", trigger))
+			fmt.Sprintf("backfill.trigger is %d, but it must be 1 or greater.", trigger))
 
 		return diagnostics
 	}
@@ -274,8 +276,8 @@ func validateBackfillTrigger(attributePath path.Path, owner string, planned tfty
 
 	if wasSet && trigger < current {
 		diagnostics.AddAttributeError(attributePath, "Backfill trigger lowered",
-			fmt.Sprintf("backfill.trigger of %s is %d, lower than its current %d. It only goes up: keep %d, or raise it "+
-				"to backfill once more.", owner, trigger, current, current))
+			fmt.Sprintf("backfill.trigger of %s is %d, lower than its current value of %d. The trigger can only go up: keep it "+
+				"at %d, or raise it to backfill again.", owner, trigger, current, current))
 	}
 
 	return diagnostics
@@ -283,27 +285,20 @@ func validateBackfillTrigger(attributePath path.Path, owner string, planned tfty
 
 // modeBackfills returns the planned bindings whose backfill mode, under key, differs from the live one, mapped to
 // "live -> planned". The connector requires a backfill with each change.
-func modeBackfills(planned any, live []any, key string) map[string]string {
+func modeBackfills(planned []any, live []any, key string) map[string]string {
 	var changes map[string]string = map[string]string{}
-	var modes map[string]string = map[string]string{}
+	var liveBindings map[string]map[string]any = catalog.BindingsByCollection(live)
 
 	if key == "" {
 		return changes
 	}
 
-	for _, binding := range live {
-		mode, _ := utils.Lookup(binding, "resource")[key].(string)
-
-		modes[catalog.BindingCollection(binding)] = mode
-	}
-
-	bindings, _ := planned.([]any)
-
-	for _, binding := range bindings {
+	for _, binding := range planned {
 		var collection string = catalog.BindingCollection(binding)
 
-		mode, _ := utils.Lookup(binding, "resource")[key].(string)
-		liveMode, isLive := modes[collection]
+		liveBinding, isLive := liveBindings[collection]
+		mode, _ := catalog.BindingResource(binding)[key].(string)
+		liveMode, _ := catalog.BindingResource(liveBinding)[key].(string)
 
 		if isLive && mode != liveMode {
 			changes[collection] = fmt.Sprintf("%q -> %q", liveMode, mode)
@@ -313,40 +308,25 @@ func modeBackfills(planned any, live []any, key string) map[string]string {
 	return changes
 }
 
-// unbackfilledModes returns the mode changes, see modeBackfills, whose binding the plan doesn't backfill or reset.
-func unbackfilledModes(planned any, live []any, key string, plan tftypes.Value, prior tftypes.Value, captureWide []string) (map[string]string, error) {
+// unbackfilledModes returns the mode changes, see modeBackfills, whose binding is neither backfilled nor reset.
+func unbackfilledModes(changes map[string]string, backfills []string, resets []string) map[string]string {
 	var missing map[string]string = map[string]string{}
 
-	backfills, resets, err := backfillRequests(plan, prior, captureWide)
-
-	if err != nil {
-		return nil, err
-	}
-
-	for collection, change := range modeBackfills(planned, live, key) {
+	for collection, change := range changes {
 		if !slices.Contains(backfills, collection) && !slices.Contains(resets, collection) {
 			missing[collection] = change
 		}
 	}
 
-	return missing, nil
+	return missing
 }
 
 // keepBackfills copies the live backfill counter onto each planned binding, plus one for backfills, so publishing
 // never lowers it.
-func keepBackfills(planned any, live []any, backfills []string) {
-	var counters map[string]int = map[string]int{}
+func keepBackfills(planned []any, live []any, backfills []string) {
+	var liveBindings map[string]map[string]any = catalog.BindingsByCollection(live)
 
-	for _, binding := range live {
-		object, _ := binding.(map[string]any)
-		counter, _ := object[backfillAttribute].(int)
-
-		counters[catalog.BindingCollection(binding)] = counter
-	}
-
-	bindings, _ := planned.([]any)
-
-	for _, binding := range bindings {
+	for _, binding := range planned {
 		object, _ := binding.(map[string]any)
 
 		if object == nil {
@@ -354,16 +334,17 @@ func keepBackfills(planned any, live []any, backfills []string) {
 		}
 
 		var collection string = catalog.BindingCollection(binding)
-		var counter int = counters[collection]
+
+		counter, _ := liveBindings[collection][catalog.BackfillKey].(int)
 
 		if slices.Contains(backfills, collection) {
 			counter++
 		}
 
 		if counter == 0 {
-			delete(object, backfillAttribute)
+			delete(object, catalog.BackfillKey)
 		} else {
-			object[backfillAttribute] = counter
+			object[catalog.BackfillKey] = counter
 		}
 	}
 }
@@ -374,7 +355,7 @@ func backfillSetting(owner tftypes.Value, attribute string) tftypes.Value {
 		return tftypes.NewValue(tftypes.DynamicPseudoType, nil)
 	}
 
-	return blockAttribute(bindingAttribute(owner, backfillAttribute), attribute, tftypes.DynamicPseudoType)
+	return blockAttribute(blockAttribute(owner, backfillAttribute, tftypes.DynamicPseudoType), attribute, tftypes.DynamicPseudoType)
 }
 
 // integer converts a number value, reporting false when null or unknown.
@@ -406,7 +387,7 @@ func backfillModeKey[R any]() string {
 	}
 
 	for index := range resourceType.NumField() {
-		if field := resourceType.Field(index); field.Tag.Get(backfillAttribute) == backfillModeAttribute {
+		if field := resourceType.Field(index); catalog.BackfillModeField(field) {
 			return catalog.FieldKey(field)
 		}
 	}

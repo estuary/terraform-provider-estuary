@@ -8,8 +8,7 @@ variable "ssh_private_key" {
   sensitive = true
 }
 
-# Change stream capture of two collections, adding every new collection of the
-# database as it's discovered.
+# Change stream capture with automatic discovery.
 resource "estuary_source_mongodb" "shop" {
   name = "mongodb"
 
@@ -42,8 +41,7 @@ resource "estuary_source_mongodb" "shop" {
   ]
 }
 
-# Batch capture of a view and a time series collection, alongside a change
-# stream collection.
+# Batch capture of a view and a time series collection.
 resource "estuary_source_mongodb" "metrics" {
   name = "mongodb/metrics"
 
@@ -85,8 +83,7 @@ resource "estuary_source_mongodb" "metrics" {
   ]
 }
 
-# Private deployment reached through an SSH bastion host, with advanced change
-# stream options.
+# SSH tunnel with advanced change stream options.
 resource "estuary_source_mongodb" "private" {
   name = "mongodb/private"
 

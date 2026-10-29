@@ -383,6 +383,16 @@ func TestResourceUpdateKeepsUnchangedSecrets(test *testing.T) {
 		"bindings": []any{},
 	}
 
+	var sealedOtherImage map[string]any = map[string]any{
+		"endpoint": map[string]any{
+			"connector": map[string]any{
+				"image":  "ghcr.io/estuary/source-other:v1",
+				"config": map[string]any{"host": "db.example.com", "password_sops": "ENC[AES256_GCM,data:abc,type:str]", "sops": map[string]any{"mac": "<encrypted>"}},
+			},
+		},
+		"bindings": []any{},
+	}
+
 	expectations := map[string]struct {
 		live      map[string]any
 		host      string
@@ -390,6 +400,7 @@ func TestResourceUpdateKeepsUnchangedSecrets(test *testing.T) {
 		sealed    bool
 		plaintext map[string]any
 	}{
+		"publishes the planned image over another live one":        {sealedOtherImage, "db.example.com", "secret", false, map[string]any{"host": "db.example.com", "password": "secret"}},
 		"keeps the sealed endpoint of an unchanged config":         {sealed, "db.example.com", "secret", true, nil},
 		"keeps the sealed endpoint holding fields Terraform skips": {sealedWithExtras, "db.example.com", "secret", true, nil},
 		"publishes a changed config":                               {sealed, "other.example.com", "secret", false, map[string]any{"host": "other.example.com", "password": "secret"}},
@@ -610,7 +621,13 @@ func TestResourceImportStateReadsLiveSpec(test *testing.T) {
 			test.Errorf("%s: read specs of %v, want the import ID", name, backend.reads)
 		}
 
-		if !importResp.State.Raw.Equal(want) {
+		stateWithoutLive, err := nullAttributes(importResp.State.Raw, liveBindingsPath.Equal)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		if !stateWithoutLive.Equal(want) {
 			test.Errorf("%s: imported state = %v, want %v", name, importResp.State.Raw, want)
 		}
 

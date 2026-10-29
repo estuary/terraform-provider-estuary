@@ -1,7 +1,6 @@
 package dekaf
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
@@ -88,6 +87,7 @@ func TestSampleVariants(test *testing.T) {
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
 	var variants *spectest.EnumSamples[Variant] = spectest.NewEnumSamples(test, "variant", Variants)
+	var deletionModes *spectest.EnumSamples[DeletionMode] = spectest.NewEnumSamples(test, "deletions", DeletionModes)
 	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
 
 	for name, spec := range specs {
@@ -95,9 +95,7 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 
 		variants.Add(name, endpoint.Variant)
 
-		if !slices.Contains(DeletionModes, endpoint.Config.Deletions) {
-			test.Errorf("%s: deletions %q is not in DeletionModes", name, endpoint.Config.Deletions)
-		}
+		deletionModes.Add(name, endpoint.Config.Deletions)
 	}
 
 	variants.AssertAllSampled()

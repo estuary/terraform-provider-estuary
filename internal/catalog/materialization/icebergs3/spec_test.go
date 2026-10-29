@@ -242,6 +242,7 @@ func TestSampleSharedOptions(test *testing.T) {
 func TestSamplesFollowConnectorRules(test *testing.T) {
 	var catalogAuthTypes *spectest.EnumSamples[CatalogAuthType] = spectest.NewEnumSamples(test, "catalog auth_type", CatalogAuthTypes)
 	var emrAuthTypes *spectest.EnumSamples[EMRAuthType] = spectest.NewEnumSamples(test, "EMR auth_type", EMRAuthTypes)
+	var identifierCases *spectest.EnumSamples[IdentifierCase] = spectest.NewEnumSamples(test, "identifier case", IdentifierCases)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
@@ -263,8 +264,8 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 
 			if config.Advanced != nil {
 				for _, identifierCase := range []IdentifierCase{config.Advanced.TableIdentifierCase, config.Advanced.FieldNameCase} {
-					if identifierCase != "" && !slices.Contains(IdentifierCases, identifierCase) {
-						test.Errorf("%s: identifier case %q is not in IdentifierCases", name, identifierCase)
+					if identifierCase != "" {
+						identifierCases.Add(name, identifierCase)
 					}
 				}
 			}

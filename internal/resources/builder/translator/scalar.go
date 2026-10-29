@@ -5,8 +5,13 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"net/url"
 	"reflect"
+	"regexp"
+	"slices"
+	"strings"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -46,6 +51,10 @@ func (stringNode) attribute(field field) schema.Attribute {
 
 	if field.enum != nil {
 		validators = append(validators, stringvalidator.OneOf(field.enum...))
+	}
+
+	if field.forbidsCredentials {
+		validators = append(validators, credentialsValidator{})
 	}
 
 	return schema.StringAttribute{
@@ -111,6 +120,150 @@ func (check yamlStringValidator) ValidateString(_ context.Context, validateReq v
 	if err := node.Decode(reflect.New(check.kind).Interface()); err != nil {
 		validateResp.Diagnostics.AddAttributeError(validateReq.Path, "Invalid value", err.Error())
 	}
+}
+
+// redacted replaces each credential RedactCredentials removes.
+const redacted string = "***"
+
+// credentialsValidator rejects connection URIs holding credentials, which state and logs would hold in plain text.
+type credentialsValidator struct{}
+
+func (credentialsValidator) Description(context.Context) string {
+	return "value must hold only the host and connection options, without credentials"
+}
+
+func (check credentialsValidator) MarkdownDescription(ctx context.Context) string {
+	return check.Description(ctx)
+}
+
+func (credentialsValidator) ValidateString(_ context.Context, validateReq validator.StringRequest, validateResp *validator.StringResponse) {
+	if validateReq.ConfigValue.IsNull() || validateReq.ConfigValue.IsUnknown() {
+		return
+	}
+
+	if _, holds := redactCredentials(validateReq.ConfigValue.ValueString()); holds {
+		validateResp.Diagnostics.AddAttributeError(validateReq.Path, "Credentials in connection string",
+			"Set only the host and connection options here. Credentials, such as user:password@ or a password option, "+
+				"would be stored in plain text in state and logs: set them in user and password instead, which are write-only.")
+	}
+}
+
+// ForbidsCredentials reports whether a schema attribute rejects connection URIs holding credentials.
+func ForbidsCredentials(attribute schema.Attribute) bool {
+	text, isString := attribute.(schema.StringAttribute)
+
+	return isString && slices.ContainsFunc(text.Validators, func(check validator.String) bool {
+		_, isCredentials := check.(credentialsValidator)
+
+		return isCredentials
+	})
+}
+
+// uriScheme matches the scheme starting a URI, such as mongodb+srv://.
+var uriScheme *regexp.Regexp = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+
+// RedactCredentials returns a connection URI, with or without scheme, with its user info and the values of its
+// credential options replaced by ***. Any @ counts as user info, as hosts and options never hold one.
+func RedactCredentials(value string) string {
+	safe, _ := redactCredentials(value)
+
+	return safe
+}
+
+// redactCredentials returns RedactCredentials of value, and whether value holds credentials, *** placeholders
+// included, so a redacted value is never accepted as configuration.
+func redactCredentials(value string) (string, bool) {
+	var start int = len(uriScheme.FindString(value))
+	var holds bool
+
+	if at := strings.LastIndex(value, "@"); at >= 0 {
+		start = min(start, at)
+		holds = true
+
+		value = value[:start] + redacted + value[at:]
+	}
+
+	base, options, hasOptions := strings.Cut(value, "?")
+
+	if !hasOptions {
+		return value, holds
+	}
+
+	options, holdsOptions := redactOptions(options)
+
+	return base + "?" + options, holds || holdsOptions
+}
+
+// redactOptions replaces the values of credential options, split on & or ;, including credential properties of
+// authMechanismProperties, such as AWS_SESSION_TOKEN. A value runs to the next separator, a # fragment included.
+func redactOptions(options string) (string, bool) {
+	var redactedOptions strings.Builder
+	var start int
+	var holds bool
+
+	for index := 0; index <= len(options); index++ {
+		if index < len(options) && options[index] != '&' && options[index] != ';' {
+			continue
+		}
+
+		option, isCredential := redactOption(options[start:index])
+
+		redactedOptions.WriteString(option)
+
+		holds = holds || isCredential
+
+		if index < len(options) {
+			redactedOptions.WriteByte(options[index])
+		}
+
+		start = index + 1
+	}
+
+	return redactedOptions.String(), holds
+}
+
+// redactOption replaces the value of a key=value option naming a credential, reporting whether it names one.
+func redactOption(option string) (string, bool) {
+	key, value, hasValue := strings.Cut(option, "=")
+	decodedKey, err := url.QueryUnescape(key)
+
+	if err != nil {
+		decodedKey = key
+	}
+
+	if !hasValue {
+		return option, false
+	}
+
+	if catalog.IsSensitiveKey(decodedKey) {
+		return key + "=" + redacted, true
+	}
+
+	if !strings.EqualFold(decodedKey, "authMechanismProperties") {
+		return option, false
+	}
+
+	decodedValue, err := url.QueryUnescape(value)
+
+	if err != nil {
+		decodedValue = value
+	}
+
+	var properties []string = strings.Split(decodedValue, ",")
+	var holds bool
+
+	for index, property := range properties {
+		if name, _, _ := strings.Cut(property, ":"); catalog.IsSensitiveKey(name) {
+			properties[index] = name + ":" + redacted
+			holds = true
+		}
+	}
+
+	if !holds {
+		return option, false
+	}
+
+	return key + "=" + strings.Join(properties, ","), true
 }
 
 func (node yamlStringNode) terraformValue(value any, valueType tftypes.Type) (tftypes.Value, error) {

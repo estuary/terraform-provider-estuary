@@ -12,7 +12,7 @@ import (
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: ImagePostgres, Name: ConnectorNamePostgres}, spectest.Connector{Image: ImageAmazonAurora, Name: ConnectorNameAmazonAurora}, spectest.Connector{Image: ImageAmazonRDS, Name: ConnectorNameAmazonRDS})
 }
 
 func TestEnumTagsMatchLists(test *testing.T) {
@@ -23,18 +23,21 @@ func TestSampleVariants(test *testing.T) {
 	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
 
 	expectations := map[string]struct {
-		authType       auth.DatabaseAuthType
-		legacyPassword bool
-		sshTunnel      bool
+		image     string
+		authType  auth.DatabaseAuthType
+		sshTunnel bool
 	}{
-		"acmeCo/postgres/password":        {auth.DatabaseAuthTypeUserPassword, false, false},
-		"acmeCo/postgres/aurora-iam":      {auth.DatabaseAuthTypeAWSIAM, false, false},
-		"acmeCo/postgres/ssh-tunnel":      {auth.DatabaseAuthTypeUserPassword, false, true},
-		"acmeCo/postgres/legacy-password": {"", true, false},
+		"acmeCo/postgres/password":     {ImagePostgres, auth.DatabaseAuthTypeUserPassword, false},
+		"acmeCo/postgres/gcp-iam":      {ImagePostgres, auth.DatabaseAuthTypeGCPIAM, false},
+		"acmeCo/postgres/azure-iam":    {ImagePostgres, auth.DatabaseAuthTypeAzureIAM, false},
+		"acmeCo/postgres/ssh-tunnel":   {ImagePostgres, auth.DatabaseAuthTypeUserPassword, true},
+		"acmeCo/aurora/postgres-iam":   {ImageAmazonAurora, auth.DatabaseAuthTypeAWSIAM, false},
+		"acmeCo/rds/postgres-password": {ImageAmazonRDS, auth.DatabaseAuthTypeUserPassword, false},
+		"acmeCo/rds/postgres-iam":      {ImageAmazonRDS, auth.DatabaseAuthTypeAWSIAM, false},
 	}
 
-	if len(specs) != len(expectations) {
-		test.Fatalf("got %d materializations, want %d", len(specs), len(expectations))
+	if len(specs) != len(expectations)+1 {
+		test.Fatalf("got %d materializations, want %d plus the legacy password", len(specs), len(expectations))
 	}
 
 	for name, expected := range expectations {
@@ -47,18 +50,38 @@ func TestSampleVariants(test *testing.T) {
 
 			var config Config = spec.Endpoint.Connector.Config
 
-			if expected.legacyPassword && (config.Credentials != nil || config.Password == "") {
-				test.Errorf("credentials = %+v, password = %q, want only the legacy password", config.Credentials, config.Password)
+			if spec.Endpoint.Connector.Image != expected.image {
+				test.Errorf("image = %q, want %q", spec.Endpoint.Connector.Image, expected.image)
 			}
 
-			if !expected.legacyPassword && (config.Credentials == nil || config.Credentials.AuthType != expected.authType || config.Password != "") {
-				test.Errorf("credentials = %+v, password = %q, want auth_type %q", config.Credentials, config.Password, expected.authType)
+			if config.Credentials == nil || config.Credentials.AuthType != expected.authType {
+				test.Fatalf("credentials = %+v, want auth_type %q", config.Credentials, expected.authType)
 			}
+
+			spectest.AssertDatabaseCredentials(test, *config.Credentials)
 
 			if (config.NetworkTunnel != nil) != expected.sshTunnel {
 				test.Errorf("networkTunnel = %+v, want present = %v", config.NetworkTunnel, expected.sshTunnel)
 			}
+
+			if config.Password != "" {
+				test.Errorf("legacy password = %q, want unset", config.Password)
+			}
 		})
+	}
+}
+
+func TestSampleLegacyPassword(test *testing.T) {
+	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
+
+	var config Config = specs["acmeCo/postgres/legacy-password"].Endpoint.Connector.Config
+
+	if config.Credentials != nil {
+		test.Errorf("credentials = %+v, want unset for the legacy shape", config.Credentials)
+	}
+
+	if config.Password != "<secret>" {
+		test.Errorf("legacy password = %q, want <secret>", config.Password)
 	}
 }
 
@@ -95,21 +118,11 @@ func TestSampleBindings(test *testing.T) {
 
 	var bindings []Binding = specs["acmeCo/analytics/materialize-postgres"].Bindings
 
-	expectations := []Resource{
+	spectest.AssertMaterializationResources(test, bindings, []Resource{
 		{Table: "orders"},
 		{Table: "customers", Schema: "crm", AdditionalTableCreateSQL: "CREATE INDEX customers_email ON crm.customers (email);"},
 		{Table: "events", DeltaUpdates: true},
-	}
-
-	if len(bindings) != len(expectations) {
-		test.Fatalf("got %d bindings, want %d", len(bindings), len(expectations))
-	}
-
-	for index, expected := range expectations {
-		if bindings[index].Resource != expected {
-			test.Errorf("binding %d resource = %+v, want %+v", index, bindings[index].Resource, expected)
-		}
-	}
+	})
 
 	if bindings[2].Fields == nil || !slices.Equal(bindings[2].Fields.Exclude, []string{"payload"}) {
 		test.Errorf("events fields = %+v, want exclude [payload]", bindings[2].Fields)
@@ -122,6 +135,7 @@ func TestSampleBindings(test *testing.T) {
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
 	var authTypes *spectest.EnumSamples[auth.DatabaseAuthType] = spectest.NewEnumSamples(test, "auth_type", auth.DatabaseAuthTypes)
+	var sslModes *spectest.EnumSamples[sslmode.Postgres] = spectest.NewEnumSamples(test, "sslmode", sslmode.PostgresModes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
@@ -134,26 +148,16 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 			}
 
 			if config.Credentials != nil {
-				var credentials auth.DatabaseCredentials = *config.Credentials
-
-				authTypes.Add(name, credentials.AuthType)
-
-				if credentials.AuthType == auth.DatabaseAuthTypeUserPassword && credentials.Password == "" {
-					test.Errorf("%s: UserPassword credentials need a password", name)
-				}
-
-				if credentials.AuthType == auth.DatabaseAuthTypeAWSIAM && (credentials.AWSRegion == "" || credentials.AWSRoleARN == "") {
-					test.Errorf("%s: AWSIAM credentials need aws_region and aws_role_arn", name)
-				}
+				authTypes.Add(name, config.Credentials.AuthType)
 			}
 
-			if config.Advanced != nil && config.Advanced.SSLMode != "" && !slices.Contains(sslmode.PostgresModes, config.Advanced.SSLMode) {
-				test.Errorf("%s: sslmode %q is not in sslmode.PostgresModes", name, config.Advanced.SSLMode)
+			if config.Advanced != nil && config.Advanced.SSLMode != "" {
+				sslModes.Add(name, config.Advanced.SSLMode)
 			}
 		}
 	}
 
-	authTypes.AssertSampled(auth.DatabaseAuthTypeUserPassword, auth.DatabaseAuthTypeAWSIAM)
+	authTypes.AssertAllSampled()
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {

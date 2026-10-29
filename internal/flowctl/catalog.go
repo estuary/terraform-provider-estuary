@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"gopkg.in/yaml.v3"
 )
@@ -27,9 +28,9 @@ func inlineConfigs(spec map[string]any, directory string) error {
 
 	defer root.Close()
 
-	for _, endpoint := range utils.Lookup(spec, "endpoint") {
+	for _, endpoint := range utils.Lookup(spec, catalog.EndpointKey) {
 		object, _ := endpoint.(map[string]any)
-		path, isPath := object["config"].(string)
+		path, isPath := object[catalog.ConfigKey].(string)
 
 		if !isPath {
 			continue
@@ -47,7 +48,7 @@ func inlineConfigs(spec map[string]any, directory string) error {
 			return fmt.Errorf("parsing pulled config %s: %w", path, err)
 		}
 
-		object["config"] = config
+		object[catalog.ConfigKey] = config
 	}
 
 	return nil

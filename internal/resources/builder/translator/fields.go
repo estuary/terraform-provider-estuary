@@ -11,13 +11,14 @@ import (
 )
 
 type field struct {
-	key         string
-	attribute   string
-	description string
-	optional    bool
-	secret      bool
-	enum        []string
-	kind        reflect.Type
+	key                string
+	attribute          string
+	description        string
+	optional           bool
+	secret             bool
+	forbidsCredentials bool
+	enum               []string
+	kind               reflect.Type
 }
 
 // AttributeName returns the Terraform attribute name of a YAML key, in snake case.
@@ -49,9 +50,9 @@ func fields(structType reflect.Type) ([]field, error) {
 
 	for index := range structType.NumField() {
 		var structField reflect.StructField = structType.Field(index)
-		var options []string = strings.Split(structField.Tag.Get("yaml"), ",")
+		var key string = catalog.FieldKey(structField)
 
-		if slices.Contains(options[1:], "inline") {
+		if catalog.FieldInline(structField) {
 			inlined, err := fields(structField.Type)
 
 			if err != nil {
@@ -63,7 +64,7 @@ func fields(structType reflect.Type) ([]field, error) {
 			continue
 		}
 
-		if options[0] == "" || options[0] == "-" {
+		if key == "" || key == "-" {
 			continue
 		}
 
@@ -71,7 +72,7 @@ func fields(structType reflect.Type) ([]field, error) {
 			return nil, fmt.Errorf("%s: %w", structType, err)
 		}
 
-		var attribute string = AttributeName(options[0])
+		var attribute string = AttributeName(key)
 
 		if slices.Contains(attributes, attribute) {
 			return nil, fmt.Errorf("%s: attribute %s is mapped twice", structType, attribute)
@@ -82,13 +83,14 @@ func fields(structType reflect.Type) ([]field, error) {
 		enum, _ := catalog.EnumValues(structField)
 
 		mappedFields = append(mappedFields, field{
-			key:         options[0],
-			attribute:   attribute,
-			description: structField.Tag.Get("description"),
-			optional:    slices.Contains(options[1:], "omitempty") || structField.Type.Kind() == reflect.Pointer,
-			secret:      catalog.SecretField(structField),
-			enum:        enum,
-			kind:        structField.Type,
+			key:                key,
+			attribute:          attribute,
+			description:        catalog.FieldDescription(structField),
+			optional:           catalog.FieldOmitEmpty(structField) || structField.Type.Kind() == reflect.Pointer,
+			secret:             catalog.SecretField(structField),
+			forbidsCredentials: catalog.ForbidsCredentials(structField),
+			enum:               enum,
+			kind:               structField.Type,
 		})
 	}
 

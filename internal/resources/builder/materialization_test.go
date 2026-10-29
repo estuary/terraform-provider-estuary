@@ -3,11 +3,13 @@ package builder
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -60,7 +62,7 @@ func (testDekafDocument) FromSpec(name string, spec testDekafSpec) testDekafDocu
 func TestMaterializationCodecSchema(test *testing.T) {
 	var ctx context.Context = context.Background()
 
-	codec, err := NewCodec[materializationDocument[testConfig, testResource]](testConnector)
+	codec, err := newCodec[materializationDocument[testConfig, testResource]](testConnector, materializationType)
 
 	if err != nil {
 		test.Fatal(err)
@@ -96,6 +98,8 @@ func TestMaterializationCodecSchema(test *testing.T) {
 		"binding backfill":           {path.Root("bindings").AtListIndex(0).AtName("backfill"), schema.SingleNestedAttribute{}, false},
 		"binding backfill trigger":   {path.Root("bindings").AtListIndex(0).AtName("backfill").AtName("trigger"), schema.Int64Attribute{}, false},
 		"binding name":               {path.Root("bindings").AtListIndex(0).AtName("name"), schema.StringAttribute{}, false},
+		"backfill":                   {path.Root("backfill"), schema.SingleNestedAttribute{}, false},
+		"backfill trigger":           {path.Root("backfill").AtName("trigger"), schema.Int64Attribute{}, false},
 	}
 
 	for name, expected := range expectations {
@@ -119,7 +123,7 @@ func TestMaterializationCodecSchema(test *testing.T) {
 func TestMaterializationCodecRoundTrip(test *testing.T) {
 	var capture string = "acmeCo/source-postgres"
 
-	codec, err := NewCodec[materializationDocument[testConfig, testResource]](testConnector)
+	codec, err := newCodec[materializationDocument[testConfig, testResource]](testConnector, materializationType)
 
 	if err != nil {
 		test.Fatal(err)
@@ -219,7 +223,7 @@ func TestMaterializationFromDocument(test *testing.T) {
 		},
 	}
 
-	codec, err := NewCodec[testDekafDocument](connector)
+	codec, err := newCodec[testDekafDocument](connector, materializationType)
 
 	if err != nil {
 		test.Fatal(err)
@@ -255,8 +259,8 @@ func TestMaterializationFromDocument(test *testing.T) {
 }
 
 func TestNewCodecRequiresConnectorImage(test *testing.T) {
-	if _, err := NewCodec[materializationDocument[testConfig, testResource]](Connector{TypeName: "materialization_test"}); err == nil {
-		test.Error("NewCodec accepted a connector without a default image")
+	if _, err := newCodec[materializationDocument[testConfig, testResource]](Connector{TypeName: "materialization_test"}, materializationType); err == nil {
+		test.Error("newCodec accepted a connector without a default image")
 	}
 }
 
@@ -309,5 +313,225 @@ func TestMaterializationReadRefreshesBindingsBySource(test *testing.T) {
 
 	if !readResp.State.Raw.Equal(want) {
 		test.Errorf("refreshed state = %v, want %v", readResp.State.Raw, want)
+	}
+}
+
+func TestResourceUpdateMaterializationBackfillTrigger(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var configureResp resource.ConfigureResponse
+	var backend *testBackend = &testBackend{
+		live: map[string]any{
+			"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
+			"bindings": []any{
+				map[string]any{"resource": map[string]any{"table": "events"}, "source": "acmeCo/events", "backfill": 1, "disable": true},
+				map[string]any{"resource": map[string]any{"table": "orders"}, "source": "acmeCo/orders", "backfill": 4},
+			},
+		},
+	}
+	var spec MaterializationSpec[testConfig, testResource] = MaterializationSpec[testConfig, testResource]{
+		Endpoint: endpoint.ConnectorSpec[testConfig]{Connector: endpoint.Connector[testConfig]{Image: testNamedConnector.Image, Config: testConfig{Host: "db.example.com"}}},
+		Bindings: []materialization.Binding[testResource]{
+			{Resource: testResource{Table: "events"}, Source: materialization.BindingSource{Name: "acmeCo/events"}, Disable: true},
+			{Resource: testResource{Table: "orders"}, Source: materialization.BindingSource{Name: "acmeCo/orders"}},
+		},
+	}
+
+	entry := NewMaterialization[testConfig, testResource](testNamedConnector)().(*entryResource[materializationDocument[testConfig, testResource], MaterializationSpec[testConfig, testResource]])
+
+	entry.Configure(ctx, resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: backend, Tenant: "acmeCo/"}}, &configureResp)
+
+	value, err := entry.codec.Value("warehouse", spec)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	priorValue, err := withValue(value, testEntryBackfillPath, map[string]tftypes.Value{"trigger": tftypes.NewValue(tftypes.Number, 2)})
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	planValue, err := withValue(value, testEntryBackfillPath, map[string]tftypes.Value{"trigger": tftypes.NewValue(tftypes.Number, 3)})
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	loweredValue, err := withValue(value, testEntryBackfillPath, map[string]tftypes.Value{"trigger": tftypes.NewValue(tftypes.Number, 1)})
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+	entry.Update(ctx, resource.UpdateRequest{
+		State: tfsdk.State{Schema: entry.codec.Schema(), Raw: priorValue},
+		Plan:  tfsdk.Plan{Schema: entry.codec.Schema(), Raw: planValue},
+	}, &updateResp)
+
+	if updateResp.Diagnostics.HasError() {
+		test.Fatalf("update: %v", updateResp.Diagnostics)
+	}
+
+	var published map[string]any = map[string]any{}
+
+	bindings, _ := backend.published["bindings"].([]any)
+
+	for _, binding := range bindings {
+		object, _ := binding.(map[string]any)
+
+		published[catalog.BindingCollection(binding)] = object["backfill"]
+	}
+
+	if !reflect.DeepEqual(published, map[string]any{"acmeCo/events": 1, "acmeCo/orders": 5}) || backend.resets != nil {
+		test.Errorf("published backfills %v and reset %v, want the disabled events kept, orders raised by one and no reset", published, backend.resets)
+	}
+
+	if _, has := backend.published["backfill"]; has {
+		test.Errorf("published %v, want the backfill block left out of the spec", backend.published)
+	}
+
+	warnings := entry.warnEntryBackfill(planValue, priorValue, entry.newPublicationReader(planValue, priorValue, entry.newLiveReader(ctx, priorValue)))
+
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0].Summary(), "Backfill of every binding in acmeCo/warehouse") || !strings.Contains(warnings[0].Detail(), "- acmeCo/orders\n\n") {
+		test.Errorf("warnings = %v, want a backfill warning listing orders only", warnings)
+	}
+
+	if warnings := entry.warnEntryBackfill(priorValue, priorValue, entry.newPublicationReader(priorValue, priorValue, entry.newLiveReader(ctx, priorValue))); len(warnings) != 0 {
+		test.Errorf("warnings = %v, want none without a raise", warnings)
+	}
+
+	diagnostics := validateBackfillTriggers(loweredValue, priorValue, entry.catalogType)
+
+	if len(diagnostics) != 1 || diagnostics[0].Summary() != "Backfill trigger lowered" || !strings.Contains(diagnostics[0].Detail(), "the materialization") {
+		test.Errorf("diagnostics = %v, want the lowered trigger of the materialization rejected", diagnostics)
+	}
+}
+
+func TestMaterializationWarnsAboutSourceCaptureBindings(test *testing.T) {
+	var configureResp resource.ConfigureResponse
+	var sourceCapture string = "acmeCo/source-postgres"
+	var spec MaterializationSpec[testConfig, testResource] = MaterializationSpec[testConfig, testResource]{
+		Endpoint: endpoint.ConnectorSpec[testConfig]{Connector: endpoint.Connector[testConfig]{Image: testNamedConnector.Image, Config: testConfig{Host: "db.example.com"}}},
+		Bindings: []materialization.Binding[testResource]{
+			{Resource: testResource{Table: "orders"}, Source: materialization.BindingSource{Name: "acmeCo/orders"}},
+			{Resource: testResource{Table: "users"}, Source: materialization.BindingSource{Name: "acmeCo/users"}},
+		},
+	}
+
+	entry := NewMaterialization[testConfig, testResource](testNamedConnector)().(*entryResource[materializationDocument[testConfig, testResource], MaterializationSpec[testConfig, testResource]])
+
+	entry.Configure(context.Background(), resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: &testBackend{}, Tenant: "acmeCo/"}}, &configureResp)
+
+	values := func(source *materialization.Source) (tftypes.Value, tftypes.Value) {
+		var full MaterializationSpec[testConfig, testResource] = spec
+		var removed MaterializationSpec[testConfig, testResource] = spec
+
+		full.Source, removed.Source = source, source
+		removed.Bindings = spec.Bindings[:1]
+
+		fullValue, err := entry.codec.Value("warehouse", full)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		removedValue, err := entry.codec.Value("warehouse", removed)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return fullValue, removedValue
+	}
+
+	unlinked, unlinkedRemoved := values(nil)
+	linked, linkedRemoved := values(&materialization.Source{Capture: &sourceCapture})
+
+	var created tftypes.Value = tftypes.NewValue(unlinked.Type(), nil)
+
+	for name, state := range map[string]tftypes.Value{"creation": created, "linking update": unlinked} {
+		warnings := entry.warnAddedBindings(linked, state)
+
+		if len(warnings) != 1 || !warnings[0].(diag.DiagnosticWithPath).Path().Equal(path.Root("source").AtName("capture")) ||
+			!strings.HasPrefix(warnings[0].Summary(), "Source capture adds unmanaged bindings in acmeCo/warehouse") ||
+			!strings.Contains(warnings[0].Detail(), "not per-binding overrides such as fields.require") {
+			test.Errorf("%s: warnings = %v, want a source.capture warning listing the settings added bindings lack", name, warnings)
+		}
+	}
+
+	if warnings := entry.warnAddedBindings(linked, linked); len(warnings) != 0 {
+		test.Errorf("warnings = %v, want none while the capture stays linked", warnings)
+	}
+
+	if warnings := entry.warnAddedBindings(unlinked, created); len(warnings) != 0 {
+		test.Errorf("warnings = %v, want none without a source capture", warnings)
+	}
+
+	warnings := entry.warnRemovedBindings(linkedRemoved, linked)
+
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), "- acmeCo/users\n") || !strings.Contains(warnings[0].Detail(), "To stop materializing one") {
+		test.Errorf("warnings = %v, want a removed binding warning listing users", warnings)
+	}
+
+	if warnings := entry.warnRemovedBindings(unlinkedRemoved, unlinked); len(warnings) != 0 {
+		test.Errorf("warnings = %v, want none without a source capture", warnings)
+	}
+}
+
+func TestMaterializationReadShowsLostFieldDepth(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var linked string = "acmeCo/source-postgres"
+
+	expectations := map[string]struct {
+		state materialization.FieldDepth
+		want  materialization.FieldDepth
+	}{
+		"drops an unlimited depth Estuary lost": {materialization.FieldDepthUnlimited, ""},
+		"drops another depth Estuary lost":      {"1", ""},
+	}
+
+	for name, expected := range expectations {
+		var configureResp resource.ConfigureResponse
+		var backend *testBackend = &testBackend{
+			live: map[string]any{
+				"source":   map[string]any{"capture": linked, "deltaUpdates": false},
+				"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
+				"bindings": []any{},
+			},
+		}
+		var spec MaterializationSpec[testConfig, testResource] = MaterializationSpec[testConfig, testResource]{
+			Endpoint: endpoint.ConnectorSpec[testConfig]{Connector: endpoint.Connector[testConfig]{Image: testNamedConnector.Image, Config: testConfig{Host: "db.example.com"}}},
+		}
+
+		entry := NewMaterialization[testConfig, testResource](testNamedConnector)().(*entryResource[materializationDocument[testConfig, testResource], MaterializationSpec[testConfig, testResource]])
+
+		entry.Configure(ctx, resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: backend, Tenant: "acmeCo/"}}, &configureResp)
+
+		spec.Source = &materialization.Source{Capture: &linked, FieldsRecommended: expected.state}
+
+		stateValue, err := entry.codec.Value("warehouse", spec)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		spec.Source.FieldsRecommended = expected.want
+
+		want, err := entry.codec.Value("warehouse", spec)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var readResp resource.ReadResponse = resource.ReadResponse{State: tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue}}
+
+		entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
+
+		if readResp.Diagnostics.HasError() || !readResp.State.Raw.Equal(want) {
+			test.Errorf("%s: refreshed state = %v (%v), want %v", name, readResp.State.Raw, readResp.Diagnostics, want)
+		}
 	}
 }

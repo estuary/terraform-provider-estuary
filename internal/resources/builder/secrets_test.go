@@ -57,7 +57,7 @@ func TestSecretsHash(test *testing.T) {
 func TestCodecSecrets(test *testing.T) {
 	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
 
-	codec, err := NewCodec[captureDocument[testConfig, testResource]](testNamedConnector)
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
 
 	if err != nil {
 		test.Fatal(err)
@@ -93,7 +93,7 @@ func TestCodecSecrets(test *testing.T) {
 }
 
 func TestCodecSecretPath(test *testing.T) {
-	codec, err := NewCodec[captureDocument[testConfig, testResource]](testNamedConnector)
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
 
 	if err != nil {
 		test.Fatal(err)

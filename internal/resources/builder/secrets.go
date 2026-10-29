@@ -134,6 +134,42 @@ func (secrets secrets) nullSecrets(value tftypes.Value) (tftypes.Value, error) {
 	return nullAttributes(value, secrets.writeOnly)
 }
 
+// withoutLiveSecrets nulls the write-only attributes of a live value and redacts the credentials of attributes
+// forbidding them, such as a MongoDB address with user info, returning the redacted paths.
+func (secrets secrets) withoutLiveSecrets(value tftypes.Value) (tftypes.Value, []*tftypes.AttributePath, error) {
+	var redactedPaths []*tftypes.AttributePath
+
+	value, err := secrets.nullSecrets(value)
+
+	if err != nil {
+		return value, nil, err
+	}
+
+	value, err = tftypes.Transform(value, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
+		var text string
+
+		if !current.Type().Is(tftypes.String) || !current.IsKnown() || current.IsNull() || current.As(&text) != nil {
+			return current, nil
+		}
+
+		attribute, err := secrets.schema.AttributeAtTerraformPath(context.Background(), path)
+
+		if err != nil || !translator.ForbidsCredentials(attribute) {
+			return current, nil
+		}
+
+		if safe := translator.RedactCredentials(text); safe != text {
+			redactedPaths = append(redactedPaths, path)
+
+			return tftypes.NewValue(current.Type(), safe), nil
+		}
+
+		return current, nil
+	})
+
+	return value, redactedPaths, err
+}
+
 // nullHashes nulls the hashes, plan ones being unknown until apply.
 func (secrets secrets) nullHashes(value tftypes.Value) (tftypes.Value, error) {
 	return nullAttributes(value, func(path *tftypes.AttributePath) bool {

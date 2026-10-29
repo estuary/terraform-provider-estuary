@@ -156,13 +156,20 @@ Each resource manages a capture or a materialization of one Estuary connector. S
 
 | Resource | Type | Connector |
 |---|---|---|
+| [`estuary_materialization_aurora_mysql`](internal/resources/materializationauroramysql/README.md) | Materialization | [Amazon Aurora for MySQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/MySQL/#mysql-on-managed-cloud-platforms) |
+| [`estuary_materialization_aurora_postgres`](internal/resources/materializationaurorapostgres/README.md) | Materialization | [Amazon Aurora for PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) |
+| [`estuary_materialization_mysql`](internal/resources/materializationmysql/README.md) | Materialization | [MySQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/MySQL/) |
 | [`estuary_materialization_postgres`](internal/resources/materializationpostgres/README.md) | Materialization | [PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) |
+| [`estuary_materialization_rds_mysql`](internal/resources/materializationrdsmysql/README.md) | Materialization | [Amazon RDS for MySQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/MySQL/amazon-rds-mysql/) |
+| [`estuary_materialization_rds_postgres`](internal/resources/materializationrdspostgres/README.md) | Materialization | [Amazon RDS for PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/amazon-rds-postgres/) |
 | [`estuary_source_aurora_mysql`](internal/resources/sourceauroramysql/README.md) | Capture | [Amazon Aurora for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/#amazon-aurora) |
 | [`estuary_source_aurora_postgres`](internal/resources/sourceaurorapostgres/README.md) | Capture | [Amazon Aurora for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-aurora-postgres/) |
 | [`estuary_source_dynamodb`](internal/resources/sourcedynamodb/README.md) | Capture | [Amazon DynamoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/amazon-dynamodb/) |
 | [`estuary_source_mongodb`](internal/resources/sourcemongodb/README.md) | Capture | [MongoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/) |
 | [`estuary_source_rds_mysql`](internal/resources/sourcerdsmysql/README.md) | Capture | [Amazon RDS for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/amazon-rds-mysql/) |
 | [`estuary_source_rds_postgres`](internal/resources/sourcerdspostgres/README.md) | Capture | [Amazon RDS for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-rds-postgres/) |
+
+Each capture resource also has a data source of the same name, reading the live bindings of a capture managed elsewhere. See [Bindings Lifecycle](#bindings-lifecycle).
 
 ---
 
@@ -219,13 +226,49 @@ bindings = [
 ]
 ```
 
+**Materialize every collection of a capture, managed by the capture or not:**
+```hcl
+resource "estuary_materialization_postgres" "shop" {
+  # ...
+
+  bindings = [
+    for binding in estuary_source_mongodb.shop.live_bindings : {
+      source   = binding.target
+      resource = { table = binding.resource.collection }
+    } if binding.disable != true
+  ]
+}
+```
+
+**Follow a capture, declaring the bindings that need their own settings:**
+```hcl
+resource "estuary_materialization_postgres" "shop" {
+  # ...
+
+  source = {
+    capture            = "acmeCo/mongodb/source-mongodb"
+    fields_recommended = "unlimited" # bindings Estuary adds get only these settings and target_naming
+  }
+
+  bindings = [
+    {
+      source   = "acmeCo/mongodb/shop/orders"
+      resource = { table = "orders" }
+      fields   = { recommended = "unlimited", require = ["flow_document"] }
+    },
+  ]
+}
+```
+
 **Lifecycle rules:**
 - **Default target:** a capture binding without `target` keeps its current collection. A new one gets the collection the connector discovery names, so the provider never replicates the connector naming rules. For example, the capture `acmeCo/mongodb/source-mongodb` writes `shop.users` to `acmeCo/mongodb/shop/users`. Discovery runs during `terraform plan` only for new bindings without `target`, from Estuary's data plane, so the source must be reachable and the plan fails naming each binding whose resource discovery doesn't find. Set `target` to skip discovery.
 - **Changes made outside Terraform:** plans refresh every field from the live spec, on the capture or materialization and on its bindings, such as the endpoint `config`, `image` or `auto_discover`. Dashboard edits to the fields you set show as changes the next apply reverts, and the live values you don't declare, such as a `priority` set in the dashboard, show as removed, as the apply would drop them: declare the ones to keep. Empty live values (`false`, `""`, `0`, empty lists) are left out, and write-only secrets are never read back. A declared binding deleted outside Terraform is added back. A materialization binding whose live `source` holds a key other than `name`, `notBefore` or `notAfter` can't be refreshed: the plan warns about it and doesn't show that materialization's outside changes.
-- **Creating a capture with `add_new_bindings = true`:** the apply runs a discovery and adds a binding for each discovered resource you didn't declare, as the dashboard does, and later discoveries keep adding new ones. The plan warns about it. Terraform doesn't manage those bindings, so declare a binding to manage it. Updates never run this discovery.
-- **Removing a binding:** with `add_new_bindings = true`, discovery may add it back while the collection still exists in the source. The plan warns about it. Use `disable = true` to stop it for good.
+- **Bindings Estuary adds:** creating a capture with `add_new_bindings = true` runs a discovery and adds a binding for each discovered resource you didn't declare, as the dashboard does, and later discoveries keep adding new ones; updates never run this discovery. A materialization with `source.capture` gets a binding for each collection of the capture you didn't declare, and for each collection the capture adds later. Those materialization bindings get only `source.delta_updates`, `source.fields_recommended` and `target_naming`, not per-binding overrides such as `fields.require`. The plan warns when either setting is turned on, on creation or on an update. Terraform doesn't manage these bindings: declare one to manage it and give it its own settings.
+- **Removing a binding:** with `add_new_bindings = true` on a capture, discovery may add it back while the resource still exists in the source. With `source.capture` on a materialization, Estuary may add it back while the capture still has its collection. The plan warns about it. Use `disable = true` to stop it for good.
 - **Taking over a binding:** the plan shows it as added, but the apply updates the live binding in place. A warning lists the fields the apply changes, so copy over the live values you want to keep.
-- **Importing:** a capture with `auto_discover` or a materialization with `source.capture` is imported without its bindings, which stay unmanaged until you declare them. Any other capture or materialization is imported with all of its bindings. Import by catalog name, such as `terraform import estuary_source_mongodb.shop acmeCo/mongodb/source-mongodb`; the tenant and connector name can be left out. Write-only secrets aren't imported, so the first apply publishes the ones in your configuration. Live fields the provider doesn't manage are named in an import warning, and the next apply removes them.
+- **Every live binding:** captures list all their live bindings in the read-only `live_bindings`, with the attributes of `bindings`: the declared ones and those discovery added. Build other bindings from it, such as a materialization of every collection of a capture, without declaring them all in the capture. It's refreshed on each plan, and when the capture's bindings change the plan shows the bindings the apply publishes, so plans built from it only show the bindings that change. When creating a capture with `add_new_bindings = true`, it stays unknown until the apply, as discovery adds bindings Terraform can't foresee. Bindings discovery adds later show up on the next plan; use `source.capture` for Estuary to add them right away. Empty live values are left out, so test optional fields like `binding.disable != true`.
+- **Captures managed elsewhere:** each capture resource has a data source of the same name, such as `data "estuary_source_mongodb"`, reading the `live_bindings` of a capture by name. Don't use it for a capture in the same configuration: referencing the resource defers the read to apply whenever the capture has changes, so everything built from it shows as known after apply. It fails when the capture doesn't exist, rather than listing no bindings.
+- **Importing:** a capture with `auto_discover` or a materialization with `source.capture` is imported without its bindings, which stay unmanaged until you declare them. Any other capture or materialization is imported with all of its bindings. Import by catalog name, such as `terraform import estuary_source_mongodb.shop acmeCo/mongodb/source-mongodb`; the tenant and connector name can be left out. Write-only secrets aren't imported, so the first apply publishes the ones in your configuration. Live fields the provider doesn't manage are named in an import warning. The next apply keeps the unknown top-level fields, and the unknown endpoint fields until it publishes the endpoint, which it does when the configuration sets secrets or changes the endpoint. It removes the unknown fields of the bindings declared in the configuration. Credentials found in a connection string, such as a MongoDB `address`, show as `***`.
 
 ### Field Selection
 
@@ -312,7 +355,7 @@ On SQL captures (PostgreSQL, MySQL), a binding's `backfill.mode` also sets how i
 
 Captures also take a `backfill` block at the top level, as the dashboard's **Backfill** button and **Backfill mode**:
 
-- Raising the capture's `backfill.trigger` backfills **every** binding of the capture, those added by discovery that Terraform doesn't manage included. A binding whose own trigger rises in the same apply still backfills once.
+- Raising the capture's `backfill.trigger` backfills **every** binding of the capture, those added by discovery that Terraform doesn't manage included. A binding whose own trigger rises in the same apply still backfills once. Plans warn with the list of bindings it backfills, and list those it resets in a separate warning.
 - The capture's `backfill.strategy` is the default of its bindings, and a binding's `backfill.strategy` overrides it. Changing a strategy alone publishes nothing.
 
 | `strategy` | What a raised trigger does to a capture binding |
@@ -350,6 +393,17 @@ resource "estuary_source_aurora_postgres" "sales" {
 
 Plans warn about every collection the apply resets, those of unmanaged bindings included. A materialization with `on_incompatible_schema_change = "abort"` makes the reset fail.
 
+Materializations also take a `backfill` block at the top level, as the dashboard's **Backfill** button under **Source Collections → Advanced options**. Raising its `trigger` backfills **every** enabled binding of the materialization, those Estuary adds through `source.capture` included: each table is truncated and materialized again from the collection, without reading the source again. Plans warn with the list of bindings it backfills. It has no `strategy`: to read the source again, backfill the capture instead.
+
+```hcl
+resource "estuary_materialization_postgres" "warehouse" {
+  # ...
+  backfill = {
+    trigger = 2 # was 1: rebuild every table after the field selection change (2026-10-28)
+  }
+}
+```
+
 > [!CAUTION]
 > Removing a binding drops its live counter, so a binding added back starts over. To stop a binding while keeping its progress, set `disable = true` instead.
 
@@ -374,6 +428,8 @@ shards = {
 ### Connector Versions
 
 Each resource defaults to the connector's current major version tag (e.g., `ghcr.io/estuary/source-mongodb:v3`), which receives Estuary's fixes and improvements. Set `image` only to move to another major version on purpose, and test it in a non-production environment first, as major versions may not be drop-in replacements.
+
+Only the tag can change: the image name is fixed per resource, and the plan rejects any other image, so a configuration can't hand its secrets to a connector other than the resource's own.
 
 ```hcl
 resource "estuary_source_mongodb" "shop" {
@@ -519,6 +575,9 @@ resource "estuary_materialization_postgres" "shop" {
   ]
 }
 ```
+
+> [!TIP]
+> `bindings` only holds the bindings declared in the capture, those Terraform manages. With `auto_discover`, loop over `live_bindings` instead to also materialize the collections discovery adds, see [Bindings Lifecycle](#bindings-lifecycle).
 
 ### Keep Secrets Out of Code
 

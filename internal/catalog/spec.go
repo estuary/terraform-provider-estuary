@@ -24,7 +24,8 @@ type BindingsGenerator interface {
 	GeneratesBindings() bool
 }
 
-// NewBindingsAdder is implemented by specs whose discovery binds every unbound resource.
+// NewBindingsAdder is implemented by specs whose unbound resources Estuary binds, such as discovered resources or
+// source capture collections.
 type NewBindingsAdder interface {
 	AddsNewBindings() bool
 }

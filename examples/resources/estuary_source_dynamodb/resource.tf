@@ -3,8 +3,7 @@ variable "aws_secret_access_key" {
   sensitive = true
 }
 
-# Capture of two tables authenticated with an access key, adding every new
-# table of the region as it's discovered.
+# Access key authentication with automatic discovery.
 resource "estuary_source_dynamodb" "shop" {
   name = "dynamodb"
 
@@ -18,7 +17,7 @@ resource "estuary_source_dynamodb" "shop" {
 
     credentials = {
       auth_type             = "AWSAccessKey"
-      aws_access_key_id     = "AKIAIOSFODNN7EXAMPLE"
+      aws_access_key_id     = "AKIAXXXXXXXXXXXXXXXX"
       aws_secret_access_key = var.aws_secret_access_key
     }
   }
@@ -38,8 +37,7 @@ resource "estuary_source_dynamodb" "shop" {
   ]
 }
 
-# Capture authenticated with an IAM role, limiting the read capacity the
-# backfill of a large table consumes.
+# IAM role authentication with a limited backfill read capacity.
 resource "estuary_source_dynamodb" "events" {
   name = "dynamodb/events"
 
@@ -63,8 +61,7 @@ resource "estuary_source_dynamodb" "events" {
   ]
 }
 
-# Capture from a DynamoDB-compatible API, such as DynamoDB Local, with
-# advanced backfill and polling options.
+# DynamoDB-compatible endpoint, such as DynamoDB Local.
 resource "estuary_source_dynamodb" "local" {
   name = "dynamodb/local"
 

@@ -16,6 +16,7 @@ This resource manages an [Amazon DynamoDB](https://docs.estuary.dev/reference/Co
   - [`bindings`](#bindings)
   - [`bindings.backfill`](#bindingsbackfill)
   - [`bindings.resource`](#bindingsresource)
+- [Data Source](#data-source)
 
 ## Example Usage
 
@@ -40,7 +41,7 @@ resource "estuary_source_dynamodb" "shop" {
 
     credentials = {
       auth_type             = "AWSAccessKey"
-      aws_access_key_id     = "AKIAIOSFODNN7EXAMPLE"
+      aws_access_key_id     = "AKIAXXXXXXXXXXXXXXXX"
       aws_secret_access_key = var.aws_secret_access_key
     }
   }
@@ -134,10 +135,11 @@ resource "estuary_source_dynamodb" "local" {
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | Yes | Capture name (e.g., `dynamodb`). The provider `tenant` is added in front and `/source-dynamodb` at the end, unless they're already there. |
-| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-dynamodb:v1`, see [Connector Versions](../../../README.md#connector-versions). |
+| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-dynamodb:v1`, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the region for new tables and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Region, authentication and advanced settings of the capture. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Captured tables, one per binding. See [`bindings`](#bindings). |
+| `live_bindings` | List of Objects | Read-only | Every live binding, the declared ones and those discovery (`auto_discover`) adds, with the attributes of [`bindings`](#bindings). Refreshed on each plan, and planned with the binding changes the apply publishes. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
 | `shards` | Dynamic | No | Shard settings of the capture, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
 
@@ -160,7 +162,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, those Terraform doesn't manage included. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
@@ -218,3 +220,21 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 |---|---|---|---|
 | `table` | String | Yes | Name of the captured table. |
 | `rcu_allocation` | Number | No | Read capacity units the backfill of the table tries to consume. Defaults to the provisioned read capacity of the table, and is unlimited for tables without one, such as on-demand tables. |
+
+## Data Source
+
+`data "estuary_source_dynamodb"` reads the live bindings of a capture by name without managing it, such as a capture managed in another configuration or outside Terraform:
+
+```hcl
+data "estuary_source_dynamodb" "source" {
+  name = "dynamodb"
+}
+```
+
+| Attribute | Type | Required | Description |
+|---|---|---|---|
+| `name` | String | Yes | Capture name, as in the resource: the provider `tenant` is added in front and `/source-dynamodb` at the end, unless they're already there. |
+| `live_bindings` | List of Objects | Read-only | Every live binding of the capture, with the attributes of [`bindings`](#bindings). |
+
+> [!WARNING]
+> For a capture managed in the same configuration, use the resource's `live_bindings` instead. A data source referencing the resource is read at apply whenever the capture has changes, so everything built from it shows as known after apply. Reading fails when the capture doesn't exist, rather than listing no bindings.

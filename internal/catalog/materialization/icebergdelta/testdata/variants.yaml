@@ -110,7 +110,7 @@ materializations:
           upload_interval: PT5M
           catalog:
             catalog_type: AWS Glue
-            glue_id: "210987654321"
+            glue_id: "123456789013"
     bindings:
       - resource:
           table: orders

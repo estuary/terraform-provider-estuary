@@ -9,28 +9,28 @@ import (
 // Image is the DynamoDB connector image.
 const Image string = "ghcr.io/estuary/source-dynamodb:v1"
 
-// ConnectorName ends the catalog name of the connector tasks.
+// ConnectorName is the catalog name suffix of the connector's tasks, as the dashboard names them.
 const ConnectorName string = "source-dynamodb"
 
 // Advanced carries the advanced endpoint options, including the backfill scan and stream polling settings.
 type Advanced struct {
-	BackfillSegments int    `yaml:"backfillSegments,omitempty"`
-	ScanLimit        int    `yaml:"scanLimit,omitempty"`
-	IdleBackoffMax   string `yaml:"idleBackoffMax,omitempty"`
-	Endpoint         string `yaml:"endpoint,omitempty"`
+	BackfillSegments int    `yaml:"backfillSegments,omitempty" description:"Number of segments the backfill scan of each table is split into. Defaults to 100. Has no effect once the backfill of a table has started."`
+	ScanLimit        int    `yaml:"scanLimit,omitempty" description:"Maximum number of items each backfill scan request evaluates. By default, it's unlimited, except for tables whose read capacity, from rcu_allocation or else provisioned, is 100 or less, which use 100."`
+	IdleBackoffMax   string `yaml:"idleBackoffMax,omitempty" description:"Maximum wait between polls of an open stream shard whose reads keep returning no records, as a Go duration between '1s' and '10m'. Defaults to '1s'. Higher values reduce billed DynamoDB Streams requests on idle shards, but delay the capture of new records by up to this wait."`
+	Endpoint         string `yaml:"endpoint,omitempty" description:"AWS endpoint URI to connect to, for both DynamoDB and DynamoDB Streams. Use it to capture from a DynamoDB-compatible API that AWS doesn't provide."`
 }
 
 // Config is the source-dynamodb configuration: region and AWS authentication.
 type Config struct {
-	Region      string              `yaml:"region"`
-	Credentials auth.AWSCredentials `yaml:"credentials"`
-	Advanced    *Advanced           `yaml:"advanced,omitempty"`
+	Region      string              `yaml:"region" description:"AWS region of the DynamoDB tables (e.g., 'us-east-1')."`
+	Credentials auth.AWSCredentials `yaml:"credentials" description:"AWS authentication of the capture."`
+	Advanced    *Advanced           `yaml:"advanced,omitempty" description:"Options for advanced users, rarely needed."`
 }
 
 // Resource identifies the captured DynamoDB table.
 type Resource struct {
-	Table         string `yaml:"table"`
-	RCUAllocation int    `yaml:"rcuAllocation,omitempty"`
+	Table         string `yaml:"table" description:"Name of the captured table."`
+	RCUAllocation int    `yaml:"rcuAllocation,omitempty" description:"Read capacity units the backfill of the table tries to consume. Defaults to the provisioned read capacity of the table, and is unlimited for tables without one, such as on-demand tables."`
 }
 
 // ResourcePath returns the table, satisfying capture.ResourcePather.

@@ -15,7 +15,7 @@ import (
 func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appendUnheld bool) (tftypes.Value, error) {
 	var refreshed []tftypes.Value = []tftypes.Value{}
 	var held map[string]bool = map[string]bool{}
-	var path *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(bindingsAttribute)
+	var path *tftypes.AttributePath = bindingsPath
 
 	state, err := codec.refreshManaged(tftypes.NewAttributePath(), state, live)
 
@@ -89,7 +89,7 @@ func (codec *Codec[D, S]) refreshManaged(path *tftypes.AttributePath, state tfty
 		return refreshedShards(state, live)
 	}
 
-	if !state.IsKnown() || codec.secrets.attribute(path) || providerOnly(path) || path.Equal(tftypes.NewAttributePath().WithAttributeName(bindingsAttribute)) {
+	if !state.IsKnown() || codec.secrets.attribute(path) || providerOnly(path) || path.Equal(bindingsPath) {
 		return state, nil
 	}
 
@@ -175,7 +175,7 @@ func refreshedShards(state tftypes.Value, live tftypes.Value) (tftypes.Value, er
 
 // planShards returns the configured shards, else the live ones in state, null for an entry not created yet.
 func planShards(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (tftypes.Value, error) {
-	var configured tftypes.Value = bindingAttribute(config, shardsAttribute)
+	var configured tftypes.Value = blockAttribute(config, shardsAttribute, tftypes.DynamicPseudoType)
 	var stored tftypes.Value = tftypes.NewValue(tftypes.DynamicPseudoType, nil)
 
 	if !configured.IsNull() || config.Type() == nil || config.IsNull() {
@@ -183,7 +183,7 @@ func planShards(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (
 	}
 
 	if state.Type() != nil && !state.IsNull() {
-		stored = bindingAttribute(state, shardsAttribute)
+		stored = blockAttribute(state, shardsAttribute, tftypes.DynamicPseudoType)
 	}
 
 	return tftypes.Transform(plan, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {

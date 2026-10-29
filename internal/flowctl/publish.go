@@ -29,7 +29,8 @@ func withDeclaredBindings(content []byte, name string, declared []any, identifie
 		return nil, fmt.Errorf("discovered spec has no capture %s", name)
 	}
 
-	discovered, _ := capture["bindings"].([]any)
+	var discovered []any = catalog.Bindings(capture)
+
 	collections, _ := catalogSpec["collections"].(map[string]any)
 
 	for position, binding := range discovered {
@@ -56,9 +57,7 @@ func withDeclaredBindings(content []byte, name string, declared []any, identifie
 		var target string = catalog.BindingCollection(binding)
 		var previous string = catalog.BindingCollection(discovered[position])
 
-		if meta, hasMeta := utils.Lookup(discovered[position], "resource")[catalog.ResourceMetaKey]; hasMeta && utils.Lookup(binding, "resource") != nil {
-			utils.Lookup(binding, "resource")[catalog.ResourceMetaKey] = meta
-		}
+		catalog.KeepResourceMeta(discovered[position], binding)
 
 		if spec, isDiscovered := collections[previous]; isDiscovered && target != previous {
 			if _, exists := collections[target]; !exists {
@@ -71,7 +70,7 @@ func withDeclaredBindings(content []byte, name string, declared []any, identifie
 		discovered[position] = binding
 	}
 
-	capture["bindings"] = discovered
+	capture[catalog.BindingsKey] = discovered
 
 	return yaml.Marshal(catalogSpec)
 }
@@ -79,7 +78,7 @@ func withDeclaredBindings(content []byte, name string, declared []any, identifie
 // bindingKey identifies a binding by its resource path, else by its target.
 func bindingKey(binding any, identifier catalog.BindingsIdentifier) (string, error) {
 	if identifier != nil {
-		path, err := identifier.ResourcePath(utils.Lookup(binding, "resource"))
+		path, err := identifier.ResourcePath(catalog.BindingResource(binding))
 
 		if err != nil || path != "" {
 			return "path:" + path, err
@@ -144,9 +143,9 @@ func materializationFiles(name string, spec catalog.MaterializationSpec) (map[st
 		return nil, fmt.Errorf("decoding materialization %s: %w", name, err)
 	}
 
-	var dekaf map[string]any = utils.Lookup(document, "materializations", name, "endpoint", "dekaf")
+	var dekaf map[string]any = utils.Lookup(document, "materializations", name, catalog.EndpointKey, "dekaf")
 
-	if dekaf == nil || dekaf["config"] == nil {
+	if dekaf == nil || dekaf[catalog.ConfigKey] == nil {
 		content, err := yaml.Marshal(catalogSpec)
 
 		if err != nil {
@@ -156,13 +155,13 @@ func materializationFiles(name string, spec catalog.MaterializationSpec) (map[st
 		return map[string][]byte{specFile: content}, nil
 	}
 
-	config, err := yaml.Marshal(dekaf["config"])
+	config, err := yaml.Marshal(dekaf[catalog.ConfigKey])
 
 	if err != nil {
 		return nil, fmt.Errorf("marshaling Dekaf config of %s: %w", name, err)
 	}
 
-	dekaf["config"] = dekafConfigFile
+	dekaf[catalog.ConfigKey] = dekafConfigFile
 
 	content, err := yaml.Marshal(document)
 
@@ -253,9 +252,9 @@ func (client *Client) PublishDiscoveredCapture(ctx context.Context, name string,
 		return fmt.Errorf("decoding capture %s: %w", name, err)
 	}
 
-	declared, _ := document["bindings"].([]any)
+	var declared []any = catalog.Bindings(document)
 
-	document["bindings"] = []any{}
+	document[catalog.BindingsKey] = []any{}
 
 	files, err := captureFiles(name, catalog.RawCapture(document))
 

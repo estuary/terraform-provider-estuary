@@ -12,3 +12,17 @@ var New func() resource.Resource = builder.NewMaterialization[mysql.Config, mysq
 	Image:         mysql.ImageMySQL,
 	ConnectorName: mysql.ConnectorNameMySQL,
 })
+
+// NewAurora returns the estuary_materialization_aurora_mysql resource.
+var NewAurora func() resource.Resource = builder.NewMaterialization[mysql.Config, mysql.Resource](builder.Connector{
+	TypeName:      "materialization_aurora_mysql",
+	Image:         mysql.ImageAmazonAurora,
+	ConnectorName: mysql.ConnectorNameAmazonAurora,
+})
+
+// NewRDS returns the estuary_materialization_rds_mysql resource.
+var NewRDS func() resource.Resource = builder.NewMaterialization[mysql.Config, mysql.Resource](builder.Connector{
+	TypeName:      "materialization_rds_mysql",
+	Image:         mysql.ImageAmazonRDS,
+	ConnectorName: mysql.ConnectorNameAmazonRDS,
+})

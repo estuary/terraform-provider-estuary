@@ -46,14 +46,14 @@ var DeletionModes = []DeletionMode{
 
 // Config is the Dekaf connector configuration.
 type Config struct {
-	Token            string       `yaml:"token"`
-	StrictTopicNames bool         `yaml:"strict_topic_names"`
-	Deletions        DeletionMode `yaml:"deletions" enum:"kafka,cdc"`
+	Token            string       `yaml:"token" description:"Password Kafka consumers authenticate with, using the full materialization name as username. Write-only."`
+	StrictTopicNames bool         `yaml:"strict_topic_names" description:"Exposes topic names in a strictly Kafka-compliant format, for consumers that require it. The dashboard sets false."`
+	Deletions        DeletionMode `yaml:"deletions" enum:"kafka,cdc" description:"How deletions reach consumers: 'kafka' emits Kafka records with null values, 'cdc' emits the deletion document with an _is_deleted field, useful for hard deletes. The dashboard sets 'kafka'."`
 }
 
 // Resource identifies the target Dekaf topic.
 type Resource struct {
-	TopicName string `yaml:"topic_name"`
+	TopicName string `yaml:"topic_name" description:"Kafka topic the collection is exposed as, through the Kafka metadata and discovery APIs."`
 }
 
 // Endpoint holds the Dekaf variant and its configuration.

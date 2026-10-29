@@ -4,28 +4,40 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-const nameAttribute string = "name"
-const imageAttribute string = "image"
-const disableAttribute string = "disable"
-const shardsAttribute string = "shards"
+// Entry attributes.
+const (
+	nameAttribute                  string = "name"
+	imageAttribute                 string = "image"
+	disableAttribute               string = "disable"
+	shardsAttribute                string = "shards"
+	bindingsAttribute              string = "bindings"
+	liveBindingsAttribute          string = "live_bindings"
+	keepUnmanagedBindingsAttribute string = "keep_unmanaged_bindings"
+)
 
-const bindingsAttribute string = "bindings"
-const bindingResourceAttribute string = "resource"
-const bindingTargetAttribute string = "target"
-const bindingSourceAttribute string = "source"
-const bindingNameAttribute string = "name"
-const liveBindingsAttribute string = "live_bindings"
+// Binding attributes.
+const (
+	bindingResourceAttribute string = "resource"
+	bindingTargetAttribute   string = "target"
+	bindingSourceAttribute   string = "source"
+	bindingNameAttribute     string = "name"
+	bindingFieldsAttribute   string = "fields"
+)
 
-const backfillAttribute string = "backfill"
-const backfillTriggerAttribute string = "trigger"
-const backfillStrategyAttribute string = "strategy"
-const backfillModeAttribute string = "mode"
+// Backfill block attributes, of the entry and of each binding.
+const (
+	backfillAttribute         string = "backfill"
+	backfillTriggerAttribute  string = "trigger"
+	backfillStrategyAttribute string = "strategy"
+	backfillModeAttribute     string = "mode"
+)
 
-// bindingsPath is the path of the bindings attribute.
-var bindingsPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(bindingsAttribute)
-
-// liveBindingsPath is the path of the live_bindings attribute.
-var liveBindingsPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(liveBindingsAttribute)
+// Paths of the entry attributes read by path.
+var (
+	bindingsPath              *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(bindingsAttribute)
+	liveBindingsPath          *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(liveBindingsAttribute)
+	keepUnmanagedBindingsPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(keepUnmanagedBindingsAttribute)
+)
 
 // known converts a value, reporting false when it is null, unknown or of another type.
 func known[T any](value tftypes.Value) (T, bool) {

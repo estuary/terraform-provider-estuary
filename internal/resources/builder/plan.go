@@ -56,11 +56,11 @@ type plannedPublication struct {
 // newPlannedPublication returns what publishing planned binding documents over live ones does, see mergedBindings and
 // backfillRequests. Each backfill mode change under modeKey is backfilled, as the connector requires, and reported in
 // missingModes when neither a backfill nor a reset covers it. Plan and apply both use it, so plans show what applies do.
-func newPlannedPublication(planned []any, previous []any, live []any, generated bool, plan tftypes.Value, prior tftypes.Value, modeKey string) (plannedPublication, error) {
+func newPlannedPublication(planned []any, previous []any, live []any, keepUnmanaged bool, plan tftypes.Value, prior tftypes.Value, modeKey string) (plannedPublication, error) {
 	var publication plannedPublication
 	var err error
 
-	publication.published, publication.wide = mergedBindings(planned, previous, live, generated)
+	publication.published, publication.wide = mergedBindings(planned, previous, live, keepUnmanaged)
 
 	publication.backfills, publication.resets, err = backfillRequests(plan, prior, publication.wide)
 
@@ -136,7 +136,7 @@ func (entryResource *entryResource[D, S]) newPublicationReader(plan tftypes.Valu
 		}
 
 		publication, err = newPlannedPublication(catalog.Bindings(plannedDocument), catalog.Bindings(priorDocument), catalog.Bindings(liveDocument),
-			generatesBindings(spec), plan, state, entryResource.catalogType.backfillModeKey)
+			keepsUnmanagedBindings(plan), plan, state, entryResource.catalogType.backfillModeKey)
 
 		return publication, err == nil
 	})
@@ -272,30 +272,97 @@ func (entryResource *entryResource[D, S]) warnPendingResets(plan tftypes.Value, 
 
 // addedBindings describes, for warnings, the bindings Estuary adds to an entry without Terraform.
 type addedBindings struct {
-	setting  path.Path // attribute making Estuary add them
-	summary  string    // summary of the warning when the entry starts adding them
-	origin   string    // what each added binding comes from
-	growth   string    // when Estuary adds more of them
-	limits   string    // settings added bindings don't get, empty when none
-	readding string    // when a removed binding may be added back
-	stopping string    // what a disabled binding stops doing
+	setting   path.Path // attribute making Estuary add them
+	generator path.Path // attribute letting Estuary add or change bindings, see catalog.BindingsGenerator
+	summary   string    // summary of the warning when the entry starts adding them
+	origin    string    // what each added binding comes from
+	growth    string    // when Estuary adds more of them
+	limits    string    // settings added bindings don't get, empty when none
+	readding  string    // when a removed binding may be added back
+	stopping  string    // what a disabled binding stops doing
 }
 
-// addsBindings reports whether Estuary adds bindings to the entry of value. It skips values it can't decode yet.
-func (entryResource *entryResource[D, S]) addsBindings(value tftypes.Value) bool {
+// spec returns the spec of value, reporting false for null values and values it can't decode yet.
+func (entryResource *entryResource[D, S]) spec(value tftypes.Value) (S, bool) {
+	var spec S
+
 	if value.IsNull() {
-		return false
+		return spec, false
 	}
 
 	value, err := withoutTargets(value)
 
 	if err != nil {
-		return false
+		return spec, false
 	}
 
-	_, spec, err := entryResource.codec.Spec(value)
+	_, spec, err = entryResource.codec.Spec(value)
 
-	return err == nil && addsNewBindings(spec)
+	return spec, err == nil
+}
+
+// addsBindings reports whether Estuary adds bindings to the entry of value. It skips values it can't decode yet.
+func (entryResource *entryResource[D, S]) addsBindings(value tftypes.Value) bool {
+	spec, decoded := entryResource.spec(value)
+
+	return decoded && addsNewBindings(spec)
+}
+
+// validateKeepUnmanagedBindings rejects keep_unmanaged_bindings = false while Estuary may add bindings, as each apply
+// would remove them. It skips plans it can't decode yet.
+func (entryResource *entryResource[D, S]) validateKeepUnmanagedBindings(plan tftypes.Value) diag.Diagnostics {
+	var diagnostics diag.Diagnostics
+	var added addedBindings = entryResource.catalogType.added
+	var generator string = added.generator.String()
+
+	spec, decoded := entryResource.spec(plan)
+
+	if keepsUnmanagedBindings(plan) || !decoded || !generatesBindings(spec) {
+		return diagnostics
+	}
+
+	diagnostics.AddAttributeError(path.Root(keepUnmanagedBindingsAttribute),
+		entryResource.warningSummary("keep_unmanaged_bindings = false can't be used with "+generator, plan),
+		"With "+generator+" set, Estuary adds a binding for every "+added.origin+" that isn't declared in bindings. "+
+			"keep_unmanaged_bindings = false makes Terraform remove those bindings, so each apply would remove what Estuary adds back.\n\n"+
+			"To fix it, either:\n"+
+			"- remove keep_unmanaged_bindings = false, so Terraform keeps the bindings Estuary adds (the default), or\n"+
+			"- remove "+generator+", so Estuary stops adding bindings and Terraform manages them all.")
+
+	return diagnostics
+}
+
+// warnUnmanagedBindingsRemoval warns about the undeclared live bindings the apply removes when keep_unmanaged_bindings
+// turns false, as state doesn't hold them for the plan to show. It skips unknown collections and unreadable live specs.
+func (entryResource *entryResource[D, S]) warnUnmanagedBindingsRemoval(plan tftypes.Value, state tftypes.Value, readLive liveReader) diag.Diagnostics {
+	var diagnostics diag.Diagnostics
+
+	if keepsUnmanagedBindings(plan) || !keepsUnmanagedBindings(state) {
+		return diagnostics
+	}
+
+	declared, isKnown := bindingCollections(plan, state)
+
+	if !isKnown {
+		return diagnostics
+	}
+
+	live, found := readLive()
+
+	if !found {
+		return diagnostics
+	}
+
+	removed, err := undeclaredCollections(live, declared)
+
+	if err == nil && len(removed) > 0 {
+		diagnostics.AddAttributeWarning(path.Root(keepUnmanagedBindingsAttribute), entryResource.warningSummary("Unmanaged bindings removed", plan),
+			"With keep_unmanaged_bindings = false, Terraform manages every binding, so the apply removes these live bindings the "+
+				"configuration doesn't declare, which the plan can't show:\n\n- "+strings.Join(removed, "\n- ")+
+				"\n\nTo keep one, declare it in bindings.")
+	}
+
+	return diagnostics
 }
 
 // warnAddedBindings warns when the plan makes Estuary start adding bindings Terraform won't manage.
@@ -308,11 +375,11 @@ func (entryResource *entryResource[D, S]) warnAddedBindings(plan tftypes.Value, 
 	}
 
 	var detail string = "With " + added.setting.String() + " set, Estuary adds a binding for every " + added.origin + " that isn't " +
-		"declared in bindings, as the dashboard does, and keeps adding them as " + added.growth + ". Terraform doesn't manage " +
-		"these bindings: to manage one, declare it in bindings."
+		"declared in bindings, as the dashboard does, and keeps adding them as " + added.growth + ".\n\n" +
+		"Terraform doesn't manage these bindings: plans don't show them and applies keep them. To manage one, declare it in bindings."
 
 	if added.limits != "" {
-		detail += " " + added.limits
+		detail += "\n\n" + added.limits
 	}
 
 	diagnostics.AddAttributeWarning(added.setting, entryResource.warningSummary(added.summary, plan), detail)
@@ -324,47 +391,23 @@ func (entryResource *entryResource[D, S]) warnAddedBindings(plan tftypes.Value, 
 func (entryResource *entryResource[D, S]) warnRemovedBindings(plan tftypes.Value, state tftypes.Value) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
 	var added addedBindings = entryResource.catalogType.added
-	var planned map[string]bool = map[string]bool{}
-	var removed []string
 
 	if !entryResource.addsBindings(plan) {
 		return diagnostics
 	}
 
-	plannedBindings, _, err := bindings(plan)
+	planned, isKnown := bindingCollections(plan)
 
-	if err != nil {
+	if !isKnown {
 		return diagnostics
 	}
 
-	prior, _, err := bindings(state)
+	removed, err := undeclaredCollections(state, planned)
 
-	if err != nil {
-		return diagnostics
-	}
-
-	for _, binding := range plannedBindings {
-		var collection string = bindingCollectionValue(binding)
-
-		if collection == "" {
-			return diagnostics
-		}
-
-		planned[collection] = true
-	}
-
-	for _, binding := range prior {
-		var collection string = bindingCollectionValue(binding)
-
-		if collection != "" && !planned[collection] {
-			removed = append(removed, "- "+collection)
-		}
-	}
-
-	if len(removed) > 0 {
+	if err == nil && len(removed) > 0 {
 		diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Removed bindings may be added back", plan),
 			"These bindings are removed from the "+entryResource.catalogType.name+", but with "+added.setting.String()+" set, "+
-				added.readding+":\n\n"+strings.Join(removed, "\n")+
+				added.readding+":\n\n- "+strings.Join(removed, "\n- ")+
 				"\n\nTo stop "+added.stopping+" one, keep its binding and set disable = true instead.")
 	}
 

@@ -152,22 +152,17 @@ This creates:
 
 ## Resources
 
-Each resource manages a capture or a materialization of one Estuary connector. See its documentation for examples and the full list of attributes.
+Each resource manages a capture or a materialization of one Estuary connector. Connectors configured the same way share one documentation page, with examples and the full list of attributes.
 
-| Resource | Type | Connector |
+| Documentation | Type | Resources |
 |---|---|---|
-| [`estuary_materialization_aurora_mysql`](internal/resources/materializationauroramysql/README.md) | Materialization | [Amazon Aurora for MySQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/MySQL/#mysql-on-managed-cloud-platforms) |
-| [`estuary_materialization_aurora_postgres`](internal/resources/materializationaurorapostgres/README.md) | Materialization | [Amazon Aurora for PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) |
-| [`estuary_materialization_mysql`](internal/resources/materializationmysql/README.md) | Materialization | [MySQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/MySQL/) |
-| [`estuary_materialization_postgres`](internal/resources/materializationpostgres/README.md) | Materialization | [PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) |
-| [`estuary_materialization_rds_mysql`](internal/resources/materializationrdsmysql/README.md) | Materialization | [Amazon RDS for MySQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/MySQL/amazon-rds-mysql/) |
-| [`estuary_materialization_rds_postgres`](internal/resources/materializationrdspostgres/README.md) | Materialization | [Amazon RDS for PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/amazon-rds-postgres/) |
-| [`estuary_source_aurora_mysql`](internal/resources/sourceauroramysql/README.md) | Capture | [Amazon Aurora for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/#amazon-aurora) |
-| [`estuary_source_aurora_postgres`](internal/resources/sourceaurorapostgres/README.md) | Capture | [Amazon Aurora for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-aurora-postgres/) |
-| [`estuary_source_dynamodb`](internal/resources/sourcedynamodb/README.md) | Capture | [Amazon DynamoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/amazon-dynamodb/) |
-| [`estuary_source_mongodb`](internal/resources/sourcemongodb/README.md) | Capture | [MongoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/) |
-| [`estuary_source_rds_mysql`](internal/resources/sourcerdsmysql/README.md) | Capture | [Amazon RDS for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/amazon-rds-mysql/) |
-| [`estuary_source_rds_postgres`](internal/resources/sourcerdspostgres/README.md) | Capture | [Amazon RDS for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-rds-postgres/) |
+| [Dekaf](internal/resources/materializationdekaf/README.md) | Materialization | `estuary_materialization_dekaf_generic`, `estuary_materialization_dekaf_bytewax`, `estuary_materialization_dekaf_clickhouse`, `estuary_materialization_dekaf_imply_polaris`, `estuary_materialization_dekaf_materialize`, `estuary_materialization_dekaf_risingwave`, `estuary_materialization_dekaf_singlestore`, `estuary_materialization_dekaf_startree`, `estuary_materialization_dekaf_tinybird` |
+| [Amazon DynamoDB](internal/resources/sourcedynamodb/README.md) | Capture | `estuary_source_dynamodb` |
+| [MongoDB](internal/resources/sourcemongodb/README.md) | Capture | `estuary_source_mongodb` |
+| [MySQL](internal/resources/sourcemysql/README.md) | Capture | `estuary_source_aurora_mysql`, `estuary_source_rds_mysql` |
+| [MySQL](internal/resources/materializationmysql/README.md) | Materialization | `estuary_materialization_mysql`, `estuary_materialization_aurora_mysql`, `estuary_materialization_rds_mysql` |
+| [PostgreSQL](internal/resources/sourcepostgres/README.md) | Capture | `estuary_source_aurora_postgres`, `estuary_source_rds_postgres` |
+| [PostgreSQL](internal/resources/materializationpostgres/README.md) | Materialization | `estuary_materialization_postgres`, `estuary_materialization_aurora_postgres`, `estuary_materialization_rds_postgres` |
 
 Each capture resource also has a data source of the same name, reading the live bindings of a capture managed elsewhere. See [Bindings Lifecycle](#bindings-lifecycle).
 
@@ -179,17 +174,20 @@ Each capture resource also has a data source of the same name, reading the live 
 
 A binding links one resource, such as a MongoDB collection or a PostgreSQL table, to one Estuary collection: the `target` of a capture binding, or the `source` of a materialization binding. That collection identifies the binding, and the read-only `name` attribute shows it in every plan so you can tell which binding changes. Changing a binding's collection removes the old binding and adds a new one.
 
-Estuary can add bindings on its own, through discovery (`auto_discover`) on a capture or `source.capture` on a materialization. When it can, Terraform manages only the bindings you declare and leaves the others alone. Any `auto_discover` block counts, even with `add_new_bindings = false`:
+Estuary can add bindings on its own, through discovery (`auto_discover`) on a capture or `source.capture` on a materialization, and bindings can be added in the dashboard. `keep_unmanaged_bindings` decides what Terraform does with the bindings you don't declare:
 
-| Resource | Bindings Terraform manages | Bindings added outside Terraform |
+| `keep_unmanaged_bindings` | Bindings Terraform manages | Bindings you don't declare |
 |---|---|---|
-| Capture without `auto_discover` | All of them | Shown in the plan and removed by the next apply. |
-| Capture with `auto_discover` | Only the ones in your configuration | Kept, and not shown in plans. |
-| Materialization without `source.capture` | All of them | Shown in the plan and removed by the next apply. |
-| Materialization with `source.capture` | Only the ones in your configuration | Kept, and not shown in plans. |
+| `true` (default) | Only the ones in your configuration | Kept, and not shown in plans. Removing `auto_discover` or `source.capture` keeps the ones Estuary added. |
+| `false` | All of them | Shown in the plan and removed by the next apply. Can't be set with `auto_discover` (any block, even with `add_new_bindings = false`) or `source.capture`, as Estuary would add bindings that each apply removes. |
+
+> [!WARNING]
+> With the default, Terraform never removes a binding it doesn't manage, so bindings Estuary or the dashboard adds stay in the capture or materialization until you remove them. To remove them, set `keep_unmanaged_bindings = false`: the plan warns with the list of undeclared bindings the apply removes, and from then on shows them as regular changes. Captures list every live binding in `live_bindings`.
 
 **Manage every binding (no auto discovery):**
 ```hcl
+keep_unmanaged_bindings = false
+
 bindings = [
   { resource = { database = "shop", collection = "users" } },
   { resource = { database = "shop", collection = "orders" } },
@@ -273,6 +271,9 @@ resource "estuary_materialization_postgres" "shop" {
 ### Field Selection
 
 Each materialization binding can set `fields` to choose which collection fields it materializes. Omit it to use Estuary's default selection.
+
+> [!NOTE]
+> Estuary writes its default selection into each binding that omits `fields`, usually `recommended = "unlimited"`. The provider keeps that value in state, so plans show no diff for it, and publishes it back unchanged. Once you set `fields` on a binding, your value replaces it.
 
 | Attribute | Behavior |
 |---|---|

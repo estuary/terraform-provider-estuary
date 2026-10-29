@@ -293,11 +293,19 @@ func TestMaterializationReadRefreshesBindingsBySource(test *testing.T) {
 
 	stateValue, err := entry.codec.Value("warehouse", state)
 
+	if err == nil {
+		stateValue, err = withValue(stateValue, keepUnmanagedBindingsPath, false)
+	}
+
 	if err != nil {
 		test.Fatal(err)
 	}
 
 	want, err := entry.codec.Value("warehouse", refreshed)
+
+	if err == nil {
+		want, err = withValue(want, keepUnmanagedBindingsPath, false)
+	}
 
 	if err != nil {
 		test.Fatal(err)
@@ -457,7 +465,7 @@ func TestMaterializationWarnsAboutSourceCaptureBindings(test *testing.T) {
 
 		if len(warnings) != 1 || !warnings[0].(diag.DiagnosticWithPath).Path().Equal(path.Root("source").AtName("capture")) ||
 			!strings.HasPrefix(warnings[0].Summary(), "Source capture adds unmanaged bindings in acmeCo/warehouse") ||
-			!strings.Contains(warnings[0].Detail(), "not per-binding overrides such as fields.require") {
+			!strings.Contains(warnings[0].Detail(), "such as fields.require") {
 			test.Errorf("%s: warnings = %v, want a source.capture warning listing the settings added bindings lack", name, warnings)
 		}
 	}
@@ -489,8 +497,8 @@ func TestMaterializationReadShowsLostFieldDepth(test *testing.T) {
 		state materialization.FieldDepth
 		want  materialization.FieldDepth
 	}{
-		"drops an unlimited depth Estuary lost": {materialization.FieldDepthUnlimited, ""},
-		"drops another depth Estuary lost":      {"1", ""},
+		"keeps the unlimited default Estuary omits": {materialization.FieldDepthUnlimited, materialization.FieldDepthUnlimited},
+		"drops another depth Estuary lost":          {"1", ""},
 	}
 
 	for name, expected := range expectations {
@@ -532,6 +540,110 @@ func TestMaterializationReadShowsLostFieldDepth(test *testing.T) {
 
 		if readResp.Diagnostics.HasError() || !readResp.State.Raw.Equal(want) {
 			test.Errorf("%s: refreshed state = %v (%v), want %v", name, readResp.State.Raw, readResp.Diagnostics, want)
+		}
+	}
+}
+
+func TestPlanBindingFieldsKeepsEstuarySelection(test *testing.T) {
+	var unlimited *materialization.BindingFields = &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited}
+	var depthOne *materialization.BindingFields = &materialization.BindingFields{Recommended: "1"}
+
+	var spec MaterializationSpec[testConfig, testResource] = MaterializationSpec[testConfig, testResource]{
+		Endpoint: endpoint.ConnectorSpec[testConfig]{Connector: endpoint.Connector[testConfig]{Image: testNamedConnector.Image, Config: testConfig{Host: "db.example.com"}}},
+	}
+
+	entry := NewMaterialization[testConfig, testResource](testNamedConnector)().(*entryResource[materializationDocument[testConfig, testResource], MaterializationSpec[testConfig, testResource]])
+
+	binding := func(collection string, fields *materialization.BindingFields) materialization.Binding[testResource] {
+		return materialization.Binding[testResource]{Resource: testResource{Table: collection}, Source: materialization.BindingSource{Name: "acmeCo/" + collection}, Fields: fields}
+	}
+
+	value := func(bindings ...materialization.Binding[testResource]) tftypes.Value {
+		var current MaterializationSpec[testConfig, testResource] = spec
+
+		current.Bindings = bindings
+
+		converted, err := entry.codec.Value("warehouse", current)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	var state tftypes.Value = value(binding("orders", unlimited), binding("users", unlimited))
+	var live tftypes.Value = value(binding("orders", unlimited), binding("users", unlimited), binding("events", depthOne))
+	var config tftypes.Value = value(binding("orders", nil), binding("users", depthOne), binding("events", nil), binding("sessions", nil))
+
+	planned, err := planBindingFields(config, config, state, func() (tftypes.Value, bool) { return live, true })
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if want := value(binding("orders", unlimited), binding("users", depthOne), binding("events", depthOne), binding("sessions", nil)); !planned.Equal(want) {
+		test.Errorf("planned = %v, want the stored selection for orders, the configured one for users, the live one for the taken over events and none for sessions", planned)
+	}
+}
+
+func TestMaterializationTakeoverWarningKeepsEstuaryFields(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var configureResp resource.ConfigureResponse
+	var linked string = "acmeCo/source-postgres"
+	var unlimited *materialization.BindingFields = &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited}
+
+	var spec MaterializationSpec[testConfig, testResource] = MaterializationSpec[testConfig, testResource]{
+		Endpoint:    endpoint.ConnectorSpec[testConfig]{Connector: endpoint.Connector[testConfig]{Image: testNamedConnector.Image, Config: testConfig{Host: "db.example.com"}}},
+		SpecOptions: materialization.SpecOptions{Source: &materialization.Source{Capture: &linked}},
+	}
+
+	var users materialization.Binding[testResource] = materialization.Binding[testResource]{
+		Resource: testResource{Table: "users"}, Source: materialization.BindingSource{Name: "acmeCo/users"}, Fields: unlimited,
+	}
+
+	entry := NewMaterialization[testConfig, testResource](testNamedConnector)().(*entryResource[materializationDocument[testConfig, testResource], MaterializationSpec[testConfig, testResource]])
+
+	entry.Configure(ctx, resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: &testBackend{}, Tenant: "acmeCo/"}}, &configureResp)
+
+	state, err := entry.codec.Value("warehouse", spec)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	spec.Bindings = []materialization.Binding[testResource]{users}
+
+	live, err := entry.codec.Value("warehouse", spec)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	for name, expected := range map[string]struct {
+		trigger any
+		want    string
+	}{
+		"lists the raised trigger":          {1, "- acmeCo/users (bindings[0]):\n    bindings[0].backfill: (unset) -> (changed)\n"},
+		"lists no change without a trigger": {nil, "- acmeCo/users (bindings[0]): no field changes\n"},
+	} {
+		plan, err := withValue(live, bindingsPath.WithElementKeyInt(0).WithAttributeName(backfillAttribute),
+			map[string]tftypes.Value{backfillTriggerAttribute: tftypes.NewValue(tftypes.Number, expected.trigger)})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		if expected.trigger == nil {
+			plan = live
+		}
+
+		var readLive liveReader = func() (tftypes.Value, bool) { return live, true }
+
+		warnings := entry.warnTakenOverBindings(plan, state, readLive)
+
+		if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), expected.want) || strings.Contains(warnings[0].Detail(), "bindings[0].fields") {
+			test.Errorf("%s: warnings = %v, want %q without fields", name, warnings, expected.want)
 		}
 	}
 }

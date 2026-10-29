@@ -1,10 +1,15 @@
-# estuary_source_aurora_mysql
+# MySQL Captures
 
 [Back to the provider documentation](../../../README.md)
 
-This resource manages an [Amazon Aurora for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/#amazon-aurora) capture connector. Each binding captures one table into an Estuary collection, using change data capture through the MySQL binary log: an initial backfill of the table contents, followed by its inserts, updates and deletes as they happen.
+These resources manage MySQL capture connectors on Amazon. Each binding captures one table into an Estuary collection, using change data capture through the MySQL binary log: an initial backfill of the table contents, followed by its inserts, updates and deletes as they happen.
 
-It runs the same connector as [`estuary_source_rds_mysql`](../sourcerdsmysql/README.md) and accepts the same attributes. Pick the one matching your database, as the Estuary dashboard does.
+Estuary offers a dedicated connector for each of these databases, each with its own resource. They are configured the same way, so this page documents them together. Pick the one matching your database:
+
+| Resource | Database | Default image | Connector name |
+|---|---|---|---|
+| `estuary_source_aurora_mysql` | [Amazon Aurora for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/#amazon-aurora) | `ghcr.io/estuary/source-amazon-aurora-mysql:v3` | `source-amazon-aurora-mysql` |
+| `estuary_source_rds_mysql` | [Amazon RDS for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/amazon-rds-mysql/) | `ghcr.io/estuary/source-amazon-rds-mysql:v3` | `source-amazon-rds-mysql` |
 
 ## Table of Contents
 
@@ -24,7 +29,7 @@ It runs the same connector as [`estuary_source_rds_mysql`](../sourcerdsmysql/REA
 
 ## Example Usage
 
-A capture of two tables with password authentication, with auto discovery adding every new table of the `shop` database:
+An Amazon Aurora capture of two tables with password authentication, with auto discovery adding every new table of the `shop` database:
 
 ```hcl
 variable "mysql_password" {
@@ -75,14 +80,14 @@ resource "estuary_source_aurora_mysql" "shop" {
 
 With `tenant = "acmeCo/"` set on the provider, this creates the capture `acmeCo/aurora/source-amazon-aurora-mysql`. The `users` binding sets no `target`, so its data lands in the collection the connector discovery names, such as `acmeCo/aurora/shop/users`.
 
-AWS IAM authentication, capturing every change event without reducing them, with a high priority table and a table captured without a backfill:
+An Amazon RDS capture with AWS IAM authentication, capturing every change event without reducing them, with a high priority table and a table captured without a backfill:
 
 ```hcl
-resource "estuary_source_aurora_mysql" "events" {
-  name = "aurora/events"
+resource "estuary_source_rds_mysql" "events" {
+  name = "rds/events"
 
   config = {
-    address      = "events.cluster-123456789.us-east-1.rds.amazonaws.com:3306"
+    address      = "events.123456789.us-east-1.rds.amazonaws.com:3306"
     user         = "flow_capture"
     timezone     = "America/New_York"
     history_mode = true
@@ -90,7 +95,7 @@ resource "estuary_source_aurora_mysql" "events" {
     credentials = {
       auth_type    = "AWSIAM"
       aws_region   = "us-east-1"
-      aws_role_arn = "arn:aws:iam::123456789012:role/estuary-aurora-capture"
+      aws_role_arn = "arn:aws:iam::123456789012:role/estuary-rds-capture"
     }
   }
 
@@ -168,17 +173,21 @@ resource "estuary_source_aurora_mysql" "private" {
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `name` | String | Yes | Capture name (e.g., `aurora`). The provider `tenant` is added in front and `/source-amazon-aurora-mysql` at the end, unless they're already there. |
-| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-amazon-aurora-mysql:v3`, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
+| `name` | String | Yes | Capture name (e.g., `aurora`). The provider `tenant` is added in front and the connector name of the resource (e.g., `/source-amazon-aurora-mysql`) at the end, unless they're already there. |
+| `image` | String | No | Connector image. Defaults to the default image of the resource, see the table above, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the database for new tables and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Connection, authentication and replication settings of the database. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Captured tables, one per binding. See [`bindings`](#bindings). |
 | `live_bindings` | List of Objects | Read-only | Every live binding, the declared ones and those discovery (`auto_discover`) adds, with the attributes of [`bindings`](#bindings). Refreshed on each plan, and planned with the binding changes the apply publishes. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
 | `shards` | Dynamic | No | Shard settings of the capture, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
+| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `auto_discover`. Defaults to `true`. A provider control Estuary never sees. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
 
 > [!WARNING]
 > Changing the resulting catalog name, through `name` or the provider `tenant`, destroys the capture and creates a new one.
+
+> [!WARNING]
+> With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `auto_discover`, stay in the capture and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
 
 ### `auto_discover`
 
@@ -203,7 +212,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `address` | String | Yes | Host or `host:port` of the cluster's writer endpoint (e.g., `shop.cluster-123456789.us-east-1.rds.amazonaws.com:3306`). The port defaults to `3306`. |
+| `address` | String | Yes | Host or `host:port` of the Aurora cluster's writer endpoint or of the RDS instance endpoint (e.g., `shop.cluster-123456789.us-east-1.rds.amazonaws.com:3306`). The port defaults to `3306`. |
 | `user` | String | Yes | Database user to authenticate as, usually `flow_capture`. |
 | `credentials` | Object | No | How the user authenticates. See [`config.credentials`](#configcredentials). Set it, or the deprecated `password`; the connector rejects a configuration with neither. |
 | `password` | String | No | Deprecated form of `credentials` with `auth_type = "UserPassword"`, still accepted for existing captures. At most 32 characters. Write-only, see the note above. |
@@ -215,7 +224,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | `advanced` | Object | No | Options for advanced users, rarely needed. See [`config.advanced`](#configadvanced). |
 
 > [!IMPORTANT]
-> Point `address` at the cluster's writer endpoint. Aurora reader instances don't keep their own binary log, so the capture can't run against them.
+> On Aurora, point `address` at the cluster's writer endpoint. Aurora reader instances don't keep their own binary log, so the capture can't run against them.
 
 ### `config.credentials`
 
@@ -224,7 +233,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | `auth_type` | String | Yes | Authentication method: `UserPassword`, `AWSIAM`, `GCPIAM` or `AzureIAM`. Only the attributes of the selected method are used. |
 | `password` | String | With `UserPassword` | Password of the database user, at most 32 characters (a MySQL replication limit). Write-only, see the note above. |
 | `password_hash` | String | Read-only | Salted hash of `password`, used to detect when it changes. |
-| `aws_region` | String | With `AWSIAM` | AWS region of the cluster (e.g., `us-east-1`). |
+| `aws_region` | String | With `AWSIAM` | AWS region of the cluster or instance (e.g., `us-east-1`). |
 | `aws_role_arn` | String | With `AWSIAM` | ARN of the IAM role Estuary assumes to connect, see the [AWS IAM guide](https://docs.estuary.dev/guides/iam-auth/aws/). |
 | `gcp_service_account_to_impersonate` | String | With `GCPIAM` | Email of the Google Cloud service account used for IAM authentication. |
 | `gcp_workload_identity_pool_audience` | String | With `GCPIAM` | Audience of the workload identity pool, in the form `//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/<pool>/providers/<provider>`. |
@@ -232,7 +241,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | `azure_tenant_id` | String | With `AzureIAM` | Azure tenant ID of the app registration. |
 
 > [!TIP]
-> With `AWSIAM`, the database user must authenticate through the `AWSAuthenticationPlugin` and IAM database authentication be enabled on the cluster, see [AWS IAM](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/#aws-iam). A fresh authentication token is generated for each connection, so there's no password to rotate.
+> With `AWSIAM`, the database user must authenticate through the `AWSAuthenticationPlugin` and IAM database authentication be enabled on the cluster or instance, see [AWS IAM](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/#aws-iam) for Aurora and [IAM Authentication](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/amazon-rds-mysql/#iam-authentication) for RDS. A fresh authentication token is generated for each connection, so there's no password to rotate.
 >
 > IAM authentication (`AWSIAM`, `GCPIAM` or `AzureIAM`) sends its token as the password, so it requires an encrypted connection: `advanced.sslmode` must be unset or one of `required`, `verify_ca` and `verify_identity`.
 
@@ -313,7 +322,7 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 
 ## Data Source
 
-`data "estuary_source_aurora_mysql"` reads the live bindings of a capture by name without managing it, such as a capture managed in another configuration or outside Terraform:
+`data "estuary_source_aurora_mysql"` and `data "estuary_source_rds_mysql"` read the live bindings of a capture by name without managing it, such as a capture managed in another configuration or outside Terraform:
 
 ```hcl
 data "estuary_source_aurora_mysql" "source" {
@@ -323,7 +332,7 @@ data "estuary_source_aurora_mysql" "source" {
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `name` | String | Yes | Capture name, as in the resource: the provider `tenant` is added in front and `/source-amazon-aurora-mysql` at the end, unless they're already there. |
+| `name` | String | Yes | Capture name, as in the resource: the provider `tenant` is added in front and the connector name of the resource at the end, unless they're already there. |
 | `live_bindings` | List of Objects | Read-only | Every live binding of the capture, with the attributes of [`bindings`](#bindings). |
 
 > [!WARNING]

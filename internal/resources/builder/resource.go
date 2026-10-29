@@ -86,6 +86,10 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 	}
 
 	if err == nil {
+		planned, err = planBindingFields(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
+	}
+
+	if err == nil {
 		planned, err = entryResource.codec.planLiveBindings(planned, modifyPlanReq.State.Raw)
 	}
 
@@ -94,6 +98,7 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 	}
 
 	modifyPlanResp.Diagnostics.Append(validateBackfillTriggers(planned, modifyPlanReq.State.Raw, entryResource.catalogType)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.validateKeepUnmanagedBindings(planned)...)
 
 	modifyPlanResp.Plan.Raw = planned
 
@@ -121,6 +126,7 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 
 	modifyPlanResp.Diagnostics.Append(entryResource.warnTakenOverBindings(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readLive)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnRemovedBindings(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnUnmanagedBindingsRemoval(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readLive)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnDataflowResets(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnEntryBackfill(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.validateModeBackfills(modifyPlanResp.Plan.Raw, readPublication)...)
@@ -177,7 +183,7 @@ func (entryResource *entryResource[D, S]) readState(ctx context.Context, name st
 }
 
 // refreshedState returns state refreshed from the sealed live spec, and the paths whose credentials it redacted. Live
-// bindings state doesn't hold stay unmanaged when the control plane may add bindings, and live_bindings, when the
+// bindings state doesn't hold stay unmanaged unless keep_unmanaged_bindings is false, and live_bindings, when the
 // entry has it, lists them all.
 func (entryResource *entryResource[D, S]) refreshedState(name string, state tftypes.Value, sealed map[string]any) (tftypes.Value, []*tftypes.AttributePath, error) {
 	live, redactedPaths, err := entryResource.codec.liveValue(name, sealed)
@@ -186,13 +192,7 @@ func (entryResource *entryResource[D, S]) refreshedState(name string, state tfty
 		return state, nil, err
 	}
 
-	_, stateSpec, err := entryResource.codec.Spec(state)
-
-	if err != nil {
-		return state, nil, err
-	}
-
-	refreshed, err := entryResource.codec.Refresh(state, live, !generatesBindings(stateSpec))
+	refreshed, err := entryResource.codec.Refresh(state, live, !keepsUnmanagedBindings(state))
 
 	if err != nil {
 		return state, nil, err
@@ -332,7 +332,7 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 	var live map[string]any
 
 	if prior != nil {
-		publication.resets, live, err = entryResource.mergeLive(ctx, catalogName, document, generatesBindings(spec), plan.Raw, prior.Raw)
+		publication.resets, live, err = entryResource.mergeLive(ctx, catalogName, document, keepsUnmanagedBindings(plan.Raw), plan.Raw, prior.Raw)
 
 		if err != nil {
 			diagnostics.AddError("Merging "+entryResource.catalogType.name+" "+catalogName+" with its live spec", err.Error())

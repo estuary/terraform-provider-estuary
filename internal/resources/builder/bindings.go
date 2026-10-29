@@ -42,11 +42,11 @@ func mergeBindings[B any](planned []B, previous []B, live []B, collection func(B
 }
 
 // mergedBindings returns the binding documents publishing planned bindings over live ones writes, merged with the
-// unmanaged live ones when the control plane generates bindings, and their entryWide collections.
-func mergedBindings(planned []any, previous []any, live []any, generated bool) ([]any, []string) {
+// unmanaged live ones when keepUnmanaged, and their entryWide collections.
+func mergedBindings(planned []any, previous []any, live []any, keepUnmanaged bool) ([]any, []string) {
 	var published []any = planned
 
-	if generated {
+	if keepUnmanaged {
 		published = mergeBindings(planned, previous, live, catalog.BindingCollection)
 	}
 
@@ -67,6 +67,64 @@ func generatesBindings(spec any) bool {
 	generator, isGenerator := spec.(catalog.BindingsGenerator)
 
 	return isGenerator && generator.GeneratesBindings()
+}
+
+// bindingCollections returns the binding collections of values, reporting false when one is unknown or unreadable.
+func bindingCollections(values ...tftypes.Value) (map[string]bool, bool) {
+	var collections map[string]bool = map[string]bool{}
+
+	for _, value := range values {
+		items, _, err := bindings(value)
+
+		if err != nil {
+			return nil, false
+		}
+
+		for _, binding := range items {
+			var collection string = bindingCollectionValue(binding)
+
+			if collection == "" {
+				return nil, false
+			}
+
+			collections[collection] = true
+		}
+	}
+
+	return collections, true
+}
+
+// undeclaredCollections returns the known binding collections of value not in declared.
+func undeclaredCollections(value tftypes.Value, declared map[string]bool) ([]string, error) {
+	var undeclared []string
+
+	items, _, err := bindings(value)
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, binding := range items {
+		if collection := bindingCollectionValue(binding); collection != "" && !declared[collection] {
+			undeclared = append(undeclared, collection)
+		}
+	}
+
+	return undeclared, nil
+}
+
+// keepsUnmanagedBindings reports whether publishing value keeps the live bindings it doesn't declare, true unless
+// keep_unmanaged_bindings is false.
+func keepsUnmanagedBindings(value tftypes.Value) bool {
+	keep, err := attributeValue(value, keepUnmanagedBindingsPath)
+
+	if err != nil {
+		return true
+	}
+
+	set, isKnown := known[bool](keep)
+
+	return !isKnown || set
 }
 
 // addsNewBindings reports whether Estuary binds every resource the spec doesn't, such as discovered resources.
@@ -166,7 +224,7 @@ func bindingAttribute(binding tftypes.Value, attribute string) tftypes.Value {
 // providerOnly reports whether path is applied by the provider but absent from the catalog spec: the entry
 // backfill block and binding backfill trigger and strategy.
 func providerOnly(path *tftypes.AttributePath) bool {
-	return path.Equal(tftypes.NewAttributePath().WithAttributeName(backfillAttribute)) ||
+	return path.Equal(tftypes.NewAttributePath().WithAttributeName(backfillAttribute)) || path.Equal(keepUnmanagedBindingsPath) ||
 		bindingBackfillPath(path, backfillTriggerAttribute) || bindingBackfillPath(path, backfillStrategyAttribute)
 }
 

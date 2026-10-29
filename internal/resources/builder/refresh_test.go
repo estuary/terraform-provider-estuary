@@ -67,10 +67,10 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 			[]any{events, map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"}},
 			[]capture.Binding[testResource]{orders},
 		},
-		"adds the live bindings Terraform removes without auto discover": {
+		"leaves the undeclared bindings unmanaged without auto discover": {
 			plain, []capture.Binding[testResource]{orders},
 			[]any{events, map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"}},
-			[]capture.Binding[testResource]{orders, {Resource: testResource{Table: "events"}, Target: "acmeCo/events"}},
+			[]capture.Binding[testResource]{orders},
 		},
 	}
 
@@ -513,7 +513,7 @@ func TestResourceModifyPlanWarnsAboutDiscoveredBindings(test *testing.T) {
 		var found int
 
 		for _, warning := range modifyPlanResp.Diagnostics.Warnings() {
-			if warning.Summary() == "Auto discovery adds unmanaged bindings in acmeCo/movies/source-test" && strings.Contains(warning.Detail(), "to manage one, declare it in bindings") {
+			if warning.Summary() == "Auto discovery adds unmanaged bindings in acmeCo/movies/source-test" && strings.Contains(warning.Detail(), "To manage one, declare it in bindings") {
 				found++
 			}
 		}

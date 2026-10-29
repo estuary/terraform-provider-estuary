@@ -106,7 +106,21 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 			Computed: true,
 		}
 
+		if fields, isObject := bindings.NestedObject.Attributes[bindingFieldsAttribute].(schema.SingleNestedAttribute); isObject {
+			fields.Computed = true
+			fields.Description += " Omitted, it keeps the selection Estuary sets, such as recommended = \"unlimited\"."
+
+			bindings.NestedObject.Attributes[bindingFieldsAttribute] = fields
+		}
+
 		attributes[bindingsAttribute] = bindings
+
+		attributes[keepUnmanagedBindingsAttribute] = schema.BoolAttribute{
+			Description: "Keeps the live bindings the configuration doesn't declare, such as those Estuary or the dashboard " +
+				"adds, untouched. False manages every binding, removing undeclared ones, and conflicts with " +
+				catalogType.added.generator.String() + ". Defaults to true. A provider control Estuary never sees.",
+			Optional: true,
+		}
 
 		if catalogType.listsLiveBindings {
 			attributes[liveBindingsAttribute] = liveBindingsSchema(bindings)

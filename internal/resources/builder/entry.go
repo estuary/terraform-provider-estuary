@@ -14,14 +14,15 @@ import (
 // catalogType is what differs between the catalog types the provider manages: captures and materializations.
 // Unset functions do nothing.
 type catalogType struct {
-	name              string                                       // catalog type, as Estuary names it
-	added             addedBindings                                // bindings Estuary adds without Terraform
-	publish           publisher                                    // publishes the entry
-	listsLiveBindings bool                                         // lists every live binding in live_bindings
-	backfillModeKey   string                                       // binding resource key of the backfill mode, empty without one
-	adjustAttributes  func(attributes map[string]schema.Attribute) // changes the inferred attributes
-	toSpecShape       func(document map[string]any)                // moves fields from their Terraform place to their spec one
-	toTerraformShape  func(document map[string]any)                // moves fields from their spec place to their Terraform one
+	name              string                                                      // catalog type, as Estuary names it
+	added             addedBindings                                               // bindings Estuary adds without Terraform
+	publish           publisher                                                   // publishes the entry
+	listsLiveBindings bool                                                        // lists every live binding in live_bindings
+	backfillModeKey   string                                                      // binding resource key of the backfill mode, empty without one
+	adjustAttributes  func(attributes map[string]schema.Attribute)                // changes the inferred attributes
+	toSpecShape       func(document map[string]any)                               // moves fields from their Terraform place to their spec one
+	toTerraformShape  func(document map[string]any)                               // moves fields from their spec place to their Terraform one
+	omittedDefault    func(path *tftypes.AttributePath, value tftypes.Value) bool // reports a non-zero default live specs omit
 }
 
 // entry is what the resource and data source of a catalog entry share.

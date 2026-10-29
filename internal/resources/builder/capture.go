@@ -37,12 +37,13 @@ type captureBinding[R any] struct {
 
 // captureAddedBindings describes the bindings auto discovery adds.
 var captureAddedBindings addedBindings = addedBindings{
-	setting:  path.Root("auto_discover").AtName("add_new_bindings"),
-	summary:  "Auto discovery adds unmanaged bindings",
-	origin:   "discovered resource",
-	growth:   "later discoveries find new ones",
-	readding: "the next discovery may add them back as long as their source resources exist",
-	stopping: "capturing",
+	setting:   path.Root("auto_discover").AtName("add_new_bindings"),
+	generator: path.Root("auto_discover"),
+	summary:   "Auto discovery adds unmanaged bindings",
+	origin:    "discovered resource",
+	growth:    "later discoveries find new ones",
+	readding:  "the next discovery may add them back as long as their source resources exist",
+	stopping:  "capturing",
 }
 
 // captureType returns the capture catalog type of binding resource R: it lists every live binding, and holds each

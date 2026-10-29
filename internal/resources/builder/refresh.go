@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"slices"
 	"strconv"
+	"sync"
 
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
@@ -102,7 +103,7 @@ func (codec *Codec[D, S]) refreshManaged(path *tftypes.AttributePath, state tfty
 	}
 
 	if live.IsNull() {
-		if zeroValue(state) {
+		if zeroValue(state) || codec.catalogType.omittedDefault != nil && codec.catalogType.omittedDefault(path, state) {
 			return state, nil
 		}
 
@@ -192,6 +193,60 @@ func planShards(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (
 		}
 
 		return stored, nil
+	})
+}
+
+// planBindingFields plans the fields of each binding configured without them as the live ones in state, else in the live spec for bindings Terraform takes over, null for new bindings.
+func planBindingFields(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+	configured, _, err := bindings(config)
+
+	if err != nil {
+		return plan, err
+	}
+
+	planned, _, err := bindings(plan)
+
+	if err != nil {
+		return plan, err
+	}
+
+	stored, err := indexedBindings(state)
+
+	if err != nil {
+		return plan, err
+	}
+
+	var readLiveBindings func() map[string]tftypes.Value = sync.OnceValue(func() map[string]tftypes.Value {
+		live, found := readLive()
+
+		if !found {
+			return nil
+		}
+
+		indexed, _ := indexedBindings(live)
+
+		return indexed
+	})
+
+	return tftypes.Transform(plan, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
+		index, isFields := bindingAttributeIndex(attributePath, bindingFieldsAttribute)
+
+		if !isFields || index >= len(configured) || index >= len(planned) ||
+			!blockAttribute(configured[index], bindingFieldsAttribute, current.Type()).IsNull() {
+			return current, nil
+		}
+
+		var collection string = bindingCollectionValue(planned[index])
+
+		if kept, isStored := stored[collection]; isStored {
+			return blockAttribute(kept, bindingFieldsAttribute, current.Type()), nil
+		}
+
+		if kept, isLive := readLiveBindings()[collection]; isLive && collection != "" {
+			return blockAttribute(kept, bindingFieldsAttribute, current.Type()), nil
+		}
+
+		return tftypes.NewValue(current.Type(), nil), nil
 	})
 }
 

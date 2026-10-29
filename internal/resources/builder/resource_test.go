@@ -204,6 +204,10 @@ func TestResourcePublishesPlannedBindingsWithoutMerge(test *testing.T) {
 
 		value, err := entry.codec.Value("movies", expected.spec)
 
+		if err == nil && expected.spec.AutoDiscover == nil {
+			value, err = withValue(value, keepUnmanagedBindingsPath, false)
+		}
+
 		if err != nil {
 			test.Fatal(err)
 		}
@@ -766,5 +770,70 @@ func TestResourceUpdateKeepsResourceMetadata(test *testing.T) {
 
 	if !reflect.DeepEqual(backend.published["bindings"], want) {
 		test.Errorf("published bindings = %v, want the live resource path kept on users only", backend.published["bindings"])
+	}
+}
+
+func TestKeepUnmanagedBindings(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var discovering CaptureSpec[testConfig, testResource] = testCaptureSpec
+	var plain CaptureSpec[testConfig, testResource] = testCaptureSpec
+	var backend *testBackend = &testBackend{live: liveCapture(map[string]any{"target": "acmeCo/events"})}
+	var readLive liveReader
+
+	discovering.AutoDiscover = &capture.AutoDiscover{AddNewBindings: true}
+	plain.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"}}
+	discovering.Bindings = plain.Bindings
+
+	entry := newTestCaptureEntry(backend)
+
+	kept, err := entry.codec.Value("movies", plain)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	managed, err := withValue(kept, keepUnmanagedBindingsPath, false)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	discovered, err := entry.codec.Value("movies", discovering)
+
+	if err == nil {
+		discovered, err = withValue(discovered, keepUnmanagedBindingsPath, false)
+	}
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+	entry.Update(ctx, resource.UpdateRequest{Plan: tfsdk.Plan{Schema: entry.codec.Schema(), Raw: kept}, State: tfsdk.State{Schema: entry.codec.Schema(), Raw: kept}}, &updateResp)
+
+	if published, _ := backend.published["bindings"].([]any); len(published) != 2 {
+		test.Errorf("published bindings = %v, want the undeclared live binding kept by default", backend.published["bindings"])
+	}
+
+	if diagnostics := entry.validateKeepUnmanagedBindings(discovered); !diagnostics.HasError() ||
+		!strings.Contains(diagnostics[0].Summary(), "auto_discover") {
+		test.Errorf("diagnostics = %v, want false rejected with auto_discover", diagnostics)
+	}
+
+	if diagnostics := entry.validateKeepUnmanagedBindings(managed); diagnostics.HasError() {
+		test.Errorf("diagnostics = %v, want false accepted without auto_discover", diagnostics)
+	}
+
+	readLive = entry.newLiveReader(ctx, kept)
+
+	warnings := entry.warnUnmanagedBindingsRemoval(managed, kept, readLive)
+
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), "- acmeCo/events\n") || strings.Contains(warnings[0].Detail(), "acmeCo/orders") {
+		test.Errorf("warnings = %v, want only the undeclared events binding listed", warnings)
+	}
+
+	if warnings := entry.warnUnmanagedBindingsRemoval(managed, managed, readLive); len(warnings) != 0 {
+		test.Errorf("warnings = %v, want none once state already manages every binding", warnings)
 	}
 }

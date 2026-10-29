@@ -69,7 +69,7 @@ func (codec *Codec[D, S]) planLiveBindings(planned tftypes.Value, state tftypes.
 
 	predicted, isKnown := codec.publishedBindings(planned, created)
 
-	if !created {
+	if !created && keepsUnmanagedBindings(planned) {
 		previous, _, err := bindings(state)
 
 		isKnown = isKnown && err == nil && storedErr == nil && storedValue.IsKnown() && !storedValue.IsNull() && storedValue.As(&stored) == nil

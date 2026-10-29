@@ -1,8 +1,16 @@
-# estuary_materialization_postgres
+# PostgreSQL Materializations
 
 [Back to the provider documentation](../../../README.md)
 
-This resource manages a [PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) materialization connector. Each binding materializes one Estuary collection into a PostgreSQL table, which the connector creates unless it created it before. The same connector also materializes into Google Cloud SQL and other PostgreSQL-compatible databases. Amazon Aurora and Amazon RDS have their own resources, [`estuary_materialization_aurora_postgres`](../materializationaurorapostgres/README.md) and [`estuary_materialization_rds_postgres`](../materializationrdspostgres/README.md), matching the Estuary dashboard.
+These resources manage [PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/) materialization connectors. Each binding materializes one Estuary collection into a PostgreSQL table, which the connector creates unless it created it before.
+
+Estuary offers a dedicated connector for each of these databases, each with its own resource. They are configured the same way, so this page documents them together. Pick the one matching your database:
+
+| Resource | Database | Default image | Connector name |
+|---|---|---|---|
+| `estuary_materialization_postgres` | PostgreSQL, Google Cloud SQL and other PostgreSQL-compatible databases | `ghcr.io/estuary/materialize-postgres:v5` | `materialize-postgres` |
+| `estuary_materialization_aurora_postgres` | Amazon Aurora for PostgreSQL | `ghcr.io/estuary/materialize-amazon-aurora-postgres:v5` | `materialize-amazon-aurora-postgres` |
+| `estuary_materialization_rds_postgres` | [Amazon RDS for PostgreSQL](https://docs.estuary.dev/reference/Connectors/materialization-connectors/PostgreSQL/amazon-rds-postgres/) | `ghcr.io/estuary/materialize-amazon-rds-postgres:v5` | `materialize-amazon-rds-postgres` |
 
 ## Table of Contents
 
@@ -78,11 +86,11 @@ resource "estuary_materialization_postgres" "analytics" {
 
 With `tenant = "acmeCo/"` set on the provider, this creates the materialization `acmeCo/analytics/materialize-postgres`.
 
-AWS IAM authentication with hard deletes, following a capture so its new collections are materialized as they're added, into tables named after their source schema and table. An incompatible schema change disables the affected binding instead of backfilling it, and one table materializes every field and gets an index:
+An Amazon Aurora database with AWS IAM authentication and hard deletes, following a capture so its new collections are materialized as they're added, into tables named after their source schema and table. An incompatible schema change disables the affected binding instead of backfilling it, and one table materializes every field and gets an index:
 
 ```hcl
-resource "estuary_materialization_postgres" "replica" {
-  name = "replica"
+resource "estuary_materialization_aurora_postgres" "replica" {
+  name = "aurora/replica"
 
   source = {
     capture            = "acmeCo/aurora/source-amazon-aurora-postgres"
@@ -97,7 +105,7 @@ resource "estuary_materialization_postgres" "replica" {
   on_incompatible_schema_change = "disableBinding"
 
   config = {
-    address     = "123.4.567.89:5432"
+    address     = "replica.cluster-123456789.us-east-1.rds.amazonaws.com:5432"
     user        = "flow_materialize"
     database    = "replica"
     hard_delete = true
@@ -124,7 +132,7 @@ resource "estuary_materialization_postgres" "replica" {
 }
 ```
 
-Connecting through an SSH bastion host, triggering a dbt Cloud job when new data is materialized:
+An Amazon RDS database reached through an SSH bastion host, triggering a dbt Cloud job when new data is materialized:
 
 ```hcl
 variable "ssh_private_key" {
@@ -137,11 +145,11 @@ variable "dbt_api_key" {
   sensitive = true
 }
 
-resource "estuary_materialization_postgres" "private" {
+resource "estuary_materialization_rds_postgres" "private" {
   name = "warehouse"
 
   config = {
-    address  = "123.4.567.89:5432"
+    address  = "warehouse.123456789.us-east-1.rds.amazonaws.com:5432"
     user     = "flow_materialize"
     database = "warehouse"
 
@@ -188,8 +196,8 @@ resource "estuary_materialization_postgres" "private" {
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `name` | String | Yes | Materialization name (e.g., `analytics`). The provider `tenant` is added in front and `/materialize-postgres` at the end, unless they're already there. |
-| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/materialize-postgres:v5`, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
+| `name` | String | Yes | Materialization name (e.g., `analytics`). The provider `tenant` is added in front and the connector name of the resource (e.g., `/materialize-postgres`) at the end, unless they're already there. |
+| `image` | String | No | Connector image. Defaults to the default image of the resource, see the table above, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
 | `source` | Object | No | Settings of the bindings Estuary adds, optionally following a capture. See [`source`](#source). |
 | `target_naming` | Object | No | How Estuary names the tables of the bindings it adds. See [`target_naming`](#target_naming). |
 | `on_incompatible_schema_change` | String | No | What an automated change, such as a capture discovery, does when it's incompatible with a materialized table: `backfill` (default) backfills the affected bindings, `disableBinding` disables them, `disableTask` disables the materialization, and `abort` stops the automated change. Bindings can override it. See [Schema Evolution](https://docs.estuary.dev/concepts/advanced/evolutions/#what-do-schema-evolutions-do). |
@@ -197,9 +205,13 @@ resource "estuary_materialization_postgres" "private" {
 | `bindings` | List of Objects | Yes | Materialized collections, one per binding. See [`bindings`](#bindings). |
 | `backfill` | Object | No | Backfill control of the whole materialization. See [`backfill`](#backfill). |
 | `shards` | Dynamic | No | Shard settings of the materialization, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
+| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `source.capture`. Defaults to `true`. A provider control Estuary never sees. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
 
 > [!WARNING]
 > Changing the resulting catalog name, through `name` or the provider `tenant`, destroys the materialization and creates a new one.
+
+> [!WARNING]
+> With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `source.capture`, stay in the materialization and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
 
 ### `source`
 
@@ -229,7 +241,7 @@ resource "estuary_materialization_postgres" "private" {
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `address` | String | Yes | Host or `host:port` of the database (e.g., `123.4.567.89:5432`). The port defaults to `5432`. |
+| `address` | String | Yes | Host or `host:port` of the database, as shown in the RDS console for Aurora and RDS (e.g., `123.4.567.89:5432`). The port defaults to `5432`. |
 | `user` | String | Yes | Database user to connect as. |
 | `database` | String | No | Logical database to materialize to. |
 | `schema` | String | No | Schema of the materialized tables and of the connector's metadata tables, unless a binding sets its own. Defaults to `public`. |
@@ -304,7 +316,7 @@ Backfill control of the whole materialization, as the dashboard's **Backfill** b
 | `not_before` | String | No | Materializes only the documents published at or after this RFC 3339 time (e.g., `2026-01-01T00:00:00Z`). It's only a filter: changing it doesn't reprocess the documents already read. See [Time Travel](https://docs.estuary.dev/reference/time-travel/). |
 | `not_after` | String | No | Materializes only the documents published before this RFC 3339 time. Like `not_before`, it's only a filter. |
 | `resource` | Object | Yes | Table the collection is materialized into. See [`bindings.resource`](#bindingsresource). |
-| `fields` | Object | No | Collection fields materialized as columns. Omit it to use Estuary's default selection. See [`bindings.fields`](#bindingsfields). |
+| `fields` | Object | No | Collection fields materialized as columns. Omit it to use Estuary's default selection, which Estuary writes into the binding (usually `recommended = "unlimited"`): the provider keeps it in state without showing a diff, until you set `fields` yourself. See [`bindings.fields`](#bindingsfields). |
 | `disable` | Bool | No | Stops materializing the collection while keeping the binding. Defaults to `false`. |
 | `priority` | Number | No | Processing order among bindings: when priorities differ, all ready documents of a higher-priority binding are processed before any of a lower one. Defaults to `0` and can be negative, such as `-1` for a binding with a large backlog. See [Processing order](https://docs.estuary.dev/concepts/materialization/#processing-order). |
 | `backfill` | Object | No | Backfill control of the binding. See [`bindings.backfill`](#bindingsbackfill). |

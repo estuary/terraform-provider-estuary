@@ -8,6 +8,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 // MaterializationSpec is the catalog spec of a connector materialization with config C and binding resource R.
@@ -50,21 +51,33 @@ func NewMaterialization[C, R any](connector Connector) func() resource.Resource 
 // materializationAddedBindings describes the bindings a source capture adds, which only get the source and target
 // naming settings.
 var materializationAddedBindings addedBindings = addedBindings{
-	setting: path.Root("source").AtName("capture"),
-	summary: "Source capture adds unmanaged bindings",
-	origin:  "collection of the capture",
-	growth:  "the capture adds new collections",
-	limits: "They get only source.delta_updates, source.fields_recommended and target_naming, not per-binding overrides " +
-		"such as fields.require, priority or on_incompatible_schema_change.",
+	setting:   path.Root("source").AtName("capture"),
+	generator: path.Root("source").AtName("capture"),
+	summary:   "Source capture adds unmanaged bindings",
+	origin:    "collection of the capture",
+	growth:    "the capture adds new collections",
+	limits: "Added bindings get only source.delta_updates, source.fields_recommended and target_naming. To give one per-binding " +
+		"settings, such as fields.require, priority or on_incompatible_schema_change, declare it in bindings.",
 	readding: "Estuary may add them back as long as the capture has their collections",
 	stopping: "materializing",
 }
 
+// fieldsRecommendedPath is the path of source.fields_recommended.
+var fieldsRecommendedPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName("source").WithAttributeName("fields_recommended")
+
+// materializationOmittedDefault reports an unlimited source.fields_recommended, Estuary's default, which live specs omit.
+func materializationOmittedDefault(path *tftypes.AttributePath, value tftypes.Value) bool {
+	depth, isKnown := known[string](value)
+
+	return isKnown && path.Equal(fieldsRecommendedPath) && materialization.FieldDepth(depth) == materialization.FieldDepthUnlimited
+}
+
 // materializationType is the materialization catalog type.
 var materializationType catalogType = catalogType{
-	name:    "materialization",
-	added:   materializationAddedBindings,
-	publish: publishMaterialization,
+	name:           "materialization",
+	added:          materializationAddedBindings,
+	publish:        publishMaterialization,
+	omittedDefault: materializationOmittedDefault,
 }
 
 // NewMaterializationFromDocument returns the resource factory of a non-connector materialization, such as Dekaf.

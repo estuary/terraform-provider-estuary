@@ -14,7 +14,7 @@ import (
 // mergeLive merges the plan over the live spec, keeping live settings Terraform doesn't manage, unmanaged bindings,
 // resource metadata, backfill counters and the encrypted endpoint when unchanged. It returns the resets and a
 // copy of the live spec, nil when the entry doesn't exist.
-func (entryResource *entryResource[D, S]) mergeLive(ctx context.Context, catalogName string, document map[string]any, generated bool, plan tftypes.Value, prior tftypes.Value) ([]string, map[string]any, error) {
+func (entryResource *entryResource[D, S]) mergeLive(ctx context.Context, catalogName string, document map[string]any, keepUnmanaged bool, plan tftypes.Value, prior tftypes.Value) ([]string, map[string]any, error) {
 	live, err := entryResource.readSealed(ctx, catalogName)
 
 	if err != nil || live == nil {
@@ -35,7 +35,7 @@ func (entryResource *entryResource[D, S]) mergeLive(ctx context.Context, catalog
 
 	keepUnmanagedKeys(document, priorDocument, live)
 
-	resets, err := entryResource.mergeLiveBindings(document, priorDocument, live, generated, plan, prior)
+	resets, err := entryResource.mergeLiveBindings(document, priorDocument, live, keepUnmanaged, plan, prior)
 
 	if err == nil {
 		err = entryResource.keepSealedEndpoint(ctx, catalogName, document, priorDocument, live, plan, prior)
@@ -60,10 +60,10 @@ func keepUnmanagedKeys(document map[string]any, priorDocument map[string]any, li
 // mergeLiveBindings sets the published bindings, see newPlannedPublication, with the live resource metadata and
 // backfill counters, plus one for each backfill. It returns the resets, failing on backfill mode changes without a
 // backfill.
-func (entryResource *entryResource[D, S]) mergeLiveBindings(document map[string]any, priorDocument map[string]any, live map[string]any, generated bool, plan tftypes.Value, prior tftypes.Value) ([]string, error) {
+func (entryResource *entryResource[D, S]) mergeLiveBindings(document map[string]any, priorDocument map[string]any, live map[string]any, keepUnmanaged bool, plan tftypes.Value, prior tftypes.Value) ([]string, error) {
 	var current []any = catalog.Bindings(live)
 
-	publication, err := newPlannedPublication(catalog.Bindings(document), catalog.Bindings(priorDocument), current, generated, plan, prior,
+	publication, err := newPlannedPublication(catalog.Bindings(document), catalog.Bindings(priorDocument), current, keepUnmanaged, plan, prior,
 		entryResource.catalogType.backfillModeKey)
 
 	if err == nil {
@@ -77,7 +77,7 @@ func (entryResource *entryResource[D, S]) mergeLiveBindings(document map[string]
 	keepResourceMetadata(publication.published, current)
 	keepBackfills(publication.published, current, publication.backfills)
 
-	if generated {
+	if keepUnmanaged {
 		document[catalog.BindingsKey] = publication.published
 	}
 

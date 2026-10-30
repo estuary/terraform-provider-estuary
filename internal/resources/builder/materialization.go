@@ -2,12 +2,15 @@ package builder
 
 import (
 	"context"
+	"fmt"
+	"sync"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
@@ -34,7 +37,7 @@ type MaterializationBinding[R any] struct {
 	NotAfter                   string                                     `yaml:"notAfter,omitempty" description:"Materializes only the documents published before this RFC 3339 time. It only filters, like not_before."`
 	Disable                    bool                                       `yaml:"disable,omitempty" description:"Stops materializing the collection while keeping the binding. Defaults to false."`
 	Priority                   int                                        `yaml:"priority,omitempty" description:"Processing order among bindings: all ready documents of a higher-priority binding are processed before any of a lower one. Defaults to 0 and can be negative."`
-	Fields                     *materialization.BindingFields             `yaml:"fields,omitempty" description:"Collection fields materialized as columns. Omit it to use the default selection of Estuary."`
+	Fields                     *materialization.BindingFields             `yaml:"fields,omitempty" description:"Collection fields materialized as columns."`
 	OnIncompatibleSchemaChange materialization.OnIncompatibleSchemaChange `yaml:"onIncompatibleSchemaChange,omitempty" enum:"backfill,disableBinding,disableTask,abort" description:"Overrides the on_incompatible_schema_change of the materialization for this binding: backfill, disableBinding, disableTask or abort."`
 	Backfill                   *MaterializationBackfill                   `yaml:"backfill,omitempty" description:"Backfill control of the binding."`
 }
@@ -74,10 +77,117 @@ func materializationOmittedDefault(path *tftypes.AttributePath, value tftypes.Va
 
 // materializationType is the materialization catalog type.
 var materializationType catalogType = catalogType{
-	name:           "materialization",
-	added:          materializationAddedBindings,
-	publish:        publishMaterialization,
-	omittedDefault: materializationOmittedDefault,
+	name:             "materialization",
+	added:            materializationAddedBindings,
+	publish:          publishMaterialization,
+	adjustAttributes: adjustMaterializationAttributes,
+	planBindings:     planBindingFields,
+	omittedDefault:   materializationOmittedDefault,
+}
+
+// adjustMaterializationAttributes makes binding fields computed, as plans fill in the omitted ones.
+func adjustMaterializationAttributes(attributes map[string]schema.Attribute) {
+	bindings, isList := attributes[bindingsAttribute].(schema.ListNestedAttribute)
+
+	if !isList {
+		return
+	}
+
+	if fields, isObject := bindings.NestedObject.Attributes[bindingFieldsAttribute].(schema.SingleNestedAttribute); isObject {
+		fields.Computed = true
+		fields.Description += " Omitted, it keeps the live selection, and new bindings get Estuary's default recommended = \"unlimited\"."
+
+		bindings.NestedObject.Attributes[bindingFieldsAttribute] = fields
+	}
+
+	attributes[bindingsAttribute] = bindings
+}
+
+// planBindingFields plans the fields of each binding configured without them as the live ones in state, else in the live
+// spec for bindings Terraform takes over, else Estuary's default recommended = "unlimited" for new bindings. Bindings of
+// an existing entry whose live spec can't be read plan none, so an unread live selection is never replaced.
+func planBindingFields(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+	configured, _, err := bindings(config)
+
+	if err != nil {
+		return plan, err
+	}
+
+	planned, _, err := bindings(plan)
+
+	if err != nil {
+		return plan, err
+	}
+
+	stored, err := indexedBindings(state)
+
+	if err != nil {
+		return plan, err
+	}
+
+	var readLiveBindings func() (map[string]tftypes.Value, bool) = sync.OnceValues(func() (map[string]tftypes.Value, bool) {
+		live, found := readLive()
+
+		if !found {
+			return nil, false
+		}
+
+		indexed, err := indexedBindings(live)
+
+		return indexed, err == nil
+	})
+
+	return tftypes.Transform(plan, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
+		index, isFields := bindingAttributeIndex(attributePath, bindingFieldsAttribute)
+
+		if !isFields || index >= len(configured) || index >= len(planned) ||
+			!blockAttribute(configured[index], bindingFieldsAttribute, current.Type()).IsNull() {
+			return current, nil
+		}
+
+		var collection string = bindingCollectionValue(planned[index])
+
+		if kept, isStored := stored[collection]; isStored {
+			return blockAttribute(kept, bindingFieldsAttribute, current.Type()), nil
+		}
+
+		liveBindings, isRead := readLiveBindings()
+
+		if kept, isLive := liveBindings[collection]; isLive && collection != "" {
+			return blockAttribute(kept, bindingFieldsAttribute, current.Type()), nil
+		}
+
+		if exists(state) && !isRead {
+			return tftypes.NewValue(current.Type(), nil), nil
+		}
+
+		return defaultBindingFields(current.Type())
+	})
+}
+
+// defaultBindingFields returns fields selecting recommended = "unlimited", which specs write as Estuary's default true.
+func defaultBindingFields(fieldsType tftypes.Type) (tftypes.Value, error) {
+	var attributes map[string]tftypes.Value = map[string]tftypes.Value{}
+
+	objectType, isObject := fieldsType.(tftypes.Object)
+
+	if !isObject {
+		return tftypes.Value{}, fmt.Errorf("binding fields are a %s, not an object", fieldsType)
+	}
+
+	recommendedType, found := objectType.AttributeTypes[bindingFieldsRecommendedAttribute]
+
+	if !found {
+		return tftypes.Value{}, fmt.Errorf("binding fields have no %s attribute", bindingFieldsRecommendedAttribute)
+	}
+
+	for attribute, attributeType := range objectType.AttributeTypes {
+		attributes[attribute] = tftypes.NewValue(attributeType, nil)
+	}
+
+	attributes[bindingFieldsRecommendedAttribute] = tftypes.NewValue(recommendedType, string(materialization.FieldDepthUnlimited))
+
+	return tftypes.NewValue(objectType, attributes), nil
 }
 
 // NewMaterializationFromDocument returns the resource factory of a non-connector materialization, such as Dekaf.

@@ -24,6 +24,11 @@ const (
 	bindingFieldsAttribute   string = "fields"
 )
 
+// Binding fields attributes.
+const (
+	bindingFieldsRecommendedAttribute string = "recommended"
+)
+
 // Backfill block attributes, of the entry and of each binding.
 const (
 	backfillAttribute         string = "backfill"
@@ -34,10 +39,17 @@ const (
 
 // Paths of the entry attributes read by path.
 var (
+	shardsPath                *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(shardsAttribute)
+	backfillPath              *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(backfillAttribute)
 	bindingsPath              *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(bindingsAttribute)
 	liveBindingsPath          *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(liveBindingsAttribute)
 	keepUnmanagedBindingsPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(keepUnmanagedBindingsAttribute)
 )
+
+// exists reports whether an entry value holds an entry, false for the null or untyped state of one not created yet.
+func exists(entry tftypes.Value) bool {
+	return entry.Type() != nil && !entry.IsNull()
+}
 
 // known converts a value, reporting false when it is null, unknown or of another type.
 func known[T any](value tftypes.Value) (T, bool) {

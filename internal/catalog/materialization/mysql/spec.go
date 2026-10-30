@@ -50,7 +50,7 @@ type Config struct {
 // Resource identifies the target MySQL table.
 type Resource struct {
 	Table                    string `yaml:"table" description:"Table to materialize into. The connector creates it, unless it created it before."`
-	AdditionalTableCreateSQL string `yaml:"additional_table_create_sql,omitempty" description:"SQL statements run after the connector creates the table, such as a CREATE INDEX. They only run when the table is created, so an existing table needs a backfill of the binding. Don't re-create the table in them."`
+	AdditionalTableCreateSQL string `yaml:"additional_table_create_sql,omitempty" description:"SQL statements run after the connector creates the table, such as a CREATE INDEX. They only run when the connector creates the table: a backfill truncates an existing table without running them, so run them yourself on it. Don't re-create the table in them."`
 	DeltaUpdates             bool   `yaml:"delta_updates,omitempty" description:"Appends the changes of each transaction instead of merging them into one row per key. Defaults to false."`
 }
 

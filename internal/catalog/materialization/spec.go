@@ -69,11 +69,11 @@ var bindingSourceKeys []string = []string{"name", "notBefore", "notAfter"}
 
 // SyncSchedule sets how often the materialization commits transactions.
 type SyncSchedule struct {
-	SyncFrequency       string `yaml:"syncFrequency,omitempty" enum:"0s,30s,1m,2m30s,5m,15m,20m,30m,1h,2h,4h"`
-	Timezone            string `yaml:"timezone,omitempty"`
-	FastSyncStartTime   string `yaml:"fastSyncStartTime,omitempty"`
-	FastSyncStopTime    string `yaml:"fastSyncStopTime,omitempty"`
-	FastSyncEnabledDays string `yaml:"fastSyncEnabledDays,omitempty"`
+	SyncFrequency       string `yaml:"syncFrequency,omitempty" enum:"0s,30s,1m,2m30s,5m,15m,20m,30m,1h,2h,4h" description:"How often transactions run once the materialization is caught up: '0s', '30s', '1m', '2m30s', '5m', '15m', '20m', '30m', '1h', '2h' or '4h'. It applies all day, every day, unless the fast sync window and days limit it. Defaults to '30m'."`
+	Timezone            string `yaml:"timezone,omitempty" description:"Timezone of the fast sync window and days, as an IANA name (e.g., 'America/New_York') or a +HH:MM offset."`
+	FastSyncStartTime   string `yaml:"fastSyncStartTime,omitempty" description:"Time of day, as HH:MM (e.g., '09:00'), when transactions start running at syncFrequency. Before it they run every 4 hours."`
+	FastSyncStopTime    string `yaml:"fastSyncStopTime,omitempty" description:"Time of day, as HH:MM (e.g., '17:00'), when transactions stop running at syncFrequency. After it they run every 4 hours."`
+	FastSyncEnabledDays string `yaml:"fastSyncEnabledDays,omitempty" description:"Days when syncFrequency applies, such as 'M-F', 'M,W,F' or 'Su-T,Th-S'. On other days transactions run every 4 hours. Defaults to every day."`
 }
 
 // DBTJobTrigger runs a dbt Cloud job when the materialization commits new data.
@@ -90,7 +90,7 @@ type DBTJobTrigger struct {
 // Source sets how added bindings are initialized; a non-nil Capture binds each of its collections, nil emits null.
 type Source struct {
 	Capture           *string    `yaml:"capture" description:"Full name of a capture whose bindings the materialization follows. The provider tenant isn't added to it. Each collection added to the capture gets a binding here, and bindings removed from the capture are kept."`
-	DeltaUpdates      bool       `yaml:"deltaUpdates,omitempty" description:"Whether added bindings use delta updates. Defaults to false."`
+	DeltaUpdates      bool       `yaml:"deltaUpdates,omitempty" description:"Whether added bindings use delta updates, for connectors offering both modes. Defaults to false."`
 	FieldsRecommended FieldDepth `yaml:"fieldsRecommended,omitempty" description:"fields.recommended of added bindings: '0', '1', '2', ... or 'unlimited', see bindings.fields. Defaults to 'unlimited'."`
 }
 

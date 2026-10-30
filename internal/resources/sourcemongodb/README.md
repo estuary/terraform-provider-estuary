@@ -168,7 +168,7 @@ resource "estuary_source_mongodb" "private" {
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
 
 > [!WARNING]
-> Changing the resulting catalog name, through `name` or the provider `tenant`, destroys the capture and creates a new one.
+> Changing `name` so that the resulting catalog name changes destroys the capture and creates a new one. Changing the provider `tenant` doesn't: Terraform looks for the capture under the new tenant, plans a new one and leaves the old one in Estuary, no longer managed. Destroy the capture before changing `tenant`, or delete the old one in Estuary afterwards.
 
 > [!WARNING]
 > With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `auto_discover`, stay in the capture and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
@@ -189,14 +189,14 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value, or resets its collection with `dataflowReset`, leaving its counter as is. Starts at 1 and only goes up. |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `address` | String | Yes | Connection URI of the deployment, holding only the host and connection options (e.g., `mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin`). The plan rejects credentials in it, such as `user:password@` or a password option, as state and logs would hold them in plain text: set them in `user` and `password`. Credentials found in the live value, such as an address pasted in the dashboard, show as `***`, and the next apply replaces them with the configured value. |
+| `address` | String | Yes | Connection URI of the deployment, holding only the host and connection options (e.g., `mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin`). A `mongodb://` host can include its port (e.g., `mongodb://123.4.567.89:27017`), a `mongodb+srv://` host can't. The plan rejects credentials in it, such as `user:password@` or a password option, as state and logs would hold them in plain text: set them in `user` and `password`. Credentials found in the live value, such as an address pasted in the dashboard, show as `***`, and the next apply replaces them with the configured value. |
 | `user` | String | Yes | Database user to connect as. |
 | `password` | String | Yes | Password of the database user. Write-only, see the note above. |
 | `password_hash` | String | Read-only | Salted hash of `password`, used to detect when it changes. |
@@ -222,8 +222,8 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | `max_await_time` | String | No | Maximum time to wait for new change stream events before returning an empty batch, as a Go duration such as `10s`. Defaults to `1s`. |
 | `disable_pre_images` | Bool | No | Stops requesting pre-images, even when the deployment supports them and they are enabled for the collections. |
 | `exclusive_collection_filter` | Bool | No | Adds a pipeline filter to the database change streams so they only match events of enabled bindings. Use it only with a small number of bindings. Cannot be set with `exclude_collections`. |
-| `exclude_collections` | String | No | Comma-separated list of collections to exclude from the database change streams, each formatted as `database:collection`. Cannot be set with `exclusive_collection_filter`. |
-| `skip_backfills` | String | No | Comma-separated list of collections not to backfill, each formatted as `database:collection`. Use `*:*` to skip the backfill of every change stream collection. Only applies to Change Stream Incremental bindings. |
+| `exclude_collections` | String | No | Comma-separated list of collections to exclude from the database change streams, each formatted as `database:collection`. Cannot be set with `exclusive_collection_filter`, nor list a collection with an enabled binding. |
+| `skip_backfills` | String | No | Comma-separated list of collections not to backfill, each formatted as `database:collection`. Use `*:*` to skip the backfill of every change stream collection. Only applies to Change Stream Incremental bindings: naming another binding fails validation, while `*:*` skips only the change stream ones. |
 
 ### `bindings`
 
@@ -241,7 +241,7 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: capture the whole collection again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
+| `trigger` | Number | No | Raise it to backfill the binding: capture the whole collection again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value, or resets the collection with `dataflowReset`, leaving the counter as is. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
 | `strategy` | String | No | Overrides the capture's `backfill.strategy` for this binding: `incremental` captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `bindings.resource`

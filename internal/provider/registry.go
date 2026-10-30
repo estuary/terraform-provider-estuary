@@ -2,8 +2,10 @@ package provider
 
 import (
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationdekaf"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationiceberg"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationmysql"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationpostgres"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/materializations3iceberg"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcedynamodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemongodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemysql"
@@ -25,10 +27,12 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	materializationdekaf.NewSingleStore,
 	materializationdekaf.NewStarTree,
 	materializationdekaf.NewTinybird,
+	materializationiceberg.New,
 	materializationmysql.New,
 	materializationpostgres.New,
 	materializationmysql.NewRDS,
 	materializationpostgres.NewRDS,
+	materializations3iceberg.New,
 	sourcemysql.NewAurora,
 	sourcepostgres.NewAurora,
 	sourcedynamodb.New,

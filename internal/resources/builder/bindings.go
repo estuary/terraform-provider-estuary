@@ -222,9 +222,9 @@ func bindingAttribute(binding tftypes.Value, attribute string) tftypes.Value {
 }
 
 // providerOnly reports whether path is applied by the provider but absent from the catalog spec: the entry
-// backfill block and binding backfill trigger and strategy.
+// backfill block, keep_unmanaged_bindings and binding backfill trigger and strategy.
 func providerOnly(path *tftypes.AttributePath) bool {
-	return path.Equal(tftypes.NewAttributePath().WithAttributeName(backfillAttribute)) || path.Equal(keepUnmanagedBindingsPath) ||
+	return path.Equal(backfillPath) || path.Equal(keepUnmanagedBindingsPath) ||
 		bindingBackfillPath(path, backfillTriggerAttribute) || bindingBackfillPath(path, backfillStrategyAttribute)
 }
 

@@ -218,6 +218,8 @@ materializations:
             bucket: my-staging-bucket
             aws_access_key_id: AKIAXXXXXXXXXXXXXXXX
             aws_secret_access_key: <secret-access-key>
+          advanced:
+            lowercase_column_names: true
     bindings:
       - resource: { table: orders }
         source: acmeCo/orders

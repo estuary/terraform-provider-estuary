@@ -27,6 +27,9 @@ type publication struct {
 // publisher publishes a catalog entry as its YAML document.
 type publisher func(ctx context.Context, backend catalog.Backend, name string, document map[string]any, publication publication) error
 
+// bindingsPlanner returns plan with the binding attributes the configuration omits planned.
+type bindingsPlanner func(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error)
+
 // entryResource is the Terraform resource of a catalog entry, a capture or a materialization.
 type entryResource[D Document[D, S], S any] struct {
 	entry[D, S]
@@ -85,8 +88,8 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 		planned, err = planShards(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)
 	}
 
-	if err == nil {
-		planned, err = planBindingFields(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
+	if err == nil && entryResource.catalogType.planBindings != nil {
+		planned, err = entryResource.catalogType.planBindings(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
 	}
 
 	if err == nil {

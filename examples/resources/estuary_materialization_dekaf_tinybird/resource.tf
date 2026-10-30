@@ -3,14 +3,14 @@ variable "dekaf_token" {
   sensitive = true
 }
 
-# Two collections exposed as Kafka topics, the consumer authenticating with the token.
+# Two collections exposed to Tinybird, with deletions emitted as documents so Tinybird can apply them as hard deletes.
 resource "estuary_materialization_dekaf_tinybird" "analytics" {
   name = "analytics"
 
   config = {
     token              = var.dekaf_token
     strict_topic_names = false
-    deletions          = "kafka"
+    deletions          = "cdc"
   }
 
   bindings = [
@@ -21,6 +21,10 @@ resource "estuary_materialization_dekaf_tinybird" "analytics" {
     {
       source   = "acmeCo/mongodb/shop/users"
       resource = { topic_name = "users" }
+      fields = {
+        recommended = "1"
+        exclude     = ["internal_notes"]
+      }
     },
   ]
 }

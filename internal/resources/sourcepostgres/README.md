@@ -187,7 +187,7 @@ resource "estuary_source_aurora_postgres" "private" {
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
 
 > [!WARNING]
-> Changing the resulting catalog name, through `name` or the provider `tenant`, destroys the capture and creates a new one.
+> Changing `name` so that the resulting catalog name changes destroys the capture and creates a new one. Changing the provider `tenant` doesn't: Terraform looks for the capture under the new tenant, plans a new one and leaves the old one in Estuary, no longer managed. Destroy the capture before changing `tenant`, or delete the old one in Estuary afterwards.
 
 > [!WARNING]
 > With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `auto_discover`, stay in the capture and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
@@ -208,7 +208,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value, or resets its collection with `dataflowReset`, leaving its counter as is. Starts at 1 and only goes up. |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
@@ -241,7 +241,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | `azure_tenant_id` | String | With `AzureIAM` | Azure tenant ID of the app registration. |
 
 > [!TIP]
-> With `AWSIAM`, Estuary assumes the `aws_role_arn` role, which needs `rds-db:connect` on the database user, see the [AWS IAM guide](https://docs.estuary.dev/guides/iam-auth/aws/). IAM database authentication must be enabled on the cluster or instance. On Aurora, replication connections also need `rds.iam_auth_for_replication = 1`, see [IAM authentication for logical replication](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.IAM-auth.html). A fresh authentication token is generated for each connection, so there's no password to rotate.
+> With `AWSIAM`, Estuary assumes the `aws_role_arn` role, which needs `rds-db:connect` on the database user, see the [AWS IAM guide](https://docs.estuary.dev/guides/iam-auth/aws/). IAM database authentication must be enabled on the cluster or instance. On Aurora, replication connections also need `rds.iam_auth_for_replication = 1`, see [IAM authentication for logical replication](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.IAM-auth.html). The connector builds a short-lived RDS authentication token from the assumed role, so there's no password to rotate.
 >
 > With `GCPIAM` or `AzureIAM`, connections use TLS (`sslmode = require`) unless `advanced.sslmode` says otherwise.
 
@@ -276,7 +276,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | `read_only_capture` | Bool | No | Runs without writing to the database, so no watermarks table is needed. At least one captured table, or a heartbeat table you add to the capture, must then change every few minutes, or WAL retention can grow without bound. See [Read-Only Captures](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/#read-only-captures). |
 | `skip_backfills` | String | No | Comma-separated list of tables not to backfill, each as `schema.table`. |
 | `backfill_chunk_size` | Number | No | Number of rows fetched in a single backfill query. Defaults to `50000`. |
-| `min_backfill_xid` | String | No | Only backfills the rows whose `xmin` transaction ID is greater than this one in a 32-bit modular comparison, as digits only (e.g., `123456`). Reduces the data read again by a backfill. |
+| `min_backfill_xid` | String | No | Only backfills the rows whose `xmin` transaction ID is greater than this one in a 32-bit modular comparison, as digits only (e.g., `123456`). Reduces the rows a backfill captures again, though the table is still scanned. |
 | `sslmode` | String | No | Overrides the PostgreSQL `sslmode` connection parameter: `disable`, `allow`, `prefer`, `require`, `verify-ca` or `verify-full`. |
 | `statement_timeout` | String | No | Statement timeout of the connector's queries: `30s`, `1m`, `2m`, `5m`, `30m`, or `0` to disable it. Defaults to `2m` when unset. |
 | `discover_schemas` | List of Strings | No | Only discovers tables in these schemas. Prefer `discovery_filters.include_schemas`. |
@@ -303,7 +303,7 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
+| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value, or resets the collection with `dataflowReset`, leaving the counter as is. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
 | `strategy` | String | No | Overrides the capture's `backfill.strategy` for this binding: `incremental` captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 | `mode` | String | No | How the table contents are backfilled, which the spec holds in the binding resource. Leave it unset to let the connector choose, see [Backfill Modes](https://docs.estuary.dev/reference/backfilling-data/#resource-configuration-backfill-modes): `Normal` emits every change right away, `Precise` holds back changes to rows the backfill hasn't reached yet, `Only Changes` skips the backfill and only captures new changes, and `Without Primary Key` backfills tables without a primary key. The connector requires a backfill along with a change, so raise `trigger`, or the capture's, in the same change: the plan fails otherwise. |
 

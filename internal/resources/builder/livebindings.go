@@ -52,7 +52,7 @@ func setLiveBindings(value tftypes.Value, replace func(current tftypes.Value) tf
 // planLiveBindings plans the stored live bindings while bindings are unchanged, else merges the planned ones over them.
 // Unknown on create with discovery or while unknown; documents without live bindings are returned unchanged.
 func (codec *Codec[D, S]) planLiveBindings(planned tftypes.Value, state tftypes.Value) (tftypes.Value, error) {
-	var created bool = state.Type() == nil || state.IsNull()
+	var creating bool = !exists(state)
 	var stored []tftypes.Value
 
 	if !codec.catalogType.listsLiveBindings {
@@ -61,15 +61,15 @@ func (codec *Codec[D, S]) planLiveBindings(planned tftypes.Value, state tftypes.
 
 	storedValue, storedErr := attributeValue(state, liveBindingsPath)
 
-	if !created && storedErr == nil && storedValue.IsKnown() && sameBindings(planned, state) {
+	if !creating && storedErr == nil && storedValue.IsKnown() && sameBindings(planned, state) {
 		return setLiveBindings(planned, func(tftypes.Value) tftypes.Value {
 			return storedValue
 		})
 	}
 
-	predicted, isKnown := codec.publishedBindings(planned, created)
+	predicted, isKnown := codec.publishedBindings(planned, creating)
 
-	if !created && keepsUnmanagedBindings(planned) {
+	if !creating && keepsUnmanagedBindings(planned) {
 		previous, _, err := bindings(state)
 
 		isKnown = isKnown && err == nil && storedErr == nil && storedValue.IsKnown() && !storedValue.IsNull() && storedValue.As(&stored) == nil
@@ -92,10 +92,10 @@ func (codec *Codec[D, S]) planLiveBindings(planned tftypes.Value, state tftypes.
 
 // publishedBindings returns the planned bindings as a live spec holds them once published, through the codec,
 // reporting false while they hold unknown values or when creating the entry discovers bindings.
-func (codec *Codec[D, S]) publishedBindings(planned tftypes.Value, created bool) ([]tftypes.Value, bool) {
+func (codec *Codec[D, S]) publishedBindings(planned tftypes.Value, creating bool) ([]tftypes.Value, bool) {
 	name, spec, err := codec.Spec(planned)
 
-	if err != nil || created && addsNewBindings(spec) {
+	if err != nil || creating && addsNewBindings(spec) {
 		return nil, false
 	}
 

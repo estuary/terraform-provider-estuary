@@ -24,8 +24,8 @@ materializations:
               aws_access_key_id: AKIAXXXXXXXXXXXXXXXX
               aws_secret_access_key: <secret-access-key>
             spark_job_properties:
-              - key: spark.executor.memory
-                value: 8g
+              - key: spark.executor.instances
+                value: "8"
           syncSchedule:
             syncFrequency: 30m
             timezone: UTC

@@ -184,7 +184,7 @@ resource "estuary_source_aurora_mysql" "private" {
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
 
 > [!WARNING]
-> Changing the resulting catalog name, through `name` or the provider `tenant`, destroys the capture and creates a new one.
+> Changing `name` so that the resulting catalog name changes destroys the capture and creates a new one. Changing the provider `tenant` doesn't: Terraform looks for the capture under the new tenant, plans a new one and leaves the old one in Estuary, no longer managed. Destroy the capture before changing `tenant`, or delete the old one in Estuary afterwards.
 
 > [!WARNING]
 > With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `auto_discover`, stay in the capture and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
@@ -205,7 +205,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value, or resets its collection with `dataflowReset`, leaving its counter as is. Starts at 1 and only goes up. |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
@@ -270,9 +270,9 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `sslmode` | String | No | Whether connections use TLS and how strictly the server certificate is verified: `disabled`, `preferred`, `required`, `verify_ca` or `verify_identity`. Defaults to `required`. |
-| `ssl_server_ca` | String | No | PEM-encoded CA certificate the server certificate must chain to. Required with `verify_ca`. Optional with `verify_identity`, which otherwise trusts public certificate authorities, the Amazon RDS CAs and Google Cloud SQL's shared CA. Write-only, see the note above. |
+| `ssl_server_ca` | String | No | PEM-encoded CA certificate the server certificate must chain to. Required with `verify_ca`. Optional with `verify_identity`, which otherwise trusts public certificate authorities, the Amazon RDS CAs and Google Cloud SQL's shared CA. Rejected with other modes. Write-only, see the note above. |
 | `ssl_server_ca_hash` | String | Read-only | Salted hash of `ssl_server_ca`, used to detect when it changes. |
-| `ssl_client_cert` | String | No | PEM-encoded client certificate, for mutual TLS. Write-only, see the note above. |
+| `ssl_client_cert` | String | No | PEM-encoded client certificate, for mutual TLS. Set it together with `ssl_client_key`, and not with `disabled`. Write-only, see the note above. |
 | `ssl_client_cert_hash` | String | Read-only | Salted hash of `ssl_client_cert`, used to detect when it changes. |
 | `ssl_client_key` | String | No | PEM-encoded private key of `ssl_client_cert`. Write-only, see the note above. |
 | `ssl_client_key_hash` | String | Read-only | Salted hash of `ssl_client_key`, used to detect when it changes. |
@@ -305,7 +305,7 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
+| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value, or resets the collection with `dataflowReset`, leaving the counter as is. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
 | `strategy` | String | No | Overrides the capture's `backfill.strategy` for this binding: `incremental` captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 | `mode` | String | No | How the table contents are backfilled, which the spec holds in the binding resource. Leave it unset to let the connector choose, see [Backfill Modes](https://docs.estuary.dev/reference/backfilling-data/#resource-configuration-backfill-modes): `Normal` emits every change right away, `Precise` holds back changes to rows the backfill hasn't reached yet, `Only Changes` skips the backfill and only captures new changes, and `Without Primary Key` backfills tables without a primary key. The connector requires a backfill along with a change, so raise `trigger`, or the capture's, in the same change: the plan fails otherwise. |
 

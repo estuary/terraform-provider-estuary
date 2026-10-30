@@ -544,7 +544,7 @@ func TestMaterializationReadShowsLostFieldDepth(test *testing.T) {
 	}
 }
 
-func TestPlanBindingFieldsKeepsEstuarySelection(test *testing.T) {
+func TestPlanBindingFieldsOmitted(test *testing.T) {
 	var unlimited *materialization.BindingFields = &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited}
 	var depthOne *materialization.BindingFields = &materialization.BindingFields{Recommended: "1"}
 
@@ -582,8 +582,85 @@ func TestPlanBindingFieldsKeepsEstuarySelection(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	if want := value(binding("orders", unlimited), binding("users", depthOne), binding("events", depthOne), binding("sessions", nil)); !planned.Equal(want) {
-		test.Errorf("planned = %v, want the stored selection for orders, the configured one for users, the live one for the taken over events and none for sessions", planned)
+	if want := value(binding("orders", unlimited), binding("users", depthOne), binding("events", depthOne), binding("sessions", unlimited)); !planned.Equal(want) {
+		test.Errorf("planned = %v, want the stored selection for orders, the configured one for users, the live one for the taken over events and Estuary's default for sessions", planned)
+	}
+
+	unread, err := planBindingFields(config, config, state, func() (tftypes.Value, bool) { return tftypes.Value{}, false })
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if want := value(binding("orders", unlimited), binding("users", depthOne), binding("events", nil), binding("sessions", nil)); !unread.Equal(want) {
+		test.Errorf("planned with an unreadable live spec = %v, want no selection for the bindings state doesn't hold", unread)
+	}
+
+	created, err := planBindingFields(config, config, tftypes.NewValue(config.Type(), nil), func() (tftypes.Value, bool) { return tftypes.Value{}, false })
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if want := value(binding("orders", unlimited), binding("users", depthOne), binding("events", unlimited), binding("sessions", unlimited)); !created.Equal(want) {
+		test.Errorf("planned for a new entry = %v, want Estuary's default for every binding configured without fields", created)
+	}
+
+	var sessionsSource *tftypes.AttributePath = bindingsPath.WithElementKeyInt(3).WithAttributeName(bindingSourceAttribute)
+
+	unknownConfig, err := withValue(config, sessionsSource, tftypes.UnknownValue)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	unknownCollection, err := planBindingFields(unknownConfig, unknownConfig, tftypes.NewValue(config.Type(), nil), func() (tftypes.Value, bool) { return tftypes.Value{}, false })
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	wantUnknown, err := withValue(value(binding("orders", unlimited), binding("users", depthOne), binding("events", unlimited), binding("sessions", unlimited)), sessionsSource, tftypes.UnknownValue)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if !unknownCollection.Equal(wantUnknown) {
+		test.Errorf("planned for a new binding of a collection unknown until apply = %v, want Estuary's default", unknownCollection)
+	}
+}
+
+func TestDefaultBindingFields(test *testing.T) {
+	var fieldsType tftypes.Object = tftypes.Object{AttributeTypes: map[string]tftypes.Type{
+		bindingFieldsRecommendedAttribute: tftypes.String,
+		"require":                         tftypes.Set{ElementType: tftypes.String},
+		"exclude":                         tftypes.List{ElementType: tftypes.String},
+	}}
+
+	fields, err := defaultBindingFields(fieldsType)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var want tftypes.Value = tftypes.NewValue(fieldsType, map[string]tftypes.Value{
+		bindingFieldsRecommendedAttribute: tftypes.NewValue(tftypes.String, "unlimited"),
+		"require":                         tftypes.NewValue(tftypes.Set{ElementType: tftypes.String}, nil),
+		"exclude":                         tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
+	})
+
+	if !fields.Equal(want) {
+		test.Errorf("defaultBindingFields = %v, want only recommended = \"unlimited\" set", fields)
+	}
+
+	for label, invalid := range map[string]tftypes.Type{
+		"not an object":       tftypes.String,
+		"without recommended": tftypes.Object{AttributeTypes: map[string]tftypes.Type{"require": tftypes.Set{ElementType: tftypes.String}}},
+	} {
+		if _, err := defaultBindingFields(invalid); err == nil {
+			test.Errorf("defaultBindingFields of fields %s returned no error", label)
+		}
 	}
 }
 

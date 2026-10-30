@@ -145,7 +145,7 @@ resource "estuary_source_dynamodb" "local" {
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
 
 > [!WARNING]
-> Changing the resulting catalog name, through `name` or the provider `tenant`, destroys the capture and creates a new one.
+> Changing `name` so that the resulting catalog name changes destroys the capture and creates a new one. Changing the provider `tenant` doesn't: Terraform looks for the capture under the new tenant, plans a new one and leaves the old one in Estuary, no longer managed. Destroy the capture before changing `tenant`, or delete the old one in Estuary afterwards.
 
 > [!WARNING]
 > With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `auto_discover`, stay in the capture and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
@@ -166,7 +166,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value, or resets its collection with `dataflowReset`, leaving its counter as is. Starts at 1 and only goes up. |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
@@ -197,7 +197,7 @@ The IAM user or role needs `ListTables` and `DescribeTable` on every table of th
 | `endpoint` | String | No | AWS endpoint URI to connect to, for both DynamoDB and DynamoDB Streams. Use it to capture from a DynamoDB-compatible API that AWS doesn't provide. |
 | `backfill_segments` | Number | No | Number of segments the backfill scan of each table is split into. Defaults to `100`. Has no effect once the backfill of a table has started. |
 | `scan_limit` | Number | No | Maximum number of items each backfill scan request evaluates. By default, it's unlimited, except for tables whose read capacity, from `rcu_allocation` or else provisioned, is 100 or less, which use `100`. |
-| `idle_backoff_max` | String | No | Maximum wait between polls of an open stream shard whose reads keep returning no records, as a Go duration between `1s` and `10m`. Defaults to `1s`. Higher values reduce billed DynamoDB Streams requests on idle shards, but delay the capture of new records by up to this wait. |
+| `idle_backoff_max` | String | No | Maximum wait between polls of an open stream shard whose reads keep returning no records, as a whole number with one unit (`ms`, `s`, `m` or `h`, e.g., `30s`) between `1s` and `10m`. Defaults to `1s`. Higher values reduce billed DynamoDB Streams requests on idle shards, but delay the capture of new records by up to this wait. |
 
 ### `bindings`
 
@@ -215,7 +215,7 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
+| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value, or resets the collection with `dataflowReset`, leaving the counter as is. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
 | `strategy` | String | No | Overrides the capture's `backfill.strategy` for this binding: `incremental` captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `bindings.resource`

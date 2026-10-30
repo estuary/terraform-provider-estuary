@@ -196,7 +196,7 @@ func (secrets secrets) values(value tftypes.Value) []string {
 	return values
 }
 
-// nullAttributes nulls the attributes matching null.
+// nullAttributes nulls the attributes whose path matching reports.
 func nullAttributes(value tftypes.Value, matching func(path *tftypes.AttributePath) bool) (tftypes.Value, error) {
 	return tftypes.Transform(value, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
 		if current.IsNull() || !matching(path) {

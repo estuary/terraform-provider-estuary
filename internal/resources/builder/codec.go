@@ -91,8 +91,9 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 	}
 
 	attributes[nameAttribute] = schema.StringAttribute{
-		Description: catalogType.nameDescription() + " Changing the resulting catalog name replaces the " + catalogType.name + ".",
-		Required:    true,
+		Description: catalogType.nameDescription() + " Changing the resulting catalog name through name replaces the " + catalogType.name +
+			"; through the provider tenant, it creates a new one and leaves the old one in Estuary, no longer managed.",
+		Required: true,
 	}
 
 	if catalogType.adjustAttributes != nil {
@@ -104,13 +105,6 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 			Description: "Collection of the binding, its target in captures and its source in materializations. " +
 				"Plans always show it, identifying the changed binding.",
 			Computed: true,
-		}
-
-		if fields, isObject := bindings.NestedObject.Attributes[bindingFieldsAttribute].(schema.SingleNestedAttribute); isObject {
-			fields.Computed = true
-			fields.Description += " Omitted, it keeps the selection Estuary sets, such as recommended = \"unlimited\"."
-
-			bindings.NestedObject.Attributes[bindingFieldsAttribute] = fields
 		}
 
 		attributes[bindingsAttribute] = bindings

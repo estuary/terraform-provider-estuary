@@ -208,7 +208,7 @@ resource "estuary_materialization_rds_postgres" "private" {
 | `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `source.capture`. Defaults to `true`. A provider control Estuary never sees. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
 
 > [!WARNING]
-> Changing the resulting catalog name, through `name` or the provider `tenant`, destroys the materialization and creates a new one.
+> Changing `name` so that the resulting catalog name changes destroys the materialization and creates a new one. Changing the provider `tenant` doesn't: Terraform looks for the materialization under the new tenant, plans a new one and leaves the old one in Estuary, no longer managed. Destroy the materialization before changing `tenant`, or delete the old one in Estuary afterwards.
 
 > [!WARNING]
 > With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `source.capture`, stay in the materialization and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
@@ -316,7 +316,7 @@ Backfill control of the whole materialization, as the dashboard's **Backfill** b
 | `not_before` | String | No | Materializes only the documents published at or after this RFC 3339 time (e.g., `2026-01-01T00:00:00Z`). It's only a filter: changing it doesn't reprocess the documents already read. See [Time Travel](https://docs.estuary.dev/reference/time-travel/). |
 | `not_after` | String | No | Materializes only the documents published before this RFC 3339 time. Like `not_before`, it's only a filter. |
 | `resource` | Object | Yes | Table the collection is materialized into. See [`bindings.resource`](#bindingsresource). |
-| `fields` | Object | No | Collection fields materialized as columns. Omit it to use Estuary's default selection, which Estuary writes into the binding (usually `recommended = "unlimited"`): the provider keeps it in state without showing a diff, until you set `fields` yourself. See [`bindings.fields`](#bindingsfields). |
+| `fields` | Object | No | Collection fields materialized as columns. Omit it to keep the binding's live selection, such as one set in the dashboard: the provider keeps it in state without showing a diff, until you set `fields` yourself. A new binding without `fields` gets Estuary's default, `recommended = "unlimited"` (`recommended: true` in the spec). See [`bindings.fields`](#bindingsfields). |
 | `disable` | Bool | No | Stops materializing the collection while keeping the binding. Defaults to `false`. |
 | `priority` | Number | No | Processing order among bindings: when priorities differ, all ready documents of a higher-priority binding are processed before any of a lower one. Defaults to `0` and can be negative, such as `-1` for a binding with a large backlog. See [Processing order](https://docs.estuary.dev/concepts/materialization/#processing-order). |
 | `backfill` | Object | No | Backfill control of the binding. See [`bindings.backfill`](#bindingsbackfill). |
@@ -329,7 +329,7 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: materialize the whole collection again. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill the binding: materialize the whole collection again. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
 
 ### `bindings.resource`
 
@@ -338,7 +338,7 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 | `table` | String | Yes | Table to materialize into. The connector creates it, unless it created it before. |
 | `schema` | String | No | Schema of the table, overriding `config.schema`. |
 | `delta_updates` | Bool | No | Appends the changes of each transaction instead of merging them into one row per key. Defaults to `false`, see [Delta Updates](https://docs.estuary.dev/concepts/materialization/#delta-updates). |
-| `additional_table_create_sql` | String | No | SQL statements run in the same transaction that creates the table, such as a `CREATE INDEX`. They only run when the table is created, so an existing table needs a backfill of the binding. Don't re-create the table in them. |
+| `additional_table_create_sql` | String | No | SQL statements run in the same transaction that creates the table, such as a `CREATE INDEX`. They only run when the connector creates the table: a backfill truncates an existing table without running them, so run them yourself on it. Don't re-create the table in them. |
 
 > [!TIP]
 > A delta updates table keeps a row per change rather than one per key, so switching a binding from delta updates back to standard updates needs a backfill.

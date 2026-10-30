@@ -18,14 +18,14 @@ type backfillStrategy string
 
 // captureBackfill is the capture backfill block: raising its trigger backfills every enabled binding. Not in the catalog spec.
 type captureBackfill struct {
-	Trigger  int              `yaml:"trigger,omitempty" description:"Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. A provider control Estuary never sees, not its backfill counter: each raise adds one to each binding's live counter. Starts at 1 and only goes up."`
+	Trigger  int              `yaml:"trigger,omitempty" description:"Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. A provider control Estuary never sees, not its backfill counter: each raise adds one to each binding's live counter, or resets its collection with 'dataflowReset', leaving its counter as is. Starts at 1 and only goes up."`
 	Strategy backfillStrategy `yaml:"strategy,omitempty" enum:"incremental,dataflowReset" description:"Default backfill strategy of the bindings: 'incremental' (default) captures again into the existing collection, 'dataflowReset' resets the collection, backfilling its materializations and truncating their tables. Changing it alone publishes nothing."`
 }
 
 // captureBindingBackfill is the capture binding backfill block: raising its trigger backfills the binding.
 // Mode mirrors the resource's backfill mode, see backfillModeKey.
 type captureBindingBackfill struct {
-	Trigger  int              `yaml:"trigger,omitempty" description:"Raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter. Starts at 1 and only goes up, and can't be raised on a disabled binding."`
+	Trigger  int              `yaml:"trigger,omitempty" description:"Raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter, or resets the collection with 'dataflowReset', leaving the counter as is. Starts at 1 and only goes up, and can't be raised on a disabled binding."`
 	Strategy backfillStrategy `yaml:"strategy,omitempty" enum:"incremental,dataflowReset" description:"Overrides the backfill.strategy of the capture for this binding: 'incremental' or 'dataflowReset'. Changing it alone publishes nothing."`
 	Mode     string           `yaml:"mode,omitempty"`
 }
@@ -44,7 +44,7 @@ var backfillStrategies []backfillStrategy = []backfillStrategy{
 // MaterializationBackfill is the materialization and binding backfill block: raising its trigger backfills the binding,
 // or every enabled binding of the materialization. Not in the catalog spec.
 type MaterializationBackfill struct {
-	Trigger int `yaml:"trigger,omitempty" description:"Raise it to backfill the binding, or every enabled binding of the materialization: each table is truncated and materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter. Starts at 1 and only goes up."`
+	Trigger int `yaml:"trigger,omitempty" description:"Raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter. Starts at 1 and only goes up."`
 }
 
 // backfillRequests returns the sorted collections to backfill and to reset, from raised binding triggers and, for
@@ -76,7 +76,7 @@ func backfillRequests(plan tftypes.Value, prior tftypes.Value, wide []string) ([
 		}
 	}
 
-	if prior.Type() != nil && !prior.IsNull() && raisesTrigger(plan, prior) {
+	if exists(prior) && raisesTrigger(plan, prior) {
 		for _, collection := range wide {
 			requested[collection] = true
 		}

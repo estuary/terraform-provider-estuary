@@ -13,7 +13,7 @@ func TestSpec(test *testing.T) {
 }
 
 func TestSchemaConformance(test *testing.T) {
-	spectest.AssertConformsToSchema[Config, Resource](test, "catalog_authentication", "compute/aws_access_key_id", "compute/aws_secret_access_key")
+	spectest.AssertConformsToSchema[Config, Resource](test, "catalog_authentication", "compute/aws_access_key_id", "compute/aws_secret_access_key", "advanced/lowercase_column_names")
 }
 
 func TestEnumTagsMatchLists(test *testing.T) {
@@ -133,6 +133,10 @@ func TestSampleLegacyShapes(test *testing.T) {
 		test.Errorf("compute = %+v, want top-level legacy keys and no credentials", config.Compute)
 	}
 
+	if config.Advanced == nil || !config.Advanced.LowercaseColumnNames || config.Advanced.FieldNameCase != "" {
+		test.Errorf("advanced = %+v, want only the deprecated lowercase_column_names", config.Advanced)
+	}
+
 	if legacyOAuth == nil || legacyOAuth.CatalogAuthType != LegacyCatalogAuthTypeClientCredentials || legacyOAuth.OAuth2ServerURI != "v1/oauth/tokens" {
 		test.Errorf("legacy OAuth catalog_authentication = %+v", legacyOAuth)
 	}
@@ -217,8 +221,8 @@ func TestSampleSharedOptions(test *testing.T) {
 
 	expectedProperties := []SparkJobProperty{
 		{
-			Key:   "spark.executor.memory",
-			Value: "8g",
+			Key:   "spark.executor.instances",
+			Value: "8",
 		},
 	}
 

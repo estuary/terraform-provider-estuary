@@ -2,11 +2,13 @@ package icebergdelta
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/auth"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
+	"gopkg.in/yaml.v3"
 )
 
 func TestSpec(test *testing.T) {
@@ -134,6 +136,27 @@ func TestSampleFullSpec(test *testing.T) {
 
 	if customers.Fields == nil || customers.Fields.Recommended != materialization.FieldDepthUnlimited {
 		test.Errorf("customers fields = %+v, want every field recommended", customers.Fields)
+	}
+
+	if customers.Resource.DeltaUpdates == nil || !*customers.Resource.DeltaUpdates {
+		test.Errorf("delta_updates = %v, want explicitly true", customers.Resource.DeltaUpdates)
+	}
+}
+
+func TestExplicitDeltaUpdatesFalseIsKept(test *testing.T) {
+	var deltaUpdates bool = false
+
+	encoded, err := yaml.Marshal(Resource{
+		Table:        "orders",
+		DeltaUpdates: &deltaUpdates,
+	})
+
+	if err != nil {
+		test.Fatalf("encoding resource: %v", err)
+	}
+
+	if !strings.Contains(string(encoded), "delta_updates: false") {
+		test.Errorf("encoded resource = %q, want delta_updates: false kept for the connector to reject", encoded)
 	}
 }
 

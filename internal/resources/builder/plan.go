@@ -418,7 +418,6 @@ func (entryResource *entryResource[D, S]) warnRemovedBindings(plan tftypes.Value
 // place, listing the changed fields. Failing to read the live spec skips the warning.
 func (entryResource *entryResource[D, S]) warnTakenOverBindings(plan tftypes.Value, state tftypes.Value, readLive liveReader) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
-	var managed map[string]bool = map[string]bool{}
 	var candidates map[int]string = map[int]string{}
 	var takenOver []string
 
@@ -428,18 +427,16 @@ func (entryResource *entryResource[D, S]) warnTakenOverBindings(plan tftypes.Val
 		return diagnostics
 	}
 
-	prior, _, err := bindings(state)
+	managed, err := indexedBindings(state)
 
 	if err != nil {
 		return diagnostics
 	}
 
-	for _, binding := range prior {
-		managed[bindingCollectionValue(binding)] = true
-	}
-
 	for index, binding := range planned {
-		if collection := bindingCollectionValue(binding); collection != "" && !managed[collection] {
+		var collection string = bindingCollectionValue(binding)
+
+		if _, isManaged := managed[collection]; collection != "" && !isManaged {
 			candidates[index] = collection
 		}
 	}
@@ -454,13 +451,11 @@ func (entryResource *entryResource[D, S]) warnTakenOverBindings(plan tftypes.Val
 		return diagnostics
 	}
 
-	liveBindings, _, err := bindings(live)
+	liveByCollection, err := indexedBindings(live)
 
 	if err != nil {
 		return diagnostics
 	}
-
-	var liveByCollection map[string]tftypes.Value = byCollection(liveBindings)
 
 	for index, binding := range planned {
 		collection, isCandidate := candidates[index]

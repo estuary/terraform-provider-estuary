@@ -158,6 +158,8 @@ Each resource manages a capture or a materialization of one Estuary connector. C
 |---|---|---|
 | [Dekaf](internal/resources/materializationdekaf/README.md) | Materialization | `estuary_materialization_dekaf_generic`, `estuary_materialization_dekaf_bytewax`, `estuary_materialization_dekaf_clickhouse`, `estuary_materialization_dekaf_imply_polaris`, `estuary_materialization_dekaf_materialize`, `estuary_materialization_dekaf_risingwave`, `estuary_materialization_dekaf_singlestore`, `estuary_materialization_dekaf_startree`, `estuary_materialization_dekaf_tinybird` |
 | [Amazon DynamoDB](internal/resources/sourcedynamodb/README.md) | Capture | `estuary_source_dynamodb` |
+| [Apache Iceberg](internal/resources/materializationiceberg/README.md) | Materialization | `estuary_materialization_iceberg` |
+| [Apache Iceberg Tables in Amazon S3 (delta updates)](internal/resources/materializations3iceberg/README.md) | Materialization | `estuary_materialization_s3_iceberg` |
 | [MongoDB](internal/resources/sourcemongodb/README.md) | Capture | `estuary_source_mongodb` |
 | [MySQL](internal/resources/sourcemysql/README.md) | Capture | `estuary_source_aurora_mysql`, `estuary_source_rds_mysql` |
 | [MySQL](internal/resources/materializationmysql/README.md) | Materialization | `estuary_materialization_mysql`, `estuary_materialization_aurora_mysql`, `estuary_materialization_rds_mysql` |
@@ -270,10 +272,10 @@ resource "estuary_materialization_postgres" "shop" {
 
 ### Field Selection
 
-Each materialization binding can set `fields` to choose which collection fields it materializes. Omit it to use Estuary's default selection.
+Each materialization binding can set `fields` to choose which collection fields it materializes. Omit it to keep the binding's live selection; a new binding without `fields` gets Estuary's default, `recommended = "unlimited"` (`recommended: true` in the spec).
 
 > [!NOTE]
-> Estuary writes its default selection into each binding that omits `fields`, usually `recommended = "unlimited"`. The provider keeps that value in state, so plans show no diff for it, and publishes it back unchanged. Once you set `fields` on a binding, your value replaces it.
+> For a binding that already exists in Estuary, such as one added in the dashboard or by `source.capture`, an omitted `fields` keeps its live selection: the provider holds it in state, so plans show no diff for it, and publishes it back unchanged. A new binding without `fields` is published with `recommended = "unlimited"`, the `recommended: true` default of Estuary's spec, and the plan shows it. Once you set `fields` on a binding, your value replaces either.
 
 | Attribute | Behavior |
 |---|---|
@@ -344,7 +346,7 @@ Each binding has a `backfill` block. To backfill the binding, raise its `trigger
 ```
 
 > [!IMPORTANT]
-> **`backfill.trigger` is not Estuary's backfill counter.** It's an internal control of the provider, which Estuary never sees: each time you raise it, the apply raises Estuary's counter by one from its live value. The two never need to match.
+> **`backfill.trigger` is not Estuary's backfill counter.** It's an internal control of the provider, which Estuary never sees: each time you raise it, the apply raises Estuary's counter by one from its live value, or, with the `dataflowReset` strategy of captures, resets the collection and leaves the counter as is. The two never need to match.
 > - Each raise is one backfill, even by more than one (2 → 5). Leave the new value in place afterwards.
 > - Start at 1. It only goes up: the plan fails when it's lower than before, or when it's only known at apply time, such as `timestamp()`, which would backfill on every apply.
 > - Setting it where it wasn't set before counts as a raise: on a binding already in Estuary, managed or taken over, `trigger = 1` backfills it once. A binding new to Estuary only records it, as creating it backfills anyway.
@@ -356,7 +358,7 @@ On SQL captures (PostgreSQL, MySQL), a binding's `backfill.mode` also sets how i
 
 Captures also take a `backfill` block at the top level, as the dashboard's **Backfill** button and **Backfill mode**:
 
-- Raising the capture's `backfill.trigger` backfills **every** binding of the capture, those added by discovery that Terraform doesn't manage included. A binding whose own trigger rises in the same apply still backfills once. Plans warn with the list of bindings it backfills, and list those it resets in a separate warning.
+- Raising the capture's `backfill.trigger` backfills **every enabled** binding of the capture, those added by discovery that Terraform doesn't manage included. A binding whose own trigger rises in the same apply still backfills once. Plans warn with the list of bindings it backfills, and list those it resets in a separate warning.
 - The capture's `backfill.strategy` is the default of its bindings, and a binding's `backfill.strategy` overrides it. Changing a strategy alone publishes nothing.
 
 | `strategy` | What a raised trigger does to a capture binding |
@@ -394,7 +396,7 @@ resource "estuary_source_aurora_postgres" "sales" {
 
 Plans warn about every collection the apply resets, those of unmanaged bindings included. A materialization with `on_incompatible_schema_change = "abort"` makes the reset fail.
 
-Materializations also take a `backfill` block at the top level, as the dashboard's **Backfill** button under **Source Collections → Advanced options**. Raising its `trigger` backfills **every** enabled binding of the materialization, those Estuary adds through `source.capture` included: each table is truncated and materialized again from the collection, without reading the source again. Plans warn with the list of bindings it backfills. It has no `strategy`: to read the source again, backfill the capture instead.
+Materializations also take a `backfill` block at the top level, as the dashboard's **Backfill** button under **Source Collections → Advanced options**. Raising its `trigger` backfills **every** enabled binding of the materialization, those Estuary adds through `source.capture` included: each binding is materialized again from its collection, without reading the source again. SQL tables are truncated first, and Iceberg tables, which can't be truncated, are dropped and created again. Plans warn with the list of bindings it backfills. It has no `strategy`: to read the source again, backfill the capture instead.
 
 ```hcl
 resource "estuary_materialization_postgres" "warehouse" {
@@ -428,7 +430,7 @@ shards = {
 
 ### Connector Versions
 
-Each resource defaults to the connector's current major version tag (e.g., `ghcr.io/estuary/source-mongodb:v3`), which receives Estuary's fixes and improvements. Set `image` only to move to another major version on purpose, and test it in a non-production environment first, as major versions may not be drop-in replacements.
+Each resource with an `image` attribute, all but Dekaf's, defaults to the connector's current major version tag (e.g., `ghcr.io/estuary/source-mongodb:v3`), which receives Estuary's fixes and improvements. Set `image` only to move to another major version on purpose, and test it in a non-production environment first, as major versions may not be drop-in replacements.
 
 Only the tag can change: the image name is fixed per resource, and the plan rejects any other image, so a configuration can't hand its secrets to a connector other than the resource's own.
 
@@ -550,7 +552,7 @@ resource "estuary_source_mongodb" "shop" {
 
 Despite its name, `tenant` can be any prefix under your Estuary tenant, such as `acmeCo/dev/`. Your token must have access to it.
 
-Changing `tenant` or `name` changes the catalog name, so Terraform replaces the capture or materialization: it deletes it and creates a new one. Writing the prefix or connector name in `name` yourself, such as `name = "acmeCo/dev/mongodb"`, names the same entry and never replaces it. Without `tenant`, `name` must hold the full prefix.
+Changing `name` so that the catalog name changes makes Terraform replace the capture or materialization: it deletes it and creates a new one. Changing `tenant` doesn't replace it: Terraform looks for it under the new prefix, plans a new one and leaves the old one in Estuary, no longer managed. Destroy it before changing `tenant`, or delete the old one in Estuary afterwards. Writing the prefix or connector name in `name` yourself, such as `name = "acmeCo/dev/mongodb"`, names the same entry and never replaces it. Without `tenant`, `name` must hold the full prefix.
 
 The prefix is added only to names the provider builds. Names you write out yourself are used exactly as written:
 

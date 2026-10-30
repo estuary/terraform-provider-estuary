@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"maps"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -10,7 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 )
 
-func TestResourceAttributesHaveDescriptions(test *testing.T) {
+func TestResourceAttributeDescriptions(test *testing.T) {
 	var ctx context.Context = context.Background()
 
 	for _, newResource := range resources {
@@ -34,6 +35,11 @@ func TestResourceAttributesHaveDescriptions(test *testing.T) {
 
 				if attribute.GetDescription() == "" {
 					test.Errorf("%s: %s has no description", metadataResp.TypeName, name)
+				}
+
+				if attribute.IsWriteOnly() != strings.HasSuffix(attribute.GetDescription(), " Write-only.") {
+					test.Errorf("%s: %s is write-only = %t, but its description ending in \" Write-only.\" says %t",
+						metadataResp.TypeName, name, attribute.IsWriteOnly(), !attribute.IsWriteOnly())
 				}
 
 				switch nested := attribute.(type) {

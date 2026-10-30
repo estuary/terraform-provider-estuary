@@ -16,7 +16,7 @@ const ConnectorName string = "source-dynamodb"
 type Advanced struct {
 	BackfillSegments int    `yaml:"backfillSegments,omitempty" description:"Number of segments the backfill scan of each table is split into. Defaults to 100. Has no effect once the backfill of a table has started."`
 	ScanLimit        int    `yaml:"scanLimit,omitempty" description:"Maximum number of items each backfill scan request evaluates. By default, it's unlimited, except for tables whose read capacity, from rcu_allocation or else provisioned, is 100 or less, which use 100."`
-	IdleBackoffMax   string `yaml:"idleBackoffMax,omitempty" description:"Maximum wait between polls of an open stream shard whose reads keep returning no records, as a Go duration between '1s' and '10m'. Defaults to '1s'. Higher values reduce billed DynamoDB Streams requests on idle shards, but delay the capture of new records by up to this wait."`
+	IdleBackoffMax   string `yaml:"idleBackoffMax,omitempty" description:"Maximum wait between polls of an open stream shard whose reads keep returning no records, as a whole number with one unit ('ms', 's', 'm' or 'h', e.g., '30s') between '1s' and '10m'. Defaults to '1s'. Higher values reduce billed DynamoDB Streams requests on idle shards, but delay the capture of new records by up to this wait."`
 	Endpoint         string `yaml:"endpoint,omitempty" description:"AWS endpoint URI to connect to, for both DynamoDB and DynamoDB Streams. Use it to capture from a DynamoDB-compatible API that AWS doesn't provide."`
 }
 

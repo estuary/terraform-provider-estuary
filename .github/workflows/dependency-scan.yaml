@@ -32,7 +32,8 @@ jobs:
       # its version and settings from config files in the checkout, and a pull
       # request can add higher-precedence ones (.mise.toml, mise.local.toml and
       # others) that no review covers. To upgrade, take the Linux-64bit line
-      # from the release's trivy_<version>_checksums.txt.
+      # from the release's trivy_<version>_checksums.txt, and bump the local
+      # pin in mise.toml to match.
       - name: Install Trivy
         env:
           VERSION: 0.76.0

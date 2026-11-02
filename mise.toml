@@ -1,0 +1,9 @@
+# Tool versions for local development and CI. See https://mise.jdx.dev
+#
+# Trivy is pinned here so the Dependency Scan workflow and a local
+# `trivy fs go.mod` run the same release.
+[tools]
+"github:aquasecurity/trivy" = { version = "0.76.0", platforms = { linux-arm64 = { asset_pattern = "trivy_*_Linux-ARM64.tar.gz" }, linux-x64 = { asset_pattern = "trivy_*_Linux-64bit.tar.gz" }, macos-arm64 = { asset_pattern = "trivy_*_macOS-ARM64.tar.gz" } } }
+
+[settings]
+auto_install = false

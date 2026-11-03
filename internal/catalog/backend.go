@@ -2,8 +2,13 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"slices"
 )
+
+// ErrPublicationConflict reports a publication refused because the live spec isn't the one it expected: another
+// publication changed it, or created it when the publication creates the entry.
+var ErrPublicationConflict error = errors.New("the live spec changed since it was read")
 
 type secretsKey struct{}
 

@@ -7,12 +7,15 @@ import (
 // Entry attributes.
 const (
 	nameAttribute                  string = "name"
+	catalogNameAttribute           string = "catalog_name"
 	imageAttribute                 string = "image"
 	disableAttribute               string = "disable"
 	shardsAttribute                string = "shards"
 	bindingsAttribute              string = "bindings"
 	liveBindingsAttribute          string = "live_bindings"
 	keepUnmanagedBindingsAttribute string = "keep_unmanaged_bindings"
+	configAttribute                string = "config"
+	targetNamingAttribute          string = "target_naming"
 )
 
 // Binding attributes.
@@ -39,12 +42,27 @@ const (
 
 // Paths of the entry attributes read by path.
 var (
+	catalogNamePath           *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(catalogNameAttribute)
 	shardsPath                *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(shardsAttribute)
 	backfillPath              *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(backfillAttribute)
 	bindingsPath              *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(bindingsAttribute)
 	liveBindingsPath          *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(liveBindingsAttribute)
 	keepUnmanagedBindingsPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(keepUnmanagedBindingsAttribute)
+	configPath                *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(configAttribute)
+	targetNamingPath          *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(targetNamingAttribute)
 )
+
+// withAttribute returns value with the attribute at path replaced by what replace returns for it, unchanged when value
+// doesn't hold it.
+func withAttribute(value tftypes.Value, path *tftypes.AttributePath, replace func(current tftypes.Value) tftypes.Value) (tftypes.Value, error) {
+	return tftypes.Transform(value, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
+		if !attributePath.Equal(path) {
+			return current, nil
+		}
+
+		return replace(current), nil
+	})
+}
 
 // exists reports whether an entry value holds an entry, false for the null or untyped state of one not created yet.
 func exists(entry tftypes.Value) bool {

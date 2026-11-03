@@ -110,7 +110,7 @@ func TestPublishCaptureCommandLines(test *testing.T) {
 		test.Errorf("published spec lost the capture: %s", content)
 	}
 
-	if reset := utils.Lookup(published, "collections", dashName); reset["reset"] != true || reset[expectPubIDKey] != nil {
+	if reset := utils.Lookup(published, "collections", dashName); reset["reset"] != true || reset[catalog.ExpectPubIDKey] != nil {
 		test.Errorf("published spec lost the reset collection: %s", content)
 	}
 }
@@ -138,6 +138,13 @@ func TestPublishMaterializationCommandLines(test *testing.T) {
 func TestReadDeleteAndDiscoverCommandLines(test *testing.T) {
 	client, record := recordFlowctl(test)
 	var spec catalog.CaptureSpec = catalog.RawCapture(map[string]any{"bindings": []any{}})
+	var pulled string = filepath.Join(test.TempDir(), "pulled.yaml")
+
+	if err := os.WriteFile(pulled, nil, 0600); err != nil {
+		test.Fatal(err)
+	}
+
+	test.Setenv("FLOWCTL_PULLED", pulled)
 
 	if _, err := client.ReadSpec(context.Background(), dashName); err != nil {
 		test.Fatal(err)

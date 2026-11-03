@@ -38,11 +38,11 @@ type Advanced struct {
 // Config is the materialize-postgres configuration shared by every image in Images; Password is the deprecated form of
 // Credentials.
 type Config struct {
-	Address       string                         `yaml:"address" description:"Host or host:port of the database. The port defaults to 5432."`
+	Address       string                         `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database. The port defaults to 5432. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	User          string                         `yaml:"user" description:"Database user to connect as."`
 	Password      string                         `yaml:"password,omitempty" description:"Deprecated form of credentials with auth_type 'UserPassword', still accepted for existing materializations. Write-only."`
 	Database      string                         `yaml:"database,omitempty" description:"Logical database to materialize to."`
-	Schema        string                         `yaml:"schema,omitempty" description:"Schema of the materialized tables and of the connector's metadata tables, unless a binding sets its own. Defaults to 'public'."`
+	Schema        string                         `yaml:"schema,omitempty" x-default-namespace:"true" description:"Schema of the materialized tables and of the connector's metadata tables, unless a binding sets its own. Defaults to 'public'."`
 	HardDelete    bool                           `yaml:"hardDelete,omitempty" description:"Deletes from the table the documents deleted in the source. Otherwise, the _meta/op column marks deleted rows (soft delete). Defaults to false."`
 	Credentials   *auth.DatabaseCredentials      `yaml:"credentials,omitempty" description:"How the user authenticates. Set it, or the deprecated password, for the materialization to connect."`
 	DBTJobTrigger *materialization.DBTJobTrigger `yaml:"dbt_job_trigger,omitempty" description:"Triggers a dbt Cloud job when new data is materialized."`
@@ -52,10 +52,10 @@ type Config struct {
 
 // Resource identifies the target PostgreSQL table; Schema overrides the endpoint schema.
 type Resource struct {
-	Table                    string `yaml:"table" description:"Table to materialize into. The connector creates it, unless it created it before."`
-	Schema                   string `yaml:"schema,omitempty" description:"Schema of the table, overriding config.schema."`
+	Table                    string `yaml:"table" x-collection-name:"true" description:"Table to materialize into. The connector creates it, unless it created it before."`
+	Schema                   string `yaml:"schema,omitempty" x-schema-name:"true" description:"Schema of the table, overriding config.schema."`
 	AdditionalTableCreateSQL string `yaml:"additional_table_create_sql,omitempty" description:"SQL statements run in the same transaction that creates the table, such as a CREATE INDEX. They only run when the connector creates the table: a backfill truncates an existing table without running them, so run them yourself on it. Don't re-create the table in them."`
-	DeltaUpdates             bool   `yaml:"delta_updates,omitempty" description:"Appends the changes of each transaction instead of merging them into one row per key. Defaults to false."`
+	DeltaUpdates             bool   `yaml:"delta_updates,omitempty" x-delta-updates:"true" description:"Appends the changes of each transaction instead of merging them into one row per key. Defaults to false. Switching it from true to false requires a backfill: raise backfill.trigger, or the materialization's, in the same change, or the plan fails."`
 }
 
 // Binding maps a source collection to its PostgreSQL table.

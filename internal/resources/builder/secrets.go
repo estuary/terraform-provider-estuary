@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/builder/translator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -94,7 +95,9 @@ func hashSecret(secret string) (string, error) {
 	return secretHash(secret, salt, secretsHashIterations)
 }
 
-// verifySecret reports whether secret matches the stored hash.
+// verifySecret reports whether secret matches the stored hash. State is untrusted input, so a hash with parameters
+// hashSecret never writes, such as more iterations, doesn't match rather than costing every plan its iterations; the
+// plan then shows the secret as changed and the apply hashes it again.
 func verifySecret(secret string, stored string) bool {
 	var parts []string = strings.Split(stored, "$")
 
@@ -104,13 +107,13 @@ func verifySecret(secret string, stored string) bool {
 
 	iterations, err := strconv.Atoi(parts[1])
 
-	if err != nil || iterations <= 0 {
+	if err != nil || iterations <= 0 || iterations > secretsHashIterations {
 		return false
 	}
 
 	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
 
-	if err != nil {
+	if err != nil || len(salt) != secretsHashSaltSize {
 		return false
 	}
 
@@ -154,11 +157,17 @@ func (secrets secrets) withoutLiveSecrets(value tftypes.Value) (tftypes.Value, [
 
 		attribute, err := secrets.schema.AttributeAtTerraformPath(context.Background(), path)
 
-		if err != nil || !translator.ForbidsCredentials(attribute) {
+		if err != nil {
 			return current, nil
 		}
 
-		if safe := translator.RedactCredentials(text); safe != text {
+		var credentials catalog.Credentials = translator.AttributeCredentials(attribute)
+
+		if credentials == catalog.CredentialsAllowed {
+			return current, nil
+		}
+
+		if safe := translator.RedactCredentials(text, credentials); safe != text {
 			redactedPaths = append(redactedPaths, path)
 
 			return tftypes.NewValue(current.Type(), safe), nil

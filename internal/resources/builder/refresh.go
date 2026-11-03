@@ -63,12 +63,8 @@ func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appen
 		}
 	}
 
-	return tftypes.Transform(state, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		if !attributePath.Equal(path) {
-			return current, nil
-		}
-
-		return tftypes.NewValue(bindingsType, refreshed), nil
+	return withAttribute(state, path, func(tftypes.Value) tftypes.Value {
+		return tftypes.NewValue(bindingsType, refreshed)
 	})
 }
 
@@ -186,12 +182,8 @@ func planShards(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (
 		stored = blockAttribute(state, shardsAttribute, tftypes.DynamicPseudoType)
 	}
 
-	return tftypes.Transform(plan, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		if !attributePath.Equal(shardsPath) {
-			return current, nil
-		}
-
-		return stored, nil
+	return withAttribute(plan, shardsPath, func(tftypes.Value) tftypes.Value {
+		return stored
 	})
 }
 

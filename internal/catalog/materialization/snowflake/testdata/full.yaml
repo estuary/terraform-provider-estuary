@@ -1,0 +1,60 @@
+materializations:
+  acmeCo/analytics/materialize-snowflake:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-snowflake:v4
+        config:
+          host: orgname-accountname.snowflakecomputing.com
+          database: acmeCo_db
+          schema: acmeCo_flow_schema
+          warehouse: acmeCo_warehouse
+          role: acmeCo_role
+          account: acmeCo_account
+          timestamp_type: TIMESTAMP_LTZ
+          hardDelete: true
+          credentials:
+            auth_type: jwt
+            user: snowflake_user
+            private_key: |
+              -----BEGIN PRIVATE KEY-----
+              <private-key>
+              -----END PRIVATE KEY-----
+          syncSchedule:
+            syncFrequency: 1h
+            timezone: America/New_York
+            fastSyncStartTime: "09:00"
+            fastSyncStopTime: "17:00"
+            fastSyncEnabledDays: M-F
+          dbt_job_trigger:
+            job_id: "12345"
+            account_id: "67890"
+            api_key: <dbt-api-key>
+            access_url: https://cloud.getdbt.com
+            cause: Estuary
+            mode: replace
+            interval: 30m
+          advanced:
+            disableFieldTruncation: true
+            no_flow_document: true
+            feature_flags: snowpipe_streaming_v2
+    bindings:
+      - resource:
+          table: orders
+        source: acmeCo/orders
+        fields:
+          recommended: true
+
+      - resource:
+          table: customers
+          schema: crm
+          clustering: region,created_at
+        source: acmeCo/customers
+
+      - resource:
+          table: events
+          delta_updates: true
+        source: acmeCo/events
+        fields:
+          recommended: true
+          exclude:
+            - payload

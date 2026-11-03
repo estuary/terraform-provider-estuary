@@ -102,3 +102,24 @@ func TestBindingSourceYAML(test *testing.T) {
 		test.Errorf("error = %v, want the unmodeled partitions key rejected", err)
 	}
 }
+
+func TestTargetNamingSchemaName(test *testing.T) {
+	var collection string = "acmeCo/movies/sample_mflix/movies"
+
+	expectations := map[string]struct {
+		naming TargetNaming
+		want   string
+	}{
+		"source structure":          {TargetNaming{Strategy: TargetNamingMatchSourceStructure}, "sample_mflix"},
+		"source structure template": {TargetNaming{Strategy: TargetNamingMatchSourceStructure, SchemaTemplate: "MOVIES_{{schema}}_STREAM"}, "MOVIES_sample_mflix_STREAM"},
+		"single schema":             {TargetNaming{Strategy: TargetNamingSingleSchema, Schema: "prod", SchemaTemplate: "raw_{{schema}}"}, "prod"},
+		"prefixed table names":      {TargetNaming{Strategy: TargetNamingPrefixTableNames, Schema: "prod"}, "prod"},
+		"no strategy":               {TargetNaming{}, ""},
+	}
+
+	for name, expected := range expectations {
+		if got := expected.naming.SchemaName(collection); got != expected.want {
+			test.Errorf("%s: SchemaName = %q, want %q", name, got, expected.want)
+		}
+	}
+}

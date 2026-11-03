@@ -45,7 +45,7 @@ func TestResourceModifyPlanPlansTargets(test *testing.T) {
 			config:    []capture.Binding[testResource]{{Resource: users}, {Resource: testResource{Table: "missing"}}},
 			proposed:  []any{tftypes.UnknownValue, tftypes.UnknownValue},
 			discovers: 1,
-			wantError: "discovery found no resource for bindings [1]",
+			wantError: "discovery found no resource for bindings[1] (missing)",
 		},
 		"keeps the state target of the same resource": {
 			state:     []capture.Binding[testResource]{{Resource: users, Target: "acmeCo/custom/users"}},

@@ -36,7 +36,7 @@ type Advanced struct {
 
 // Config is the materialize-mysql configuration shared by every image in Images.
 type Config struct {
-	Address       string                         `yaml:"address" description:"Host or host:port of the database. The port defaults to 3306."`
+	Address       string                         `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database. The port defaults to 3306. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	User          string                         `yaml:"user" description:"Database user to connect as. It needs permission to create tables."`
 	Password      string                         `yaml:"password" description:"Password of the database user. Write-only."`
 	Database      string                         `yaml:"database" description:"Logical database to materialize to."`
@@ -49,9 +49,9 @@ type Config struct {
 
 // Resource identifies the target MySQL table.
 type Resource struct {
-	Table                    string `yaml:"table" description:"Table to materialize into. The connector creates it, unless it created it before."`
+	Table                    string `yaml:"table" x-collection-name:"true" description:"Table to materialize into. The connector creates it, unless it created it before."`
 	AdditionalTableCreateSQL string `yaml:"additional_table_create_sql,omitempty" description:"SQL statements run after the connector creates the table, such as a CREATE INDEX. They only run when the connector creates the table: a backfill truncates an existing table without running them, so run them yourself on it. Don't re-create the table in them."`
-	DeltaUpdates             bool   `yaml:"delta_updates,omitempty" description:"Appends the changes of each transaction instead of merging them into one row per key. Defaults to false."`
+	DeltaUpdates             bool   `yaml:"delta_updates,omitempty" x-delta-updates:"true" description:"Appends the changes of each transaction instead of merging them into one row per key. Defaults to false. Switching it from true to false requires a backfill: raise backfill.trigger, or the materialization's, in the same change, or the plan fails."`
 }
 
 // Binding maps a source collection to its MySQL table.

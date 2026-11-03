@@ -11,6 +11,7 @@ var connector builder.Connector = builder.Connector{
 	TypeName:      "source_mongodb",
 	Image:         mongodb.Image,
 	ConnectorName: mongodb.ConnectorName,
+	Description:   "Captures MongoDB collections into Estuary collections, through change streams or batch polling.",
 }
 
 // New returns the estuary_source_mongodb resource.

@@ -49,15 +49,14 @@ var captureAddedBindings addedBindings = addedBindings{
 // captureType returns the capture catalog type of binding resource R: it lists every live binding, and holds each
 // binding backfill mode in its backfill block rather than in its resource.
 func captureType[R any]() catalogType {
-	var key string = backfillModeKey[R]()
+	var key string = taggedKey[R](catalog.BackfillModeField)
 
 	return catalogType{
-		name:              "capture",
-		added:             captureAddedBindings,
-		publish:           publishCapture,
-		listsLiveBindings: true,
-		backfillModeKey:   key,
-		adjustAttributes:  adjustCaptureAttributes[R],
+		name:             "capture",
+		added:            captureAddedBindings,
+		publish:          publishCapture,
+		backfillModeKey:  key,
+		adjustAttributes: adjustCaptureAttributes[R],
 		toSpecShape: func(document map[string]any) {
 			if key != "" {
 				moveField(document[bindingsAttribute], backfillAttribute, backfillModeAttribute, bindingResourceAttribute, key)
@@ -143,7 +142,7 @@ func adjustCaptureAttributes[R any](attributes map[string]schema.Attribute) {
 	block, hasBlock := bindings.NestedObject.Attributes[backfillAttribute].(schema.SingleNestedAttribute)
 
 	if hasResource && hasBlock {
-		var key string = translator.AttributeName(backfillModeKey[R]())
+		var key string = translator.AttributeName(taggedKey[R](catalog.BackfillModeField))
 
 		delete(block.Attributes, backfillModeAttribute)
 

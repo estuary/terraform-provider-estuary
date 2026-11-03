@@ -14,16 +14,18 @@ import (
 // catalogType is what differs between the catalog types the provider manages: captures and materializations.
 // Unset functions do nothing.
 type catalogType struct {
-	name              string                                                      // catalog type, as Estuary names it
-	added             addedBindings                                               // bindings Estuary adds without Terraform
-	publish           publisher                                                   // publishes the entry
-	listsLiveBindings bool                                                        // lists every live binding in live_bindings
-	backfillModeKey   string                                                      // binding resource key of the backfill mode, empty without one
-	adjustAttributes  func(attributes map[string]schema.Attribute)                // changes the inferred attributes
-	planBindings      bindingsPlanner                                             // plans binding attributes the configuration omits
-	toSpecShape       func(document map[string]any)                               // moves fields from their Terraform place to their spec one
-	toTerraformShape  func(document map[string]any)                               // moves fields from their spec place to their Terraform one
-	omittedDefault    func(path *tftypes.AttributePath, value tftypes.Value) bool // reports a non-zero default live specs omit
+	name             string                                                      // catalog type, as Estuary names it
+	err              error                                                       // why the connector's spec types can't build this catalog type
+	added            addedBindings                                               // bindings Estuary adds without Terraform
+	publish          publisher                                                   // publishes the entry
+	backfillModeKey  string                                                      // binding resource key of the backfill mode, empty without one
+	deltaUpdatesKey  string                                                      // binding resource key of delta updates, empty without one
+	adjustAttributes func(attributes map[string]schema.Attribute)                // changes the inferred attributes
+	planBindings     bindingsPlanner                                             // plans binding attributes the configuration omits
+	movedTables      tablesMover                                                 // lists the bindings the plan moves to another table
+	toSpecShape      func(document map[string]any)                               // moves fields from their Terraform place to their spec one
+	toTerraformShape func(document map[string]any)                               // moves fields from their spec place to their Terraform one
+	omittedDefault   func(path *tftypes.AttributePath, value tftypes.Value) bool // reports a non-zero default live specs omit
 }
 
 // entry is what the resource and data source of a catalog entry share.
@@ -64,7 +66,7 @@ func (entry *entry[D, S]) configure(providerData any, diagnostics *diag.Diagnost
 	session, ok := providerData.(*catalog.Session)
 
 	if !ok {
-		diagnostics.AddError("Unexpected provider data", fmt.Sprintf("Expected *catalog.Session, got %T.", providerData))
+		diagnostics.AddError("Unexpected provider data", fmt.Sprintf("Expected *catalog.Session, got %T. This is a bug in the provider: please report it.", providerData))
 	}
 
 	entry.session = session
@@ -106,7 +108,7 @@ func (entry *entry[D, S]) readLiveValue(ctx context.Context, name string) (tftyp
 	}
 
 	if sealed == nil {
-		return tftypes.Value{}, fmt.Errorf("no catalog entry is named %s", catalogName)
+		return tftypes.Value{}, fmt.Errorf("Estuary has no %s named %s", entry.catalogType.name, catalogName)
 	}
 
 	live, _, err := entry.codec.liveValue(name, sealed)

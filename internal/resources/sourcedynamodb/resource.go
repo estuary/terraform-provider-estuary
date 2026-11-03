@@ -11,6 +11,7 @@ var connector builder.Connector = builder.Connector{
 	TypeName:      "source_dynamodb",
 	Image:         dynamodb.Image,
 	ConnectorName: dynamodb.ConnectorName,
+	Description:   "Captures Amazon DynamoDB tables into Estuary collections, backfilling each table with parallel scans and reading its changes from DynamoDB Streams.",
 }
 
 // New returns the estuary_source_dynamodb resource.

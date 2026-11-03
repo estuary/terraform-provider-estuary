@@ -112,6 +112,10 @@ func TestResourceUpdateBackfillTriggers(test *testing.T) {
 		if warned := len(warnings) == 1 && strings.Contains(warnings[0].Detail(), "- acmeCo/orders"); warned != (expected.resets != nil) {
 			test.Errorf("%s: warnings = %v, want a dataflow reset warning %v", name, warnings, expected.resets != nil)
 		}
+
+		if len(warnings) == 1 && !strings.Contains(warnings[0].Detail(), "The other bindings of the capture aren't backfilled") {
+			test.Errorf("%s: warning = %q, want it limited to the triggered bindings", name, warnings[0].Detail())
+		}
 	}
 }
 
@@ -268,7 +272,7 @@ func TestResourceReadKeepsBackfillSettings(test *testing.T) {
 		test.Fatalf("read: %v", readResp.Diagnostics)
 	}
 
-	stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+	stateWithoutLive, err := nullAttributes(readResp.State.Raw, computedByRead)
 
 	if err != nil {
 		test.Fatal(err)
@@ -370,6 +374,10 @@ func TestResourceUpdateCaptureBackfillTrigger(test *testing.T) {
 
 		if warned := len(warnings) == 1 && strings.Contains(warnings[0].Detail(), "- "+strings.Join(expected.resets, "\n- ")); warned != (expected.resets != nil) {
 			test.Errorf("%s: warnings = %v, want a dataflow reset warning listing %v", name, warnings, expected.resets)
+		}
+
+		if len(warnings) == 1 && !strings.Contains(warnings[0].Detail(), "backfills every enabled binding") {
+			test.Errorf("%s: warning = %q, want it to cover every enabled binding", name, warnings[0].Detail())
 		}
 	}
 }
@@ -784,7 +792,7 @@ func TestWarnPendingResets(test *testing.T) {
 
 		warnings := entry.warnDataflowResets(planValue, priorValue, entry.newPublicationReader(planValue, priorValue, entry.newLiveReader(ctx, priorValue)))
 
-		if warned := len(warnings) == 1 && warnings[0].Summary() == "Dataflow reset strategy in acmeCo/movies/source-test" && strings.Contains(warnings[0].Detail(), "- acmeCo/orders"); warned != expected.warn || len(warnings) > 1 {
+		if warned := len(warnings) == 1 && warnings[0].Summary() == "Bindings set to dataflow reset in acmeCo/movies/source-test" && strings.Contains(warnings[0].Detail(), "- acmeCo/orders"); warned != expected.warn || len(warnings) > 1 {
 			test.Errorf("%s: warnings = %v, want a dataflow reset strategy warning %v", name, warnings, expected.warn)
 		}
 	}
@@ -846,7 +854,7 @@ func TestWarnPendingResetsOfAddedBindings(test *testing.T) {
 
 		warnings := entry.warnDataflowResets(planValue, priorValue, entry.newPublicationReader(planValue, priorValue, entry.newLiveReader(ctx, priorValue)))
 
-		if warned := len(warnings) == 1 && warnings[0].Summary() == "Dataflow reset strategy in acmeCo/movies/source-test"; warned != expected.warn || len(warnings) > 1 {
+		if warned := len(warnings) == 1 && warnings[0].Summary() == "Bindings set to dataflow reset in acmeCo/movies/source-test"; warned != expected.warn || len(warnings) > 1 {
 			test.Errorf("%s: warnings = %v, want a dataflow reset strategy warning %v", name, warnings, expected.warn)
 		}
 	}
@@ -938,7 +946,7 @@ func TestResourceUpdateRequiresBackfillsOfChangedModes(test *testing.T) {
 			test.Fatal(err)
 		}
 
-		diagnostics := entry.validateModeBackfills(planValue, entry.newPublicationReader(planValue, priorValue, entry.newLiveReader(ctx, priorValue)))
+		diagnostics := entry.validateMissingBackfills(planValue, entry.newPublicationReader(planValue, priorValue, entry.newLiveReader(ctx, priorValue)))
 
 		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), `changes "" -> "Normal"`)) {
 			test.Errorf("%s: plan diagnostics = %v, want rejected %v", name, diagnostics, expected.rejected)

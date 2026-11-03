@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"reflect"
 
@@ -29,6 +30,9 @@ type publisher func(ctx context.Context, backend catalog.Backend, name string, d
 
 // bindingsPlanner returns plan with the binding attributes the configuration omits planned.
 type bindingsPlanner func(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error)
+
+// tablesMover returns the planned bindings whose table differs from the live one, as "collection: old -> new" lines.
+type tablesMover func(plan tftypes.Value, readLive liveReader) []string
 
 // entryResource is the Terraform resource of a catalog entry, a capture or a materialization.
 type entryResource[D Document[D, S], S any] struct {
@@ -63,7 +67,8 @@ func (entryResource *entryResource[D, S]) Configure(_ context.Context, configure
 }
 
 // ModifyPlan plans secret hashes, binding targets and names, and validates backfill triggers. It replaces the entry
-// only when its catalog name changes, with or without tenant and connector name being the same entry.
+// only when its catalog name changes, with or without tenant and connector name being the same entry, warning when
+// a provider tenant change is what moves it.
 func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modifyPlanReq resource.ModifyPlanRequest, modifyPlanResp *resource.ModifyPlanResponse) {
 	var stateName types.String
 	var planName types.String
@@ -78,7 +83,11 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 
 	modifyPlanResp.Diagnostics.Append(diagnostics...)
 
-	planned, err := entryResource.planTargets(ctx, planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
+	planned, err := entryResource.planCatalogName(planned)
+
+	if err == nil {
+		planned, err = entryResource.planTargets(ctx, planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
+	}
 
 	if err == nil {
 		planned, err = withBindingNames(planned)
@@ -90,10 +99,6 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 
 	if err == nil && entryResource.catalogType.planBindings != nil {
 		planned, err = entryResource.catalogType.planBindings(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
-	}
-
-	if err == nil {
-		planned, err = entryResource.codec.planLiveBindings(planned, modifyPlanReq.State.Raw)
 	}
 
 	if err != nil {
@@ -120,24 +125,33 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 		return
 	}
 
-	if planName.IsUnknown() || entryResource.catalogName(planName.ValueString()) != entryResource.catalogName(stateName.ValueString()) {
-		modifyPlanResp.RequiresReplace = append(modifyPlanResp.RequiresReplace, path.Root(nameAttribute))
+	if planName.IsUnknown() || entryResource.catalogName(planName.ValueString()) != entryResource.storedCatalogName(modifyPlanReq.State.Raw, stateName.ValueString()) {
+		modifyPlanResp.RequiresReplace = append(modifyPlanResp.RequiresReplace, path.Root(nameAttribute), path.Root(catalogNameAttribute))
+		modifyPlanResp.Diagnostics.Append(entryResource.warnTenantChange(modifyPlanReq.State.Raw, stateName.ValueString(), planName)...)
 		return
 	}
 
 	readPublication = entryResource.newPublicationReader(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readLive)
 
 	modifyPlanResp.Diagnostics.Append(entryResource.warnTakenOverBindings(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readLive)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnMovedTables(modifyPlanResp.Plan.Raw, readLive)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnNamingChange(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnRemovedBindings(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnUnmanagedBindingsRemoval(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readLive)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnDataflowResets(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnEntryBackfill(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readPublication)...)
-	modifyPlanResp.Diagnostics.Append(entryResource.validateModeBackfills(modifyPlanResp.Plan.Raw, readPublication)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.validateMissingBackfills(modifyPlanResp.Plan.Raw, readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnDisabledLive(modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)...)
 }
 
 func (entryResource *entryResource[D, S]) Create(ctx context.Context, createReq resource.CreateRequest, createResp *resource.CreateResponse) {
-	createResp.Diagnostics.Append(entryResource.apply(ctx, createReq.Plan, createReq.Config, nil, &createResp.State)...)
+	fingerprint, diagnostics := entryResource.apply(ctx, createReq.Plan, createReq.Config, nil, &createResp.State)
+
+	createResp.Diagnostics.Append(diagnostics...)
+
+	if !createResp.Diagnostics.HasError() {
+		createResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(createResp.Private), fingerprint)...)
+	}
 }
 
 func (entryResource *entryResource[D, S]) Read(ctx context.Context, readReq resource.ReadRequest, readResp *resource.ReadResponse) {
@@ -149,45 +163,67 @@ func (entryResource *entryResource[D, S]) Read(ctx context.Context, readReq reso
 		return
 	}
 
-	readResp.Diagnostics.Append(entryResource.readState(ctx, name.ValueString(), readReq, readResp)...)
+	stored, diagnostics := storedFingerprint(ctx, optionalPrivate(readReq.Private))
+
+	readResp.Diagnostics.Append(diagnostics...)
+
+	if readResp.Diagnostics.HasError() {
+		return
+	}
+
+	fingerprint, diagnostics := entryResource.readState(ctx, name.ValueString(), stored, readReq, readResp)
+
+	readResp.Diagnostics.Append(diagnostics...)
+
+	if !readResp.Diagnostics.HasError() && !readResp.State.Raw.IsNull() {
+		readResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(readResp.Private), fingerprint)...)
+	}
 }
 
-// readState refreshes state from the live spec, removing deleted entries. An undecodable live spec keeps state with
-// a warning, rather than failing every plan.
-func (entryResource *entryResource[D, S]) readState(ctx context.Context, name string, readReq resource.ReadRequest, readResp *resource.ReadResponse) diag.Diagnostics {
+// readState refreshes state from the live spec of its stored catalog name, removing deleted entries, and returns the
+// secrets fingerprint to store, see refreshedFingerprint. An undecodable live spec fails, as the plan couldn't show it.
+func (entryResource *entryResource[D, S]) readState(ctx context.Context, name string, stored string, readReq resource.ReadRequest, readResp *resource.ReadResponse) (string, diag.Diagnostics) {
 	var diagnostics diag.Diagnostics
-	var catalogName string = entryResource.catalogName(name)
+	var catalogName string = entryResource.storedCatalogName(readReq.State.Raw, name)
 
 	sealed, err := entryResource.readSealed(ctx, catalogName)
 
 	if err != nil {
 		diagnostics.AddError("Reading "+entryResource.catalogType.name+" "+catalogName, err.Error())
-		return diagnostics
+		return stored, diagnostics
 	}
 
 	if sealed == nil {
 		readResp.State.RemoveResource(ctx)
-		return diagnostics
+		return stored, diagnostics
 	}
 
 	refreshed, redactedPaths, err := entryResource.refreshedState(name, readReq.State.Raw, sealed)
 
-	if err != nil {
-		diagnostics.AddWarning("Couldn't refresh "+entryResource.catalogType.name+" "+catalogName,
-			err.Error()+"\n\nThe plan doesn't show changes made outside Terraform.")
-		return diagnostics
+	if err == nil {
+		refreshed, err = withCatalogName(refreshed, catalogName)
 	}
+
+	if err != nil {
+		diagnostics.AddError("Refreshing "+entryResource.catalogType.name+" "+catalogName,
+			err.Error()+"\n\nThe live spec doesn't match the provider schema, so the plan can't show it. Fix it in Estuary, "+
+				"then plan again.")
+		return stored, diagnostics
+	}
+
+	fingerprint, refreshed, fingerprintDiagnostics := entryResource.refreshedFingerprint(catalogName, stored, sealed, refreshed)
+
+	diagnostics.Append(fingerprintDiagnostics...)
 
 	redactedCredentialsWarning(&diagnostics, catalogName, redactedPaths)
 
 	readResp.State.Raw = refreshed
 
-	return diagnostics
+	return fingerprint, diagnostics
 }
 
 // refreshedState returns state refreshed from the sealed live spec, and the paths whose credentials it redacted. Live
-// bindings state doesn't hold stay unmanaged unless keep_unmanaged_bindings is false, and live_bindings, when the
-// entry has it, lists them all.
+// bindings state doesn't hold stay unmanaged, out of state, unless keep_unmanaged_bindings is false.
 func (entryResource *entryResource[D, S]) refreshedState(name string, state tftypes.Value, sealed map[string]any) (tftypes.Value, []*tftypes.AttributePath, error) {
 	live, redactedPaths, err := entryResource.codec.liveValue(name, sealed)
 
@@ -201,13 +237,17 @@ func (entryResource *entryResource[D, S]) refreshedState(name string, state tfty
 		return state, nil, err
 	}
 
-	refreshed, err = withLiveBindings(refreshed, live)
-
-	return refreshed, redactedPaths, err
+	return refreshed, redactedPaths, nil
 }
 
 func (entryResource *entryResource[D, S]) Update(ctx context.Context, updateReq resource.UpdateRequest, updateResp *resource.UpdateResponse) {
-	updateResp.Diagnostics.Append(entryResource.apply(ctx, updateReq.Plan, updateReq.Config, &updateReq.State, &updateResp.State)...)
+	fingerprint, diagnostics := entryResource.apply(ctx, updateReq.Plan, updateReq.Config, &updateReq.State, &updateResp.State)
+
+	updateResp.Diagnostics.Append(diagnostics...)
+
+	if !updateResp.Diagnostics.HasError() {
+		updateResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(updateResp.Private), fingerprint)...)
+	}
 }
 
 func (entryResource *entryResource[D, S]) Delete(ctx context.Context, deleteReq resource.DeleteRequest, deleteResp *resource.DeleteResponse) {
@@ -219,7 +259,7 @@ func (entryResource *entryResource[D, S]) Delete(ctx context.Context, deleteReq 
 		return
 	}
 
-	var catalogName string = entryResource.catalogName(name.ValueString())
+	var catalogName string = entryResource.storedCatalogName(deleteReq.State.Raw, name.ValueString())
 
 	backend, err := entryResource.backend()
 
@@ -232,12 +272,18 @@ func (entryResource *entryResource[D, S]) Delete(ctx context.Context, deleteReq 
 	}
 }
 
-// ImportState imports by catalog name, stored with the tenant and without the connector name. Secrets are
-// write-only, and bindings the control plane may add stay unmanaged, listed only in live_bindings when it exists.
+// ImportState imports by catalog name, stored with the tenant and without the connector name, or whole when
+// stripping it would address another entry. Secrets are write-only, and bindings the control plane may add stay
+// unmanaged, out of state.
 func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, importReq resource.ImportStateRequest, importResp *resource.ImportStateResponse) {
 	var name string = catalog.Name(importReq.ID, entryResource.connector.ConnectorName)
+
+	if entryResource.catalogName(name) != importReq.ID {
+		name = importReq.ID
+	}
+
 	var catalogName string = entryResource.catalogName(name)
-	var liveEntry tftypes.Value
+	var value tftypes.Value
 	var redactedPaths []*tftypes.AttributePath
 
 	sealed, err := entryResource.readSealed(ctx, catalogName)
@@ -248,7 +294,7 @@ func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, impor
 	}
 
 	if sealed == nil {
-		importResp.Diagnostics.AddError("Importing "+entryResource.catalogType.name+" "+catalogName, "No catalog entry is named "+catalogName+".")
+		importResp.Diagnostics.AddError("Importing "+entryResource.catalogType.name+" "+catalogName, "Estuary has no "+entryResource.catalogType.name+" named "+catalogName+". Check the name, including its tenant.")
 		return
 	}
 
@@ -256,18 +302,16 @@ func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, impor
 
 	if _, err := decode[S](live, true); err != nil {
 		importResp.Diagnostics.AddWarning("Importing "+entryResource.catalogType.name+" "+catalogName+" without the fields the provider doesn't manage",
-			err.Error()+"\n\nThese fields aren't in the imported state. The next apply keeps the unknown top-level fields, and "+
-				"the unknown endpoint fields until it publishes the endpoint, which it does when the configuration sets secrets "+
-				"or changes the endpoint. It removes the unknown fields of the bindings declared in the configuration.")
+			err.Error()+"\n\nThese fields aren't in the imported state. The next apply keeps them at the top level of the spec. "+
+				"It keeps them in the endpoint too, unless it publishes the endpoint, which happens when the configuration sets "+
+				"secrets or changes the endpoint. It removes them from the bindings declared in the configuration.")
 	}
 
 	spec, err := decode[S](live, false)
 
 	if err == nil {
-		liveEntry, redactedPaths, err = entryResource.codec.liveValue(name, sealed)
+		value, redactedPaths, err = entryResource.codec.liveValue(name, sealed)
 	}
-
-	var value tftypes.Value = liveEntry
 
 	if err == nil && generatesBindings(spec) {
 		var unbound map[string]any = maps.Clone(sealed)
@@ -278,7 +322,7 @@ func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, impor
 	}
 
 	if err == nil {
-		value, err = withLiveBindings(value, liveEntry)
+		value, err = withCatalogName(value, catalogName)
 	}
 
 	if err != nil {
@@ -289,25 +333,27 @@ func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, impor
 	redactedCredentialsWarning(&importResp.Diagnostics, catalogName, redactedPaths)
 
 	importResp.State.Raw = value
+
+	importResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(importResp.Private), catalog.SecretsFingerprint(sealed))...)
 }
 
-// apply publishes the plan, with secrets from config, and stores it as state. Updates that leave the live spec
-// unchanged, such as a trigger strategy change, publish nothing.
-func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.Plan, config tfsdk.Config, prior *tfsdk.State, state *tfsdk.State) diag.Diagnostics {
+// apply publishes the plan, with secrets from config, and stores it as state, returning the secrets fingerprint of the
+// published entry. Updates that leave the live spec unchanged, such as a trigger strategy change, publish nothing.
+func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.Plan, config tfsdk.Config, prior *tfsdk.State, state *tfsdk.State) (string, diag.Diagnostics) {
 	var diagnostics diag.Diagnostics
 
 	planned, err := entryResource.codec.secrets.withConfigSecrets(plan.Raw, config.Raw)
 
 	if err != nil {
 		diagnostics.AddError("Converting "+entryResource.catalogType.name+" plan", err.Error())
-		return diagnostics
+		return "", diagnostics
 	}
 
 	name, spec, err := entryResource.codec.Spec(planned)
 
 	if err != nil {
 		diagnostics.AddError("Converting "+entryResource.catalogType.name+" plan", err.Error())
-		return diagnostics
+		return "", diagnostics
 	}
 
 	var catalogName string = entryResource.catalogName(name)
@@ -316,14 +362,14 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 
 	if err != nil {
 		diagnostics.AddError("Publishing "+entryResource.catalogType.name+" "+catalogName, err.Error())
-		return diagnostics
+		return "", diagnostics
 	}
 
 	document, err := utils.YAMLDocument(spec)
 
 	if err != nil {
 		diagnostics.AddError("Converting "+entryResource.catalogType.name+" plan", err.Error())
-		return diagnostics
+		return "", diagnostics
 	}
 
 	ctx = catalog.WithSecrets(ctx, entryResource.codec.secrets.values(planned)...)
@@ -333,35 +379,54 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 	publication.identifier, _ = any(spec).(catalog.BindingsIdentifier)
 
 	var live map[string]any
+	var conflictHint string
 
-	if prior != nil {
+	// A create asserts no entry has the name yet, so it never publishes over one another resource or Estuary holds.
+	// An update asserts the publication ID it read, see mergeLive.
+	if prior == nil {
+		document[catalog.ExpectPubIDKey] = catalog.NewEntryPubID
+		conflictHint = "\n\n" + catalogName + " already exists in Estuary: import it with terraform import instead of creating it."
+	} else {
 		publication.resets, live, err = entryResource.mergeLive(ctx, catalogName, document, keepsUnmanagedBindings(plan.Raw), plan.Raw, prior.Raw)
 
 		if err != nil {
 			diagnostics.AddError("Merging "+entryResource.catalogType.name+" "+catalogName+" with its live spec", err.Error())
-			return diagnostics
+			return "", diagnostics
 		}
+
+		conflictHint = "\n\nAnother publication changed " + catalogName + " while this apply ran, such as a dashboard edit or " +
+			"an auto-discovery, so nothing was published: run terraform plan and apply again."
 	}
 
 	if live != nil && len(publication.resets) == 0 && reflect.DeepEqual(document, live) {
 		tflog.Debug(ctx, "Skipping the publication, the spec is unchanged", map[string]any{"name": catalogName})
 	} else if err := entryResource.catalogType.publish(ctx, backend, catalogName, document, publication); err != nil {
-		diagnostics.AddError("Publishing "+entryResource.catalogType.name+" "+catalogName, err.Error())
-		return diagnostics
+		var detail string = err.Error()
+
+		if errors.Is(err, catalog.ErrPublicationConflict) {
+			detail += conflictHint
+		}
+
+		diagnostics.AddError("Publishing "+entryResource.catalogType.name+" "+catalogName, detail)
+		return "", diagnostics
 	}
 
 	stored, err := entryResource.codec.secrets.stateHashes(plan.Raw, planned)
 
-	if err != nil {
-		diagnostics.AddError("Hashing "+entryResource.catalogType.name+" "+catalogName+" secrets", err.Error())
-		return diagnostics
+	if planned := blockAttribute(stored, catalogNameAttribute, tftypes.String); err == nil && !planned.IsKnown() {
+		stored, err = withCatalogName(stored, catalogName)
 	}
 
-	stored, liveDiagnostics := entryResource.withPublishedLiveBindings(ctx, name, catalogName, stored)
+	if err != nil {
+		diagnostics.AddError("Hashing "+entryResource.catalogType.name+" "+catalogName+" secrets", err.Error())
+		return "", diagnostics
+	}
 
-	diagnostics.Append(liveDiagnostics...)
+	fingerprint, fingerprintDiagnostics := entryResource.publishedFingerprint(ctx, catalogName, document, planned)
+
+	diagnostics.Append(fingerprintDiagnostics...)
 
 	state.Raw = stored
 
-	return diagnostics
+	return fingerprint, diagnostics
 }

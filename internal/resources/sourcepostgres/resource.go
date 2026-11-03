@@ -11,12 +11,14 @@ var aurora builder.Connector = builder.Connector{
 	TypeName:      "source_aurora_postgres",
 	Image:         postgres.ImageAmazonAurora,
 	ConnectorName: postgres.ConnectorNameAmazonAurora,
+	Description:   "Captures tables of an Amazon Aurora for PostgreSQL database into Estuary collections, through change data capture with PostgreSQL logical replication.",
 }
 
 var rds builder.Connector = builder.Connector{
 	TypeName:      "source_rds_postgres",
 	Image:         postgres.ImageAmazonRDS,
 	ConnectorName: postgres.ConnectorNameAmazonRDS,
+	Description:   "Captures tables of an Amazon RDS for PostgreSQL database into Estuary collections, through change data capture with PostgreSQL logical replication.",
 }
 
 // NewAurora returns the estuary_source_aurora_postgres resource.

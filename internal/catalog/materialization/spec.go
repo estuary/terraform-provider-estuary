@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"gopkg.in/yaml.v3"
@@ -81,7 +82,7 @@ type DBTJobTrigger struct {
 	JobID     string            `yaml:"job_id" description:"ID of the dbt job to trigger."`
 	AccountID string            `yaml:"account_id" description:"ID of the dbt account."`
 	APIKey    string            `yaml:"api_key" description:"dbt API key used to trigger the job. Write-only."`
-	AccessURL string            `yaml:"access_url,omitempty" description:"Access URL of the dbt account, found in its Account Settings (e.g., https://cloud.getdbt.com). It must start with https://. The job is only triggered when it's set."`
+	AccessURL string            `yaml:"access_url,omitempty" credentials:"forbidden" description:"Access URL of the dbt account, found in its Account Settings (e.g., https://cloud.getdbt.com). It must start with https://. The job is only triggered when it's set. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	Cause     string            `yaml:"cause,omitempty" description:"Message shown as the cause of each triggered run. Defaults to 'Estuary'."`
 	Mode      DBTJobTriggerMode `yaml:"mode,omitempty" enum:"replace,ignore,skip" description:"What happens when the job is already running: 'skip' doesn't trigger it (default), 'replace' cancels the running job and triggers a new one, and 'ignore' triggers a new one anyway."`
 	Interval  string            `yaml:"interval,omitempty" description:"Minimum time between two triggers, which only happen after new data is materialized. Defaults to '30m'."`
@@ -138,7 +139,7 @@ type Binding[R any] struct {
 // SpecOptions holds materialization settings other than endpoint and bindings.
 type SpecOptions struct {
 	Source                     *Source                    `yaml:"source,omitempty" description:"Settings of the bindings Estuary adds, optionally following a capture."`
-	TargetNaming               *TargetNaming              `yaml:"targetNaming,omitempty" description:"How Estuary names the tables of the bindings it adds."`
+	TargetNaming               *TargetNaming              `yaml:"targetNaming,omitempty" description:"How Estuary names the tables of the bindings it adds. A change only names the bindings added from then on: existing ones keep their schema and table."`
 	OnIncompatibleSchemaChange OnIncompatibleSchemaChange `yaml:"onIncompatibleSchemaChange,omitempty" enum:"backfill,disableBinding,disableTask,abort" description:"What an automated change, such as a capture discovery, does when it's incompatible with a materialized table: 'backfill' (default) backfills the affected bindings, 'disableBinding' disables them, 'disableTask' disables the materialization, and 'abort' stops the automated change. Bindings can override it."`
 	Shards                     catalog.Shards             `yaml:"shards,omitempty" description:"Shard settings of the materialization, with Estuary's own keys such as logLevel and disable."`
 }
@@ -150,6 +151,27 @@ type Spec[E, R any] struct {
 	Bindings    []Binding[R] `yaml:"bindings"`
 }
 
+// SchemaName returns the schema Estuary gives a binding added for collection, from its second-to-last segment with
+// matchSourceStructure, empty when the naming sets none.
+func (naming TargetNaming) SchemaName(collection string) string {
+	var segments []string = strings.Split(collection, "/")
+
+	switch naming.Strategy {
+	case TargetNamingMatchSourceStructure:
+		var schema string = segments[max(len(segments)-2, 0)]
+
+		if naming.SchemaTemplate == "" {
+			return schema
+		}
+
+		return strings.ReplaceAll(naming.SchemaTemplate, "{{schema}}", schema)
+	case TargetNamingSingleSchema, TargetNamingPrefixTableNames:
+		return naming.Schema
+	}
+
+	return ""
+}
+
 // MarshalYAML writes a number, or true when unlimited.
 func (depth FieldDepth) MarshalYAML() (any, error) {
 	if depth == FieldDepthUnlimited {
@@ -159,7 +181,7 @@ func (depth FieldDepth) MarshalYAML() (any, error) {
 	value, err := strconv.Atoi(string(depth))
 
 	if err != nil || value < 0 {
-		return nil, fmt.Errorf("field depth %q is neither a non-negative number nor %s", depth, FieldDepthUnlimited)
+		return nil, fmt.Errorf("field depth %q must be a non-negative number or %q", depth, FieldDepthUnlimited)
 	}
 
 	return value, nil
@@ -191,7 +213,7 @@ func (depth *FieldDepth) UnmarshalYAML(node *yaml.Node) error {
 	value, err := strconv.Atoi(node.Value)
 
 	if err != nil || value < 0 {
-		return fmt.Errorf("field depth %q is neither a non-negative number nor %s", node.Value, FieldDepthUnlimited)
+		return fmt.Errorf("field depth %q must be a non-negative number or %q", node.Value, FieldDepthUnlimited)
 	}
 
 	*depth = FieldDepth(strconv.Itoa(value))

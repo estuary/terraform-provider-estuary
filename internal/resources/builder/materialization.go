@@ -3,11 +3,12 @@ package builder
 import (
 	"context"
 	"fmt"
-	"sync"
+	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/builder/translator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -48,7 +49,7 @@ func publishMaterialization(ctx context.Context, backend catalog.Backend, name s
 
 // NewMaterialization returns the resource factory of a connector materialization.
 func NewMaterialization[C, R any](connector Connector) func() resource.Resource {
-	return NewMaterializationFromDocument[materializationDocument[C, R]](connector)
+	return newResource[materializationDocument[C, R], MaterializationSpec[C, R]](connector, materializationType[C, R]())
 }
 
 // materializationAddedBindings describes the bindings a source capture adds, which only get the source and target
@@ -75,18 +76,54 @@ func materializationOmittedDefault(path *tftypes.AttributePath, value tftypes.Va
 	return isKnown && path.Equal(fieldsRecommendedPath) && materialization.FieldDepth(depth) == materialization.FieldDepthUnlimited
 }
 
-// materializationType is the materialization catalog type.
-var materializationType catalogType = catalogType{
-	name:             "materialization",
-	added:            materializationAddedBindings,
-	publish:          publishMaterialization,
-	adjustAttributes: adjustMaterializationAttributes,
-	planBindings:     planBindingFields,
-	omittedDefault:   materializationOmittedDefault,
+// movedTableNote documents that changing a binding's schema or table moves it, see warnMovedTables.
+const movedTableNote string = " Changing it on an existing binding moves it to a new table, which the connector backfills " +
+	"from the start of the collection, leaving the old table in place."
+
+// materializationType returns the materialization catalog type of config C and binding resource R, whose x-schema-name
+// field, if any, plans like the dashboard names it, defaulting to the C field tagged x-default-namespace.
+func materializationType[C, R any]() catalogType {
+	var schemaName string = translator.AttributeName(taggedKey[R](catalog.SchemaNameField))
+	var tableName string = translator.AttributeName(taggedKey[R](catalog.CollectionNameField))
+	var namespaceName string = translator.AttributeName(taggedKey[C](catalog.DefaultNamespaceField))
+	var err error
+
+	if schemaName != "" && namespaceName == "" {
+		err = fmt.Errorf("the binding resource has an x-schema-name field, %s, but the config has no x-default-namespace field", schemaName)
+	}
+
+	return catalogType{
+		name:            "materialization",
+		err:             err,
+		added:           materializationAddedBindings,
+		publish:         publishMaterialization,
+		deltaUpdatesKey: taggedKey[R](catalog.DeltaUpdatesField),
+		adjustAttributes: func(attributes map[string]schema.Attribute) {
+			adjustMaterializationAttributes(attributes, schemaName, tableName)
+		},
+		planBindings: func(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+			planned, err := planBindingFields(plan, config, state, readLive)
+
+			if err != nil || schemaName == "" {
+				return planned, err
+			}
+
+			return planBindingSchemas(schemaName, planned, config, state, readLive)
+		},
+		movedTables: func(plan tftypes.Value, readLive liveReader) []string {
+			if tableName == "" {
+				return nil
+			}
+
+			return movedTables(schemaName, tableName, namespaceName, plan, readLive)
+		},
+		omittedDefault: materializationOmittedDefault,
+	}
 }
 
-// adjustMaterializationAttributes makes binding fields computed, as plans fill in the omitted ones.
-func adjustMaterializationAttributes(attributes map[string]schema.Attribute) {
+// adjustMaterializationAttributes makes binding fields and the resource schemaName attribute computed, as plans fill
+// in the omitted ones, and documents that changing the schemaName or tableName attributes moves the binding.
+func adjustMaterializationAttributes(attributes map[string]schema.Attribute, schemaName string, tableName string) {
 	bindings, isList := attributes[bindingsAttribute].(schema.ListNestedAttribute)
 
 	if !isList {
@@ -100,13 +137,37 @@ func adjustMaterializationAttributes(attributes map[string]schema.Attribute) {
 		bindings.NestedObject.Attributes[bindingFieldsAttribute] = fields
 	}
 
+	if resource, isObject := bindings.NestedObject.Attributes[bindingResourceAttribute].(schema.SingleNestedAttribute); isObject {
+		if schemaAttribute, isString := resource.Attributes[schemaName].(schema.StringAttribute); isString {
+			schemaAttribute.Computed = true
+			schemaAttribute.Description += " Omitted, it keeps the live one, and a new binding gets the one target_naming " +
+				"names, as in the dashboard, or the endpoint default without target_naming." + movedTableNote
+
+			resource.Attributes[schemaName] = schemaAttribute
+		}
+
+		if tableAttribute, isString := resource.Attributes[tableName].(schema.StringAttribute); isString {
+			tableAttribute.Description += movedTableNote
+
+			resource.Attributes[tableName] = tableAttribute
+		}
+
+		bindings.NestedObject.Attributes[bindingResourceAttribute] = resource
+	}
+
 	attributes[bindingsAttribute] = bindings
 }
 
-// planBindingFields plans the fields of each binding configured without them as the live ones in state, else in the live
-// spec for bindings Terraform takes over, else Estuary's default recommended = "unlimited" for new bindings. Bindings of
-// an existing entry whose live spec can't be read plan none, so an unread live selection is never replaced.
-func planBindingFields(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+// omittedAttribute is a binding attribute plans fill in when the configuration omits it.
+type omittedAttribute struct {
+	index    func(path *tftypes.AttributePath) (int, bool)                                           // binding index of a path to it
+	value    func(binding tftypes.Value, attributeType tftypes.Type) tftypes.Value                   // its value in a binding
+	fallback func(collection string, isRead bool, attributeType tftypes.Type) (tftypes.Value, error) // its value when neither state nor live holds it
+}
+
+// planOmitted plans the attribute of each binding configured without it as the one in state, else in the live spec for
+// bindings Terraform takes over, else as its fallback, told whether the live spec was read.
+func planOmitted(attribute omittedAttribute, plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
 	configured, _, err := bindings(config)
 
 	if err != nil {
@@ -125,44 +186,170 @@ func planBindingFields(plan tftypes.Value, config tftypes.Value, state tftypes.V
 		return plan, err
 	}
 
-	var readLiveBindings func() (map[string]tftypes.Value, bool) = sync.OnceValues(func() (map[string]tftypes.Value, bool) {
-		live, found := readLive()
-
-		if !found {
-			return nil, false
-		}
-
-		indexed, err := indexedBindings(live)
-
-		return indexed, err == nil
-	})
+	var readLiveBindings func() (map[string]tftypes.Value, bool) = liveBindingsReader(readLive)
 
 	return tftypes.Transform(plan, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		index, isFields := bindingAttributeIndex(attributePath, bindingFieldsAttribute)
+		index, isAttribute := attribute.index(attributePath)
 
-		if !isFields || index >= len(configured) || index >= len(planned) ||
-			!blockAttribute(configured[index], bindingFieldsAttribute, current.Type()).IsNull() {
+		if !isAttribute || index >= len(configured) || index >= len(planned) || !attribute.value(configured[index], current.Type()).IsNull() {
 			return current, nil
 		}
 
 		var collection string = bindingCollectionValue(planned[index])
 
 		if kept, isStored := stored[collection]; isStored {
-			return blockAttribute(kept, bindingFieldsAttribute, current.Type()), nil
+			return attribute.value(kept, current.Type()), nil
 		}
 
 		liveBindings, isRead := readLiveBindings()
 
 		if kept, isLive := liveBindings[collection]; isLive && collection != "" {
-			return blockAttribute(kept, bindingFieldsAttribute, current.Type()), nil
+			return attribute.value(kept, current.Type()), nil
 		}
 
-		if exists(state) && !isRead {
-			return tftypes.NewValue(current.Type(), nil), nil
-		}
-
-		return defaultBindingFields(current.Type())
+		return attribute.fallback(collection, isRead, current.Type())
 	})
+}
+
+// planBindingFields plans omitted binding fields, Estuary's default recommended = "unlimited" for new bindings. Bindings
+// of an existing entry whose live spec can't be read plan none, so an unread live selection is never replaced.
+func planBindingFields(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+	return planOmitted(omittedAttribute{
+		index: func(path *tftypes.AttributePath) (int, bool) {
+			return bindingAttributeIndex(path, bindingFieldsAttribute)
+		},
+		value: func(binding tftypes.Value, attributeType tftypes.Type) tftypes.Value {
+			return blockAttribute(binding, bindingFieldsAttribute, attributeType)
+		},
+		fallback: func(_ string, isRead bool, attributeType tftypes.Type) (tftypes.Value, error) {
+			if exists(state) && !isRead {
+				return tftypes.NewValue(attributeType, nil), nil
+			}
+
+			return defaultBindingFields(attributeType)
+		},
+	}, plan, config, state, readLive)
+}
+
+// planBindingSchemas plans omitted resource schemaName attributes as the dashboard names a new binding from
+// target_naming. They stay unknown while the collection or target_naming is, or while the live spec of an existing entry
+// can't be read, so an unread live schema is never replaced.
+func planBindingSchemas(schemaName string, plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+	naming, isKnown := targetNaming(plan)
+
+	return planOmitted(omittedAttribute{
+		index: func(path *tftypes.AttributePath) (int, bool) {
+			return bindingResourceAttributeIndex(path, schemaName)
+		},
+		value: func(binding tftypes.Value, _ tftypes.Type) tftypes.Value {
+			return resourceString(binding, schemaName)
+		},
+		fallback: func(collection string, isRead bool, _ tftypes.Type) (tftypes.Value, error) {
+			if collection == "" || !isKnown || exists(state) && !isRead {
+				return tftypes.NewValue(tftypes.String, tftypes.UnknownValue), nil
+			}
+
+			if schema := naming.SchemaName(collection); schema != "" {
+				return tftypes.NewValue(tftypes.String, schema), nil
+			}
+
+			return tftypes.NewValue(tftypes.String, nil), nil
+		},
+	}, plan, config, state, readLive)
+}
+
+// movedTables lists the planned bindings whose table differs from their live one, as "collection: old -> new" lines.
+// Names differing only in case are the same table.
+func movedTables(schemaName string, tableName string, namespaceName string, plan tftypes.Value, readLive liveReader) []string {
+	var moved []string
+
+	planned, _, err := bindings(plan)
+
+	if err != nil {
+		return nil
+	}
+
+	live, found := readLive()
+
+	if !found {
+		return nil
+	}
+
+	liveBindings, err := indexedBindings(live)
+
+	if err != nil {
+		return nil
+	}
+
+	for _, binding := range planned {
+		var collection string = bindingCollectionValue(binding)
+
+		liveBinding, isLive := liveBindings[collection]
+
+		if collection == "" || !isLive {
+			continue
+		}
+
+		previous, isRead := bindingTable(schemaName, tableName, namespaceName, live, liveBinding)
+		current, isKnown := bindingTable(schemaName, tableName, namespaceName, plan, binding)
+
+		if isRead && isKnown && !strings.EqualFold(previous, current) {
+			moved = append(moved, collection+": "+previous+" -> "+current)
+		}
+	}
+
+	return moved
+}
+
+// bindingTable returns the schema-qualified table of a binding of entry, reporting false while unknown. A binding without
+// schema uses the endpoint default, the config namespaceName attribute.
+func bindingTable(schemaName string, tableName string, namespaceName string, entry tftypes.Value, binding tftypes.Value) (string, bool) {
+	var schema tftypes.Value = tftypes.NewValue(tftypes.String, nil)
+
+	table, isKnown := known[string](resourceString(binding, tableName))
+
+	if !isKnown {
+		return "", false
+	}
+
+	if schemaName != "" {
+		schema = resourceString(binding, schemaName)
+	}
+
+	if schemaName != "" && schema.IsKnown() && schema.IsNull() {
+		if endpointSchema, err := attributeValue(entry, configPath.WithAttributeName(namespaceName)); err == nil {
+			schema = endpointSchema
+		}
+	}
+
+	if !schema.IsKnown() {
+		return "", false
+	}
+
+	if name, isNamed := known[string](schema); isNamed && name != "" {
+		return name + "." + table, true
+	}
+
+	return table, true
+}
+
+// targetNaming returns the target_naming of value, reporting false while it's unknown.
+func targetNaming(value tftypes.Value) (materialization.TargetNaming, bool) {
+	naming, err := attributeValue(value, targetNamingPath)
+
+	if err != nil || !naming.IsFullyKnown() {
+		return materialization.TargetNaming{}, false
+	}
+
+	strategy, _ := known[string](blockAttribute(naming, "strategy", tftypes.String))
+	schema, _ := known[string](blockAttribute(naming, "schema", tftypes.String))
+	schemaTemplate, _ := known[string](blockAttribute(naming, "schema_template", tftypes.String))
+
+	return materialization.TargetNaming{
+		Strategy:       materialization.TargetNamingStrategy(strategy),
+		Schema:         schema,
+		SchemaTemplate: schemaTemplate,
+	}, true
 }
 
 // defaultBindingFields returns fields selecting recommended = "unlimited", which specs write as Estuary's default true.
@@ -192,7 +379,7 @@ func defaultBindingFields(fieldsType tftypes.Type) (tftypes.Value, error) {
 
 // NewMaterializationFromDocument returns the resource factory of a non-connector materialization, such as Dekaf.
 func NewMaterializationFromDocument[D Document[D, S], S catalog.MaterializationSpec](connector Connector) func() resource.Resource {
-	return newResource[D, S](connector, materializationType)
+	return newResource[D, S](connector, materializationType[any, any]())
 }
 
 // Spec returns the materialization catalog name and spec, nesting image and config under endpoint.connector.

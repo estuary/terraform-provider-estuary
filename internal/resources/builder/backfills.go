@@ -1,12 +1,15 @@
 package builder
 
 import (
+	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"reflect"
 	"slices"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/builder/translator"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -23,7 +26,7 @@ type captureBackfill struct {
 }
 
 // captureBindingBackfill is the capture binding backfill block: raising its trigger backfills the binding.
-// Mode mirrors the resource's backfill mode, see backfillModeKey.
+// Mode mirrors the resource's backfill mode, the field tagged backfill:"mode".
 type captureBindingBackfill struct {
 	Trigger  int              `yaml:"trigger,omitempty" description:"Raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter, or resets the collection with 'dataflowReset', leaving the counter as is. Starts at 1 and only goes up, and can't be raised on a disabled binding."`
 	Strategy backfillStrategy `yaml:"strategy,omitempty" enum:"incremental,dataflowReset" description:"Overrides the backfill.strategy of the capture for this binding: 'incremental' or 'dataflowReset'. Changing it alone publishes nothing."`
@@ -103,9 +106,7 @@ func entryWide(published []any, live []any) []string {
 	var bound map[string]map[string]any = catalog.BindingsByCollection(live)
 
 	for _, binding := range published {
-		object, _ := binding.(map[string]any)
-
-		if disable, _ := object[catalog.DisableKey].(bool); disable {
+		if catalog.BindingDisabled(binding) {
 			continue
 		}
 
@@ -253,8 +254,8 @@ func validateBackfillTrigger(attributePath path.Path, owner string, planned tfty
 
 	if !backfillSetting(planned, backfillTriggerAttribute).IsKnown() {
 		diagnostics.AddAttributeError(attributePath, "Backfill trigger unknown at plan time",
-			"backfill.trigger must be known at plan time, such as a number written in the configuration or a variable. "+
-				"A value known only at apply time, such as timestamp(), would backfill on every apply.")
+			"backfill.trigger must be known at plan time: write a number in the configuration or use a variable. "+
+				"A value only known at apply time, such as timestamp(), would backfill on every apply.")
 
 		return diagnostics
 	}
@@ -276,7 +277,7 @@ func validateBackfillTrigger(attributePath path.Path, owner string, planned tfty
 
 	if wasSet && trigger < current {
 		diagnostics.AddAttributeError(attributePath, "Backfill trigger lowered",
-			fmt.Sprintf("backfill.trigger of %s is %d, lower than its current value of %d. The trigger can only go up: keep it "+
+			fmt.Sprintf("backfill.trigger of %s is %d, which is lower than its current value, %d. The trigger can only go up: keep it "+
 				"at %d, or raise it to backfill again.", owner, trigger, current, current))
 	}
 
@@ -308,17 +309,80 @@ func modeBackfills(planned []any, live []any, key string) map[string]string {
 	return changes
 }
 
-// unbackfilledModes returns the mode changes, see modeBackfills, whose binding is neither backfilled nor reset.
-func unbackfilledModes(changes map[string]string, backfills []string, resets []string) map[string]string {
-	var missing map[string]string = map[string]string{}
+// missingBackfill is a binding change the connector only accepts along with a backfill, which the plan doesn't raise.
+type missingBackfill struct {
+	collection string
+	attribute  []string // attribute names from the binding to the changed one
+	summary    string
+	detail     string
+}
 
-	for collection, change := range changes {
-		if !slices.Contains(backfills, collection) && !slices.Contains(resets, collection) {
-			missing[collection] = change
+// missingModeBackfills returns the mode changes, see modeBackfills, whose binding is neither backfilled nor reset.
+func missingModeBackfills(changes map[string]string, backfills []string, resets []string) []missingBackfill {
+	var missing []missingBackfill
+
+	for _, collection := range slices.Sorted(maps.Keys(changes)) {
+		if slices.Contains(backfills, collection) || slices.Contains(resets, collection) {
+			continue
 		}
+
+		missing = append(missing, missingBackfill{
+			collection: collection,
+			attribute:  []string{backfillAttribute, backfillModeAttribute},
+			summary:    "Backfill mode changed without a backfill",
+			detail: "backfill.mode of " + collection + " changes " + changes[collection] + ". The connector requires the binding " +
+				"to be backfilled when its mode changes: raise its backfill.trigger, or the capture's, in the same change.",
+		})
 	}
 
 	return missing
+}
+
+// missingStandardUpdatesBackfills returns the enabled planned bindings switching from live delta updates, under key, to
+// standard updates without a backfill, which the connector rejects as it can't merge the rows a key already has.
+func missingStandardUpdatesBackfills(planned []any, live []any, key string, backfills []string) []missingBackfill {
+	var missing []missingBackfill
+	var liveBindings map[string]map[string]any = catalog.BindingsByCollection(live)
+
+	if key == "" {
+		return missing
+	}
+
+	var attribute string = translator.AttributeName(key)
+
+	for _, binding := range planned {
+		var collection string = catalog.BindingCollection(binding)
+
+		liveBinding, isLive := liveBindings[collection]
+		delta, _ := catalog.BindingResource(binding)[key].(bool)
+		liveDelta, _ := catalog.BindingResource(liveBinding)[key].(bool)
+
+		if !isLive || !liveDelta || delta || catalog.BindingDisabled(binding) || catalog.BindingDisabled(liveBinding) || slices.Contains(backfills, collection) {
+			continue
+		}
+
+		missing = append(missing, missingBackfill{
+			collection: collection,
+			attribute:  []string{bindingResourceAttribute, attribute},
+			summary:    "Delta updates disabled without a backfill",
+			detail: "resource." + attribute + " of " + collection + " is true in Estuary and false in the plan. The connector " +
+				"requires the binding to be backfilled when it switches from delta to standard updates, as the table holds several " +
+				"rows per key that standard updates can't merge: raise its backfill.trigger, or the materialization's, in the same change.",
+		})
+	}
+
+	return missing
+}
+
+// missingBackfillsError returns the error of the binding changes no backfill covers, nil without any.
+func missingBackfillsError(missing []missingBackfill) error {
+	var errs []error
+
+	for _, change := range missing {
+		errs = append(errs, errors.New(change.detail))
+	}
+
+	return errors.Join(errs...)
 }
 
 // keepBackfills copies the live backfill counter onto each planned binding, plus one for backfills, so publishing
@@ -378,16 +442,16 @@ func backfillText(owner tftypes.Value, attribute string) string {
 	return text
 }
 
-// backfillModeKey returns the YAML key of the R field tagged backfill:"mode", or empty when there is none.
-func backfillModeKey[R any]() string {
-	var resourceType reflect.Type = reflect.TypeFor[R]()
+// taggedKey returns the YAML key of the first field of struct T tagged, or empty when there is none.
+func taggedKey[T any](tagged func(field reflect.StructField) bool) string {
+	var structType reflect.Type = reflect.TypeFor[T]()
 
-	if resourceType.Kind() != reflect.Struct {
+	if structType.Kind() != reflect.Struct {
 		return ""
 	}
 
-	for index := range resourceType.NumField() {
-		if field := resourceType.Field(index); catalog.BackfillModeField(field) {
+	for index := range structType.NumField() {
+		if field := structType.Field(index); tagged(field) {
 			return catalog.FieldKey(field)
 		}
 	}

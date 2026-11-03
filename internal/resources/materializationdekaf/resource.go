@@ -67,39 +67,40 @@ func (document[V]) FromSpec(name string, spec dekaf.Spec) document[V] {
 	}
 }
 
-// newResource returns the factory of the resource of variant V, named after its dashboard tile.
-func newResource[V variant](typeName string) func() resource.Resource {
+// newResource returns the factory of the resource of variant V, named after its dashboard tile and read by consumer.
+func newResource[V variant](typeName string, consumer string) func() resource.Resource {
 	var fixed V
 
 	return builder.NewMaterializationFromDocument[document[V]](builder.Connector{
 		TypeName:      typeName,
 		ConnectorName: dekaf.ConnectorName(fixed.variant()),
+		Description:   "Exposes Estuary collections as Kafka topics through Dekaf, for " + consumer + " to read.",
 	})
 }
 
 // NewGeneric returns the estuary_materialization_dekaf_generic resource.
-var NewGeneric func() resource.Resource = newResource[generic]("materialization_dekaf_generic")
+var NewGeneric func() resource.Resource = newResource[generic]("materialization_dekaf_generic", "any Kafka consumer")
 
 // NewMaterialize returns the estuary_materialization_dekaf_materialize resource.
-var NewMaterialize func() resource.Resource = newResource[materialize]("materialization_dekaf_materialize")
+var NewMaterialize func() resource.Resource = newResource[materialize]("materialization_dekaf_materialize", "Materialize")
 
 // NewTinybird returns the estuary_materialization_dekaf_tinybird resource.
-var NewTinybird func() resource.Resource = newResource[tinybird]("materialization_dekaf_tinybird")
+var NewTinybird func() resource.Resource = newResource[tinybird]("materialization_dekaf_tinybird", "Tinybird")
 
 // NewClickHouse returns the estuary_materialization_dekaf_clickhouse resource.
-var NewClickHouse func() resource.Resource = newResource[clickHouse]("materialization_dekaf_clickhouse")
+var NewClickHouse func() resource.Resource = newResource[clickHouse]("materialization_dekaf_clickhouse", "ClickHouse")
 
 // NewRisingWave returns the estuary_materialization_dekaf_risingwave resource.
-var NewRisingWave func() resource.Resource = newResource[risingWave]("materialization_dekaf_risingwave")
+var NewRisingWave func() resource.Resource = newResource[risingWave]("materialization_dekaf_risingwave", "RisingWave")
 
 // NewSingleStore returns the estuary_materialization_dekaf_singlestore resource.
-var NewSingleStore func() resource.Resource = newResource[singleStore]("materialization_dekaf_singlestore")
+var NewSingleStore func() resource.Resource = newResource[singleStore]("materialization_dekaf_singlestore", "SingleStore")
 
 // NewStarTree returns the estuary_materialization_dekaf_startree resource.
-var NewStarTree func() resource.Resource = newResource[starTree]("materialization_dekaf_startree")
+var NewStarTree func() resource.Resource = newResource[starTree]("materialization_dekaf_startree", "StarTree")
 
 // NewImplyPolaris returns the estuary_materialization_dekaf_imply_polaris resource.
-var NewImplyPolaris func() resource.Resource = newResource[implyPolaris]("materialization_dekaf_imply_polaris")
+var NewImplyPolaris func() resource.Resource = newResource[implyPolaris]("materialization_dekaf_imply_polaris", "Imply Polaris")
 
 // NewBytewax returns the estuary_materialization_dekaf_bytewax resource.
-var NewBytewax func() resource.Resource = newResource[bytewax]("materialization_dekaf_bytewax")
+var NewBytewax func() resource.Resource = newResource[bytewax]("materialization_dekaf_bytewax", "Bytewax")

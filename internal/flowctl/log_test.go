@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/hashicorp/terraform-plugin-log/tflogtest"
 	"gopkg.in/yaml.v3"
 )
@@ -138,6 +139,25 @@ func TestExecCommandMasksEncodedSecretsInErrors(test *testing.T) {
 		if strings.Contains(err.Error(), leaked) {
 			test.Errorf("error still holds %q: %v", leaked, err)
 		}
+	}
+}
+
+func TestMaskedContextMasksEncodedSecretsInLogs(test *testing.T) {
+	var output bytes.Buffer
+	var client *Client = fakeFlowctl(test, "#!/bin/sh\nexit 0\n")
+
+	ctx, _ := client.maskedContext(catalog.WithSecrets(tflogtest.RootLogger(context.Background(), &output), `p@ss"w0rd/secret`))
+
+	tflog.Debug(ctx, "connecting to postgres://flow:p%40ss%22w0rd%2Fsecret@123.4.567.89:5432 with token %3Capi-token%3E")
+
+	entries, err := tflogtest.MultilineJSONDecode(&output)
+
+	if err != nil || len(entries) != 1 {
+		test.Fatalf("log entries = %v (%v), want one", entries, err)
+	}
+
+	if message := entries[0]["@message"]; message != "connecting to postgres://flow:***@123.4.567.89:5432 with token ***" {
+		test.Errorf("logged %q, want the secret and the API token masked", message)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -196,12 +197,120 @@ func TestRedactCredentials(test *testing.T) {
 	}
 
 	for value, want := range expectations {
-		if got := RedactCredentials(value); got != want {
+		if got := RedactCredentials(value, catalog.CredentialsForbidden); got != want {
 			test.Errorf("RedactCredentials(%q) = %q, want %q", value, got, want)
 		}
 
-		if again := RedactCredentials(want); again != want {
+		if again := RedactCredentials(want, catalog.CredentialsForbidden); again != want {
 			test.Errorf("RedactCredentials(%q) = %q, want it stable", want, again)
+		}
+	}
+}
+
+func TestObjectRejectsPasswordsInPasswordFields(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	type fields struct {
+		SSHEndpoint string `yaml:"sshEndpoint" credentials:"password"`
+	}
+
+	object, err := NewObject(reflect.TypeFor[fields]())
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	attribute, _ := object.Attributes()["ssh_endpoint"].(schema.StringAttribute)
+
+	expectations := map[string]bool{
+		"ssh://ec2-user@ec2-123-4-567-89.compute-1.amazonaws.com:22": true,
+		"ssh://123.4.567.89":                        true,
+		"ec2-user@123.4.567.89:22":                  true,
+		"ssh://ec2-user:secret@123.4.567.89:22":     false,
+		"ssh://ec2-user:sec@ret@123.4.567.89:22":    false,
+		"ec2-user:secret@123.4.567.89:22":           false,
+		"ssh://ec2-user:***@123.4.567.89:22":        false,
+		"ssh://ec2-user@123.4.567.89:22?password=x": false,
+	}
+
+	for endpoint, valid := range expectations {
+		var validateResp validator.StringResponse
+
+		for _, check := range attribute.Validators {
+			check.ValidateString(ctx, validator.StringRequest{Path: path.Root("ssh_endpoint"), ConfigValue: types.StringValue(endpoint)}, &validateResp)
+		}
+
+		if validateResp.Diagnostics.HasError() == valid {
+			test.Errorf("endpoint %q: diagnostics %v, want valid %v", endpoint, validateResp.Diagnostics, valid)
+		}
+
+		for _, diagnostic := range validateResp.Diagnostics {
+			if strings.Contains(diagnostic.Detail(), "secret") || strings.Contains(diagnostic.Summary(), "secret") {
+				test.Errorf("endpoint %q: diagnostic %q echoes the password", endpoint, diagnostic.Detail())
+			}
+		}
+	}
+
+	if got := AttributeCredentials(attribute); got != catalog.CredentialsPassword {
+		test.Errorf("AttributeCredentials = %q, want %q", got, catalog.CredentialsPassword)
+	}
+}
+
+func TestRedactPassword(test *testing.T) {
+	expectations := map[string]string{
+		"ssh://ec2-user@123.4.567.89:22":         "ssh://ec2-user@123.4.567.89:22",
+		"ssh://ec2-user:secret@123.4.567.89:22":  "ssh://ec2-user:***@123.4.567.89:22",
+		"ssh://ec2-user:sec@ret@123.4.567.89:22": "ssh://ec2-user:***@123.4.567.89:22",
+		"ssh://ec2-user:sec:ret@123.4.567.89":    "ssh://ec2-user:***@123.4.567.89",
+		"ec2-user:secret@123.4.567.89:22":        "ec2-user:***@123.4.567.89:22",
+		"ssh://123.4.567.89:22":                  "ssh://123.4.567.89:22",
+	}
+
+	for value, want := range expectations {
+		if got := RedactCredentials(value, catalog.CredentialsPassword); got != want {
+			test.Errorf("RedactCredentials(%q) = %q, want %q", value, got, want)
+		}
+
+		if again := RedactCredentials(want, catalog.CredentialsPassword); again != want {
+			test.Errorf("RedactCredentials(%q) = %q, want it stable", want, again)
+		}
+	}
+}
+
+func TestObjectRejectsEmptySecrets(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	type fields struct {
+		Password string `yaml:"password,omitempty" secret:"true"`
+	}
+
+	object, err := NewObject(reflect.TypeFor[fields]())
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	attribute, _ := object.Attributes()["password"].(schema.StringAttribute)
+
+	expectations := map[string]struct {
+		value types.String
+		valid bool
+	}{
+		"a value":         {types.StringValue("secret"), true},
+		"left out":        {types.StringNull(), true},
+		"known at apply":  {types.StringUnknown(), true},
+		"an empty string": {types.StringValue(""), false},
+	}
+
+	for name, expected := range expectations {
+		var validateResp validator.StringResponse
+
+		for _, check := range attribute.Validators {
+			check.ValidateString(ctx, validator.StringRequest{Path: path.Root("password"), ConfigValue: expected.value}, &validateResp)
+		}
+
+		if validateResp.Diagnostics.HasError() == expected.valid {
+			test.Errorf("%s: diagnostics %v, want valid %v", name, validateResp.Diagnostics, expected.valid)
 		}
 	}
 }

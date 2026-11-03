@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
@@ -109,10 +110,10 @@ func withResets(spec []byte, pulled []byte, collections []string) ([]byte, error
 		collection, found := pulledSpec.Collections[name]
 
 		if !found {
-			return nil, fmt.Errorf("collection %s to reset not found", name)
+			return nil, fmt.Errorf("collection %s to reset isn't in the pulled spec", name)
 		}
 
-		delete(collection, expectPubIDKey)
+		delete(collection, catalog.ExpectPubIDKey)
 
 		collection["reset"] = true
 
@@ -187,8 +188,31 @@ func (client *Client) publish(ctx context.Context, files map[string][]byte, prep
 
 		_, err := client.execCommand(ctx, client.withDataPlane([]string{"catalog", "publish", "--source", filepath.Join(directory, specFile), "--auto-approve"}, "--init-data-plane")...)
 
-		return err
+		return publicationError(err)
 	})
+}
+
+// publicationError marks err as catalog.ErrPublicationConflict when the control plane refused an expectPubId, keeping
+// its message.
+func publicationError(err error) error {
+	if err != nil && strings.Contains(err.Error(), "expected publication ID") {
+		return conflictError{err}
+	}
+
+	return err
+}
+
+// conflictError is a publication error matching catalog.ErrPublicationConflict.
+type conflictError struct {
+	error
+}
+
+func (conflictError) Is(target error) bool {
+	return target == catalog.ErrPublicationConflict
+}
+
+func (err conflictError) Unwrap() error {
+	return err.error
 }
 
 // addDiscovered discovers every resource of the binding-less capture, then lays the declared bindings over them.

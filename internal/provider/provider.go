@@ -8,6 +8,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -47,32 +48,37 @@ func (estuaryProvider *EstuaryProvider) Metadata(_ context.Context, _ provider.M
 // Schema declares the provider configuration. Explicit values override environment variables.
 func (estuaryProvider *EstuaryProvider) Schema(_ context.Context, _ provider.SchemaRequest, schemaResp *provider.SchemaResponse) {
 	schemaResp.Schema = schema.Schema{
-		Description: "The Estuary provider manages Flow capture and materialization connectors through a configurable catalog backend.",
+		Description: "Manages Estuary captures (sources) and materializations (destinations).",
 		Attributes: map[string]schema.Attribute{
 			"backend": schema.StringAttribute{
-				Description: "Flow catalog backend. Defaults to " + defaultBackend + ", currently the only one available. Can also be set via ESTUARY_BACKEND env var.",
-				Optional:    true,
+				Description: "How the provider reaches Estuary. Defaults to " + defaultBackend + ", currently the only backend. " +
+					"Can also be set through ESTUARY_BACKEND.",
+				Optional: true,
 				Validators: []validator.String{
 					stringvalidator.OneOfCaseInsensitive(defaultBackend),
 				},
 			},
 			"token": schema.StringAttribute{
-				Description: "Estuary API Token. Can also be set via environment variable by using FLOW_AUTH_TOKEN.",
-				Optional:    true,
-				Sensitive:   true,
+				Description: "Estuary refresh token, from the dashboard under Admin > CLI-API. Access tokens also work but expire, " +
+					"so use a refresh token in CI/CD. Can also be set through FLOW_AUTH_TOKEN, and one of them is required.",
+				Optional:  true,
+				Sensitive: true,
 			},
 			"tenant": schema.StringAttribute{
-				Description: "Tenant prefixed to every catalog name that doesn't start with it, e.g. 'myorg/'. A missing trailing slash is added. " +
-					"Can also be set via env variable using ESTUARY_TENANT",
+				Description: "Prefix added to every capture and materialization name that doesn't already start with it, such as " +
+					"acmeCo/ or acmeCo/dev/. A missing trailing slash is added. Collection names you write yourself aren't prefixed. " +
+					"Can also be set through ESTUARY_TENANT.",
 				Optional: true,
 			},
 			"flowctl_path": schema.StringAttribute{
-				Description: "Absolute path to the flowctl binary. Defaults to 'flowctl', which must be available on PATH.",
+				Description: "Path to the flowctl binary. Defaults to flowctl on PATH.",
 				Optional:    true,
 			},
 			"data_plane": schema.StringAttribute{
-				Description: "Data plane the provider creates new captures and materializations in and runs their discovery on, by its internal ID. " +
-					"Existing entries keep their data plane. Required for BYOC deployments or a non-default public data plane. Can also be set via env variable by using ESTUARY_DATA_PLANE.",
+				Description: "Data plane that new captures and materializations are created in, and that capture discovery runs on " +
+					"(e.g., ops/dp/public/example-data-plane). Required for BYOC or a non-default public data plane. Defaults to " +
+					"the first data plane of your storage mapping. Existing entries keep their data plane. Can also be set through " +
+					"ESTUARY_DATA_PLANE.",
 				Optional: true,
 			},
 		},
@@ -84,6 +90,29 @@ func (estuaryProvider *EstuaryProvider) Configure(ctx context.Context, configure
 	var providerConfig EstuaryProviderModel
 
 	configureResp.Diagnostics.Append(configureReq.Config.Get(ctx, &providerConfig)...)
+
+	if configureResp.Diagnostics.HasError() {
+		return
+	}
+
+	// An unknown attribute fails rather than falling back to its environment variable, which would run the plan under
+	// another token or tenant than the apply.
+	for _, setting := range []struct {
+		attribute string
+		value     types.String
+	}{
+		{"backend", providerConfig.Backend},
+		{"token", providerConfig.Token},
+		{"tenant", providerConfig.Tenant},
+		{"flowctl_path", providerConfig.FlowctlPath},
+		{"data_plane", providerConfig.DataPlane},
+	} {
+		if setting.value.IsUnknown() {
+			configureResp.Diagnostics.AddAttributeError(path.Root(setting.attribute), "Provider "+setting.attribute+" unknown at plan time",
+				"The provider's "+setting.attribute+" is only known after apply, but plans need it to read the catalog. Set it "+
+					"from a value known at plan time, such as a variable, or first apply the resource it depends on with -target.")
+		}
+	}
 
 	if configureResp.Diagnostics.HasError() {
 		return
@@ -101,7 +130,7 @@ func (estuaryProvider *EstuaryProvider) Configure(ctx context.Context, configure
 
 	if token == "" {
 		configureResp.Diagnostics.AddError(
-			"Missing Estuary Flow Auth Token", "Set the token provider attribute or the FLOW_AUTH_TOKEN environment variable.",
+			"Missing Estuary auth token", "Set the token attribute of the provider, or the FLOW_AUTH_TOKEN environment variable.",
 		)
 		return
 	}
@@ -136,9 +165,9 @@ func (estuaryProvider *EstuaryProvider) DataSources(_ context.Context) []func() 
 	return dataSources
 }
 
-// valueOr returns the attribute value when set, fallback otherwise.
+// valueOr returns the attribute value when set, fallback otherwise. Configure rejects unknown attributes first.
 func valueOr(attribute types.String, fallback string) string {
-	if attribute.IsNull() || attribute.IsUnknown() {
+	if attribute.IsNull() {
 		return fallback
 	}
 

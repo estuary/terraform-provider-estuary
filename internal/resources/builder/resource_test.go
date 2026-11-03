@@ -2,6 +2,8 @@ package builder
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
@@ -47,24 +50,23 @@ func newTestCaptureEntry(backend *testBackend) *testCaptureEntry {
 
 // withValue returns value with the attribute at path set to raw, nil being null.
 func withValue(value tftypes.Value, path *tftypes.AttributePath, raw any) (tftypes.Value, error) {
-	return tftypes.Transform(value, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		if !attributePath.Equal(path) {
-			return current, nil
-		}
-
-		return tftypes.NewValue(current.Type(), raw), nil
+	return withAttribute(value, path, func(current tftypes.Value) tftypes.Value {
+		return tftypes.NewValue(current.Type(), raw)
 	})
 }
 
-// testBackend is an in-memory catalog.Backend recording read and published specs.
+// testBackend is an in-memory catalog.Backend recording read, deleted and published specs, failing publications with
+// publishErr.
 type testBackend struct {
 	live       map[string]any
 	reads      []string
+	deletes    []string
 	published  map[string]any
 	discovered map[string]map[string]any
 	discovers  []catalog.RawCapture
 	discover   bool
 	resets     []string
+	publishErr error
 }
 
 func (backend *testBackend) PublishCapture(_ context.Context, name string, spec catalog.CaptureSpec, resets []string) error {
@@ -72,23 +74,25 @@ func (backend *testBackend) PublishCapture(_ context.Context, name string, spec 
 
 	backend.published = spec.(catalog.RawCapture)
 
-	return nil
+	return backend.publishErr
 }
 
 func (backend *testBackend) PublishDiscoveredCapture(_ context.Context, name string, spec catalog.CaptureSpec, _ catalog.BindingsIdentifier) error {
 	backend.published = spec.(catalog.RawCapture)
 	backend.discover = true
 
-	return nil
+	return backend.publishErr
 }
 
 func (backend *testBackend) PublishMaterialization(_ context.Context, name string, spec catalog.MaterializationSpec) error {
 	backend.published = spec.(catalog.RawMaterialization)
 
-	return nil
+	return backend.publishErr
 }
 
-func (backend *testBackend) DeleteCatalogEntry(context.Context, string) error {
+func (backend *testBackend) DeleteCatalogEntry(_ context.Context, name string) error {
+	backend.deletes = append(backend.deletes, name)
+
 	return nil
 }
 
@@ -504,19 +508,28 @@ func TestResourceModifyPlanReplacesOnCatalogNameChange(test *testing.T) {
 	expectations := map[string]struct {
 		state   string
 		plan    string
+		stored  string
 		replace bool
+		warn    bool
 	}{
-		"unchanged name":              {"movies", "movies", false},
-		"adds the tenant":             {"movies", "acmeCo/movies", false},
-		"adds the connector name":     {"movies", "movies/source-test", false},
-		"writes the catalog name":     {"movies", "acmeCo/movies/source-test", false},
-		"drops the full catalog name": {"acmeCo/movies/source-test", "movies", false},
-		"renames the entry":           {"movies", "films", true},
-		"moves to another tenant":     {"movies", "otherCo/movies", true},
+		"unchanged name":                 {"movies", "movies", "", false, false},
+		"adds the tenant":                {"movies", "acmeCo/movies", "", false, false},
+		"adds the connector name":        {"movies", "movies/source-test", "", false, false},
+		"writes the catalog name":        {"movies", "acmeCo/movies/source-test", "", false, false},
+		"drops the full catalog name":    {"acmeCo/movies/source-test", "movies", "", false, false},
+		"renames the entry":              {"movies", "films", "", true, false},
+		"moves to another tenant":        {"movies", "otherCo/movies", "", true, false},
+		"keeps the stored catalog name":  {"movies", "movies", "acmeCo/movies/source-test", false, false},
+		"renames a stored entry":         {"movies", "films", "acmeCo/movies/source-test", true, false},
+		"moves with the provider tenant": {"movies", "movies", "oldCo/movies/source-test", true, true},
 	}
 
 	for name, expected := range expectations {
 		stateValue, err := entry.codec.Value(expected.state, testCaptureSpec)
+
+		if err == nil && expected.stored != "" {
+			stateValue, err = withCatalogName(stateValue, expected.stored)
+		}
 
 		if err != nil {
 			test.Fatal(err)
@@ -544,6 +557,85 @@ func TestResourceModifyPlanReplacesOnCatalogNameChange(test *testing.T) {
 		if replace := len(modifyPlanResp.RequiresReplace) > 0; replace != expected.replace {
 			test.Errorf("%s: %s -> %s requires replace = %v, want %v", name, expected.state, expected.plan, replace, expected.replace)
 		}
+
+		var warnings diag.Diagnostics = modifyPlanResp.Diagnostics.Warnings()
+
+		if warned := len(warnings) == 1 && strings.HasPrefix(warnings[0].Summary(), "Provider tenant changed: oldCo/movies/source-test"); warned != expected.warn {
+			test.Errorf("%s: warnings = %v, want a tenant change warning %v", name, warnings, expected.warn)
+		}
+
+		var planned string = entry.catalogName(expected.plan)
+
+		if got := blockAttribute(modifyPlanResp.Plan.Raw, catalogNameAttribute, tftypes.String); !got.Equal(tftypes.NewValue(tftypes.String, planned)) {
+			test.Errorf("%s: planned catalog_name = %v, want %s", name, got, planned)
+		}
+	}
+}
+
+func TestResourceAddressesTheStoredCatalogName(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var backend *testBackend = &testBackend{live: liveCapture()}
+
+	entry := newTestCaptureEntry(backend)
+
+	stateValue, err := entry.codec.Value("movies", testCaptureSpec)
+
+	if err == nil {
+		stateValue, err = withCatalogName(stateValue, "oldCo/movies/source-test")
+	}
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var state tfsdk.State = tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue}
+	var readResp resource.ReadResponse = resource.ReadResponse{State: state}
+	var deleteResp resource.DeleteResponse
+
+	entry.Read(ctx, resource.ReadRequest{State: state}, &readResp)
+	entry.Delete(ctx, resource.DeleteRequest{State: state}, &deleteResp)
+
+	if readResp.Diagnostics.HasError() || deleteResp.Diagnostics.HasError() {
+		test.Fatalf("read: %v, delete: %v", readResp.Diagnostics, deleteResp.Diagnostics)
+	}
+
+	if !reflect.DeepEqual(backend.reads, []string{"oldCo/movies/source-test"}) || !reflect.DeepEqual(backend.deletes, []string{"oldCo/movies/source-test"}) {
+		test.Errorf("read %v and deleted %v, want the stored catalog name, not the acmeCo/ tenant one", backend.reads, backend.deletes)
+	}
+}
+
+func TestResourceStoresTheCatalogName(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var want tftypes.Value = tftypes.NewValue(tftypes.String, "acmeCo/movies/source-test")
+
+	entry := newTestCaptureEntry(&testBackend{live: liveCapture()})
+
+	legacy, err := entry.codec.Value("movies", testCaptureSpec)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var readResp resource.ReadResponse = resource.ReadResponse{State: tfsdk.State{Schema: entry.codec.Schema(), Raw: legacy}}
+
+	entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
+
+	var importResp resource.ImportStateResponse = resource.ImportStateResponse{
+		State: tfsdk.State{Schema: entry.codec.Schema(), Raw: tftypes.NewValue(entry.codec.Schema().Type().TerraformType(ctx), nil)},
+	}
+
+	entry.ImportState(ctx, resource.ImportStateRequest{ID: "acmeCo/movies/source-test"}, &importResp)
+
+	if readResp.Diagnostics.HasError() || importResp.Diagnostics.HasError() {
+		test.Fatalf("read: %v, import: %v", readResp.Diagnostics, importResp.Diagnostics)
+	}
+
+	if got := blockAttribute(readResp.State.Raw, catalogNameAttribute, tftypes.String); !got.Equal(want) {
+		test.Errorf("refreshed catalog_name = %v, want %v filled in for state written before it existed", got, want)
+	}
+
+	if got := blockAttribute(importResp.State.Raw, catalogNameAttribute, tftypes.String); !got.Equal(want) {
+		test.Errorf("imported catalog_name = %v, want %v", got, want)
 	}
 }
 
@@ -625,7 +717,7 @@ func TestResourceImportStateReadsLiveSpec(test *testing.T) {
 			test.Errorf("%s: read specs of %v, want the import ID", name, backend.reads)
 		}
 
-		stateWithoutLive, err := nullAttributes(importResp.State.Raw, liveBindingsPath.Equal)
+		stateWithoutLive, err := nullAttributes(importResp.State.Raw, computedByRead)
 
 		if err != nil {
 			test.Fatal(err)
@@ -657,6 +749,140 @@ func TestResourceImportStateRejectsMissingEntry(test *testing.T) {
 
 	if !importResp.Diagnostics.HasError() {
 		test.Error("ImportState accepted a catalog entry that doesn't exist")
+	}
+}
+
+func TestResourceImportStateKeepsNamesEndingInTheConnectorName(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var backend *testBackend = &testBackend{live: liveCapture()}
+	var name types.String
+
+	entry := newTestCaptureEntry(backend)
+
+	var importResp resource.ImportStateResponse = resource.ImportStateResponse{
+		State: tfsdk.State{
+			Schema: entry.codec.Schema(),
+			Raw:    tftypes.NewValue(entry.codec.Schema().Type().TerraformType(ctx), nil),
+		},
+	}
+
+	entry.ImportState(ctx, resource.ImportStateRequest{ID: "acmeCo/source-test"}, &importResp)
+
+	if importResp.Diagnostics.HasError() {
+		test.Fatalf("import: %v", importResp.Diagnostics)
+	}
+
+	importResp.Diagnostics.Append(importResp.State.GetAttribute(ctx, path.Root(nameAttribute), &name)...)
+
+	if !reflect.DeepEqual(backend.reads, []string{"acmeCo/source-test"}) || name.ValueString() != "acmeCo/source-test" {
+		test.Errorf("read specs of %v into name %q, want the import ID for both", backend.reads, name.ValueString())
+	}
+}
+
+func TestResourcePublishAssertsThePublicationRead(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var mismatch error = fmt.Errorf("expected publication ID was not matched: %w", catalog.ErrPublicationConflict)
+	var buildFailed error = errors.New("failed with status: buildFailed")
+	var planned CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+	planned.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"}}
+
+	expectations := map[string]struct {
+		create     bool
+		publishErr error
+		want       any
+		hint       string
+	}{
+		"create asserts no entry has the name":       {create: true, want: catalog.NewEntryPubID},
+		"create failure suggests an import":          {create: true, publishErr: mismatch, want: catalog.NewEntryPubID, hint: "terraform import"},
+		"update asserts the live publication":        {create: false, want: "10:a5:1e:b0:27:dc:fe:5a"},
+		"update failure suggests planning once more": {create: false, publishErr: mismatch, want: "10:a5:1e:b0:27:dc:fe:5a", hint: "run terraform plan and apply again"},
+		"create build failure suggests nothing":      {create: true, publishErr: buildFailed, want: catalog.NewEntryPubID},
+		"update build failure suggests nothing":      {create: false, publishErr: buildFailed, want: "10:a5:1e:b0:27:dc:fe:5a"},
+	}
+
+	for name, expected := range expectations {
+		var live map[string]any = liveCapture()
+		var diagnostics diag.Diagnostics
+
+		live[catalog.ExpectPubIDKey] = "10:a5:1e:b0:27:dc:fe:5a"
+
+		var backend *testBackend = &testBackend{live: live, publishErr: expected.publishErr}
+
+		entry := newTestCaptureEntry(backend)
+
+		value, err := entry.codec.Value("movies", planned)
+
+		if err == nil {
+			value, err = withValue(value, keepUnmanagedBindingsPath, false)
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var plan tfsdk.Plan = tfsdk.Plan{Schema: entry.codec.Schema(), Raw: value}
+
+		if expected.create {
+			var createResp resource.CreateResponse = resource.CreateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+			entry.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+
+			diagnostics = createResp.Diagnostics
+		} else {
+			var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+			entry.Update(ctx, resource.UpdateRequest{Plan: plan, State: tfsdk.State{Schema: entry.codec.Schema(), Raw: value}}, &updateResp)
+
+			diagnostics = updateResp.Diagnostics
+		}
+
+		if got := backend.published[catalog.ExpectPubIDKey]; got != expected.want {
+			test.Errorf("%s: published expectPubId = %v, want %v", name, got, expected.want)
+		}
+
+		if failed := diagnostics.HasError(); failed != (expected.publishErr != nil) {
+			test.Errorf("%s: failed = %v, want %v: %v", name, failed, expected.publishErr != nil, diagnostics)
+		}
+
+		if expected.publishErr != nil && expected.hint != "" && !strings.Contains(diagnostics.Errors()[0].Detail(), expected.hint) {
+			test.Errorf("%s: error = %q, want it to say %q", name, diagnostics.Errors()[0].Detail(), expected.hint)
+		}
+
+		if detail := diagnostics.Errors(); expected.publishErr != nil && expected.hint == "" && detail[0].Detail() != expected.publishErr.Error() {
+			test.Errorf("%s: error = %q, want only the publication error", name, detail[0].Detail())
+		}
+	}
+}
+
+func TestResourceKeepsThePublicationIDOutOfState(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var live map[string]any = liveCapture()
+
+	live[catalog.ExpectPubIDKey] = "10:a5:1e:b0:27:dc:fe:5a"
+
+	entry := newTestCaptureEntry(&testBackend{live: live})
+
+	stateValue, err := entry.codec.Value("movies", testCaptureSpec)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var readResp resource.ReadResponse = resource.ReadResponse{State: tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue}}
+	var importResp resource.ImportStateResponse = resource.ImportStateResponse{
+		State: tfsdk.State{Schema: entry.codec.Schema(), Raw: tftypes.NewValue(entry.codec.Schema().Type().TerraformType(ctx), nil)},
+	}
+
+	entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
+	entry.ImportState(ctx, resource.ImportStateRequest{ID: "acmeCo/movies/source-test"}, &importResp)
+
+	if readResp.Diagnostics.HasError() || readResp.Diagnostics.WarningsCount() > 0 {
+		test.Errorf("read: %v, want the publication ID left out quietly", readResp.Diagnostics)
+	}
+
+	if importResp.Diagnostics.HasError() || importResp.Diagnostics.WarningsCount() > 0 {
+		test.Errorf("import: %v, want no unmanaged field warning for the publication ID", importResp.Diagnostics)
 	}
 }
 

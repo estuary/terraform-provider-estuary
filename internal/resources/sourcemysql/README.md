@@ -4,7 +4,7 @@
 
 These resources manage MySQL capture connectors on Amazon. Each binding captures one table into an Estuary collection, using change data capture through the MySQL binary log: an initial backfill of the table contents, followed by its inserts, updates and deletes as they happen.
 
-Estuary offers a dedicated connector for each of these databases, each with its own resource. They are configured the same way, so this page documents them together. Pick the one matching your database:
+They're configured the same way. Pick the resource matching your database:
 
 | Resource | Database | Default image | Connector name |
 |---|---|---|---|
@@ -167,27 +167,21 @@ resource "estuary_source_aurora_mysql" "private" {
 ```
 
 > [!NOTE]
-> `password`, `private_key`, `ssl_server_ca`, `ssl_client_cert` and `ssl_client_key` are [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) attributes: Terraform sends them to Estuary but never stores them in the state or shows them in plans. To still tell you when a secret changes, the provider keeps a read-only salted hash of each one (`password_hash`, `private_key_hash`, `ssl_server_ca_hash`, `ssl_client_cert_hash`, `ssl_client_key_hash`) and warns in the plan when the value no longer matches. Write-only attributes require Terraform 1.11 or later.
+> `password`, `private_key`, `ssl_server_ca`, `ssl_client_cert` and `ssl_client_key` are [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) attributes: Terraform never stores them in state or shows them in plans, and keeps only a salted hash of each to detect changes. See [Secrets](../../../docs/guides/secrets.md).
 
 ## Attributes
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | Yes | Capture name (e.g., `aurora`). The provider `tenant` is added in front and the connector name of the resource (e.g., `/source-amazon-aurora-mysql`) at the end, unless they're already there. |
-| `image` | String | No | Connector image. Defaults to the default image of the resource, see the table above, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
+| `catalog_name` | String | Read-only | Catalog name the capture was created or imported under, with the tenant and connector name. Refreshes and deletions address it, so a provider `tenant` change replaces the capture. |
+| `image` | String | No | Connector image. Defaults to the default image of the resource, see the table above, and only its tag can change. See [Connector Versions](../../../docs/guides/task-settings.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the database for new tables and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Connection, authentication and replication settings of the database. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Captured tables, one per binding. See [`bindings`](#bindings). |
-| `live_bindings` | List of Objects | Read-only | Every live binding, the declared ones and those discovery (`auto_discover`) adds, with the attributes of [`bindings`](#bindings). Refreshed on each plan, and planned with the binding changes the apply publishes. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
-| `shards` | Dynamic | No | Shard settings of the capture, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
-| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `auto_discover`. Defaults to `true`. A provider control Estuary never sees. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
+| `shards` | Dynamic | No | Shard settings of the capture, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../docs/guides/task-settings.md#shard-settings). |
+| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `auto_discover`. Defaults to `true`. A provider control Estuary never sees. See [Bindings](../../../docs/guides/bindings.md). |
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
-
-> [!WARNING]
-> Changing `name` so that the resulting catalog name changes destroys the capture and creates a new one. Changing the provider `tenant` doesn't: Terraform looks for the capture under the new tenant, plans a new one and leaves the old one in Estuary, no longer managed. Destroy the capture before changing `tenant`, or delete the old one in Estuary afterwards.
-
-> [!WARNING]
-> With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `auto_discover`, stay in the capture and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
 
 ### `auto_discover`
 
@@ -196,23 +190,20 @@ resource "estuary_source_aurora_mysql" "private" {
 | `add_new_bindings` | Bool | No | Adds a binding for each table found in the database that isn't declared, when the capture is created and on each later discovery. Terraform doesn't manage those bindings; declare a binding to manage it. |
 | `evolve_incompatible_collections` | Bool | No | Automatically updates the target collections when the source schema changes in a way they can't accept. |
 
-> [!TIP]
-> With `add_new_bindings = true`, a binding you remove from your configuration may be added back by the next discovery. To stop capturing a table, set `disable = true` on its binding instead.
-
 ### `backfill`
 
-Backfill control of the whole capture, as the dashboard's **Backfill** button and **Backfill mode**. See [Backfill Control](../../../README.md#backfill-control).
+Backfill control of the whole capture, as the dashboard's **Backfill** button and **Backfill mode**. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value, or resets its collection with `dataflowReset`, leaving its counter as is. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped. Starts at 1 and only goes up. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `address` | String | Yes | Host or `host:port` of the Aurora cluster's writer endpoint or of the RDS instance endpoint (e.g., `shop.cluster-123456789.us-east-1.rds.amazonaws.com:3306`). The port defaults to `3306`. |
+| `address` | String | Yes | Host or `host:port` of the Aurora cluster's writer endpoint or of the RDS instance endpoint (e.g., `shop.cluster-123456789.us-east-1.rds.amazonaws.com:3306`). The port defaults to `3306`. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `user` | String | Yes | Database user to authenticate as, usually `flow_capture`. |
 | `credentials` | Object | No | How the user authenticates. See [`config.credentials`](#configcredentials). Set it, or the deprecated `password`; the connector rejects a configuration with neither. |
 | `password` | String | No | Deprecated form of `credentials` with `auth_type = "UserPassword"`, still accepted for existing captures. At most 32 characters. Write-only, see the note above. |
@@ -261,7 +252,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `ssh_forwarding` | Object | No | SSH server tunneling the connection to the database. |
-| `ssh_forwarding.ssh_endpoint` | String | Yes | Endpoint of the SSH server, in the form `ssh://user@hostname[:port]`. |
+| `ssh_forwarding.ssh_endpoint` | String | Yes | Endpoint of the SSH server, in the form `ssh://user@hostname[:port]`. The plan rejects a password in it, such as `user:password@`, as state and logs would hold it in plain text: authenticate with `private_key`. A password found in the live value shows as `***`. |
 | `ssh_forwarding.private_key` | String | Yes | Private key used to connect to the SSH server. Write-only, see the note above. |
 | `ssh_forwarding.private_key_hash` | String | Read-only | Salted hash of `private_key`, used to detect when it changes. |
 
@@ -294,20 +285,20 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `resource` | Object | Yes | Table the binding captures. See [`bindings.resource`](#bindingsresource). |
-| `target` | String | No | Estuary collection the data is captured into. A binding without it keeps its current collection. A new one gets the collection the connector discovery names, which `terraform plan` runs against the source (e.g., `acmeCo/aurora/shop/users`), see [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
+| `target` | String | No | Estuary collection the data is captured into. A binding without it keeps its current collection. A new one gets the collection the connector discovery names, which `terraform plan` runs against the source (e.g., `acmeCo/aurora/shop/users`), see [Bindings](../../../docs/guides/bindings.md). |
 | `disable` | Bool | No | Stops capturing the table while keeping the binding in the capture. |
 | `backfill` | Object | No | Backfill control of the binding. See [`bindings.backfill`](#bindingsbackfill). |
 | `name` | String | Read-only | Collection of the binding, shown in every plan so you can tell which binding changes. |
 
 ### `bindings.backfill`
 
-Backfill control of the binding. See [Backfill Control](../../../README.md#backfill-control).
+Backfill control of the binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value, or resets the collection with `dataflowReset`, leaving the counter as is. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
+| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. Starts at 1 and only goes up. Can't be raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 | `strategy` | String | No | Overrides the capture's `backfill.strategy` for this binding: `incremental` captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
-| `mode` | String | No | How the table contents are backfilled, which the spec holds in the binding resource. Leave it unset to let the connector choose, see [Backfill Modes](https://docs.estuary.dev/reference/backfilling-data/#resource-configuration-backfill-modes): `Normal` emits every change right away, `Precise` holds back changes to rows the backfill hasn't reached yet, `Only Changes` skips the backfill and only captures new changes, and `Without Primary Key` backfills tables without a primary key. The connector requires a backfill along with a change, so raise `trigger`, or the capture's, in the same change: the plan fails otherwise. |
+| `mode` | String | No | How the table is backfilled: `Normal` emits every change right away, `Precise` holds back changes to rows the backfill hasn't reached yet, `Only Changes` skips the backfill, and `Without Primary Key` backfills tables without a primary key. Unset lets the connector choose. Changing it requires raising `trigger`, or the capture's, in the same change. See [Backfill Modes](https://docs.estuary.dev/reference/backfilling-data/#resource-configuration-backfill-modes). |
 
 ### `bindings.resource`
 
@@ -322,10 +313,16 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 
 ## Data Source
 
-`data "estuary_source_aurora_mysql"` and `data "estuary_source_rds_mysql"` read the live bindings of a capture by name without managing it, such as a capture managed in another configuration or outside Terraform:
+`data "estuary_source_aurora_mysql"` and `data "estuary_source_rds_mysql"` read every live binding of a capture by name: the declared ones, those discovery (`auto_discover`) adds and those added in the dashboard. Terraform doesn't manage live bindings, so the resource neither stores them nor shows them in plans: read them here, for a capture of this configuration or one managed elsewhere:
 
 ```hcl
+# A capture of this configuration
 data "estuary_source_aurora_mysql" "source" {
+  name = estuary_source_aurora_mysql.source.name
+}
+
+# A capture managed elsewhere
+data "estuary_source_aurora_mysql" "other" {
   name = "aurora"
 }
 ```
@@ -335,5 +332,5 @@ data "estuary_source_aurora_mysql" "source" {
 | `name` | String | Yes | Capture name, as in the resource: the provider `tenant` is added in front and the connector name of the resource at the end, unless they're already there. |
 | `live_bindings` | List of Objects | Read-only | Every live binding of the capture, with the attributes of [`bindings`](#bindings). |
 
-> [!WARNING]
-> For a capture managed in the same configuration, use the resource's `live_bindings` instead. A data source referencing the resource is read at apply whenever the capture has changes, so everything built from it shows as known after apply. Reading fails when the capture doesn't exist, rather than listing no bindings.
+> [!NOTE]
+> See [Bindings](../../../docs/guides/bindings.md) for when the data source is read and how to use it.

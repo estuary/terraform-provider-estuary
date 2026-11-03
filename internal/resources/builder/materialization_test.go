@@ -9,6 +9,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
+	materializepostgres "github.com/estuary/terraform-provider-estuary/internal/catalog/materialization/postgres"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -62,7 +63,7 @@ func (testDekafDocument) FromSpec(name string, spec testDekafSpec) testDekafDocu
 func TestMaterializationCodecSchema(test *testing.T) {
 	var ctx context.Context = context.Background()
 
-	codec, err := newCodec[materializationDocument[testConfig, testResource]](testConnector, materializationType)
+	codec, err := newCodec[materializationDocument[testConfig, testResource]](testConnector, materializationType[testConfig, testResource]())
 
 	if err != nil {
 		test.Fatal(err)
@@ -123,7 +124,7 @@ func TestMaterializationCodecSchema(test *testing.T) {
 func TestMaterializationCodecRoundTrip(test *testing.T) {
 	var capture string = "acmeCo/source-postgres"
 
-	codec, err := newCodec[materializationDocument[testConfig, testResource]](testConnector, materializationType)
+	codec, err := newCodec[materializationDocument[testConfig, testResource]](testConnector, materializationType[testConfig, testResource]())
 
 	if err != nil {
 		test.Fatal(err)
@@ -223,7 +224,7 @@ func TestMaterializationFromDocument(test *testing.T) {
 		},
 	}
 
-	codec, err := newCodec[testDekafDocument](connector, materializationType)
+	codec, err := newCodec[testDekafDocument](connector, materializationType[any, any]())
 
 	if err != nil {
 		test.Fatal(err)
@@ -259,7 +260,7 @@ func TestMaterializationFromDocument(test *testing.T) {
 }
 
 func TestNewCodecRequiresConnectorImage(test *testing.T) {
-	if _, err := newCodec[materializationDocument[testConfig, testResource]](Connector{TypeName: "materialization_test"}, materializationType); err == nil {
+	if _, err := newCodec[materializationDocument[testConfig, testResource]](Connector{TypeName: "materialization_test"}, materializationType[testConfig, testResource]()); err == nil {
 		test.Error("newCodec accepted a connector without a default image")
 	}
 }
@@ -319,7 +320,13 @@ func TestMaterializationReadRefreshesBindingsBySource(test *testing.T) {
 		test.Fatalf("read: %v", readResp.Diagnostics)
 	}
 
-	if !readResp.State.Raw.Equal(want) {
+	refreshedState, err := nullAttributes(readResp.State.Raw, computedByRead)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if !refreshedState.Equal(want) {
 		test.Errorf("refreshed state = %v, want %v", readResp.State.Raw, want)
 	}
 }
@@ -538,7 +545,13 @@ func TestMaterializationReadShowsLostFieldDepth(test *testing.T) {
 
 		entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
 
-		if readResp.Diagnostics.HasError() || !readResp.State.Raw.Equal(want) {
+		refreshed, err := nullAttributes(readResp.State.Raw, computedByRead)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		if readResp.Diagnostics.HasError() || !refreshed.Equal(want) {
 			test.Errorf("%s: refreshed state = %v (%v), want %v", name, readResp.State.Raw, readResp.Diagnostics, want)
 		}
 	}
@@ -721,6 +734,318 @@ func TestMaterializationTakeoverWarningKeepsEstuaryFields(test *testing.T) {
 
 		if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), expected.want) || strings.Contains(warnings[0].Detail(), "bindings[0].fields") {
 			test.Errorf("%s: warnings = %v, want %q without fields", name, warnings, expected.want)
+		}
+	}
+}
+
+type testSchemaResource struct {
+	Table  string `yaml:"table"`
+	Schema string `yaml:"schema,omitempty" x-schema-name:"true"`
+}
+
+func TestPlanBindingSchemasOmitted(test *testing.T) {
+	var spec MaterializationSpec[testWarehouseConfig, testSchemaResource] = MaterializationSpec[testWarehouseConfig, testSchemaResource]{
+		Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com"}}},
+		SpecOptions: materialization.SpecOptions{
+			TargetNaming: &materialization.TargetNaming{Strategy: materialization.TargetNamingMatchSourceStructure, SchemaTemplate: "raw_{{schema}}"},
+		},
+	}
+
+	entry := NewMaterialization[testWarehouseConfig, testSchemaResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testSchemaResource], MaterializationSpec[testWarehouseConfig, testSchemaResource]])
+
+	binding := func(collection string, schema string) materialization.Binding[testSchemaResource] {
+		return materialization.Binding[testSchemaResource]{
+			Resource: testSchemaResource{Table: collection, Schema: schema},
+			Source:   materialization.BindingSource{Name: "acmeCo/sales/" + collection},
+			Fields:   &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited},
+		}
+	}
+
+	value := func(bindings ...materialization.Binding[testSchemaResource]) tftypes.Value {
+		var current MaterializationSpec[testWarehouseConfig, testSchemaResource] = spec
+
+		current.Bindings = bindings
+
+		converted, err := entry.codec.Value("warehouse", current)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	var state tftypes.Value = value(binding("orders", "legacy"), binding("users", ""))
+	var live tftypes.Value = value(binding("orders", "legacy"), binding("users", ""), binding("events", "dashboard"))
+	var config tftypes.Value = value(binding("orders", ""), binding("users", ""), binding("events", ""), binding("sessions", ""), binding("carts", "custom"))
+
+	planned, err := entry.catalogType.planBindings(config, config, state, func() (tftypes.Value, bool) { return live, true })
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if want := value(binding("orders", "legacy"), binding("users", ""), binding("events", "dashboard"), binding("sessions", "raw_sales"), binding("carts", "custom")); !planned.Equal(want) {
+		test.Errorf("planned = %v, want the stored schema for orders and users, the live one for the taken over events, target_naming for sessions and the configured one for carts", planned)
+	}
+
+	unread, err := entry.catalogType.planBindings(config, config, state, func() (tftypes.Value, bool) { return tftypes.Value{}, false })
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	for _, index := range []int{2, 3} {
+		var unreadSchema *tftypes.AttributePath = bindingsPath.WithElementKeyInt(index).WithAttributeName(bindingResourceAttribute).WithAttributeName("schema")
+
+		if schema, err := attributeValue(unread, unreadSchema); err != nil || schema.IsKnown() {
+			test.Errorf("planned schema of binding %d with an unreadable live spec = %v (%v), want unknown, not a target_naming one replacing the live schema", index, schema, err)
+		}
+	}
+
+	var sessionsSource *tftypes.AttributePath = bindingsPath.WithElementKeyInt(3).WithAttributeName(bindingSourceAttribute)
+	var sessionsSchema *tftypes.AttributePath = bindingsPath.WithElementKeyInt(3).WithAttributeName(bindingResourceAttribute).WithAttributeName("schema")
+
+	unknownConfig, err := withValue(config, sessionsSource, tftypes.UnknownValue)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	unknownCollection, err := entry.catalogType.planBindings(unknownConfig, unknownConfig, state, func() (tftypes.Value, bool) { return live, true })
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if schema, err := attributeValue(unknownCollection, sessionsSchema); err != nil || schema.IsKnown() {
+		test.Errorf("planned schema of a binding with an unknown collection = %v (%v), want unknown", schema, err)
+	}
+
+	resource, _ := entry.codec.Schema().Attributes[bindingsAttribute].(schema.ListNestedAttribute).NestedObject.Attributes[bindingResourceAttribute].(schema.SingleNestedAttribute)
+
+	if schemaName, _ := resource.Attributes["schema"].(schema.StringAttribute); !schemaName.Optional || !schemaName.Computed {
+		test.Errorf("resource schema attribute = %+v, want optional and computed", schemaName)
+	}
+}
+
+func TestWarnNamingChange(test *testing.T) {
+	var previous *materialization.TargetNaming = &materialization.TargetNaming{Strategy: materialization.TargetNamingMatchSourceStructure, SchemaTemplate: "raw_{{schema}}"}
+	var current *materialization.TargetNaming = &materialization.TargetNaming{Strategy: materialization.TargetNamingMatchSourceStructure}
+
+	entry := NewMaterialization[testWarehouseConfig, testSchemaResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testSchemaResource], MaterializationSpec[testWarehouseConfig, testSchemaResource]])
+
+	value := func(naming *materialization.TargetNaming) tftypes.Value {
+		converted, err := entry.codec.Value("warehouse", MaterializationSpec[testWarehouseConfig, testSchemaResource]{
+			Endpoint:    endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com"}}},
+			SpecOptions: materialization.SpecOptions{TargetNaming: naming},
+		})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	if diagnostics := entry.warnNamingChange(value(current), value(previous)); len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Detail(), "only names the bindings added from now on") {
+		test.Errorf("diagnostics of a target_naming change = %v, want one warning", diagnostics)
+	}
+
+	if diagnostics := entry.warnNamingChange(value(previous), value(previous)); len(diagnostics) != 0 {
+		test.Errorf("diagnostics of an unchanged target_naming = %v, want none", diagnostics)
+	}
+
+	if diagnostics := entry.warnNamingChange(value(current), tftypes.NewValue(value(current).Type(), nil)); len(diagnostics) != 0 {
+		test.Errorf("diagnostics of a new materialization = %v, want none", diagnostics)
+	}
+}
+
+type testWarehouseConfig struct {
+	Host          string `yaml:"host"`
+	DefaultSchema string `yaml:"default_schema" x-default-namespace:"true"`
+}
+
+type testWarehouseResource struct {
+	Table  string `yaml:"table" x-collection-name:"true"`
+	Schema string `yaml:"schema,omitempty" x-schema-name:"true"`
+}
+
+func TestWarnMovedTables(test *testing.T) {
+	entry := NewMaterialization[testWarehouseConfig, testWarehouseResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testWarehouseResource], MaterializationSpec[testWarehouseConfig, testWarehouseResource]])
+
+	binding := func(collection string, schema string, table string) materialization.Binding[testWarehouseResource] {
+		return materialization.Binding[testWarehouseResource]{
+			Resource: testWarehouseResource{Table: table, Schema: schema},
+			Source:   materialization.BindingSource{Name: "acmeCo/sales/" + collection},
+			Fields:   &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited},
+		}
+	}
+
+	value := func(bindings ...materialization.Binding[testWarehouseResource]) tftypes.Value {
+		converted, err := entry.codec.Value("warehouse", MaterializationSpec[testWarehouseConfig, testWarehouseResource]{
+			Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com", DefaultSchema: "public"}}},
+			Bindings: bindings,
+		})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	var live tftypes.Value = value(binding("orders", "", "orders"), binding("users", "raw", "users"), binding("events", "", "events"), binding("refunds", "raw", "refunds"), binding("carts", "raw", "carts"))
+	var plan tftypes.Value = value(binding("orders", "", "orders_v2"), binding("users", "sales", "users"), binding("events", "public", "events"), binding("refunds", "raw", "refunds"), binding("carts", "RAW", "CARTS"), binding("sessions", "", "sessions"))
+	var readLive liveReader = func() (tftypes.Value, bool) { return live, true }
+
+	want := []string{
+		"acmeCo/sales/orders: public.orders -> public.orders_v2",
+		"acmeCo/sales/users: raw.users -> sales.users",
+	}
+
+	if moved := entry.catalogType.movedTables(plan, readLive); !reflect.DeepEqual(moved, want) {
+		test.Errorf("moved = %q, want orders and users, without events, whose schema is the endpoint one, the unchanged refunds, carts, which only changes case, nor the new sessions", moved)
+	}
+
+	if diagnostics := entry.warnMovedTables(plan, readLive); len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Detail(), "- acmeCo/sales/users: raw.users -> sales.users") {
+		test.Errorf("diagnostics = %v, want one warning listing the moved bindings", diagnostics)
+	}
+
+	if diagnostics := entry.warnMovedTables(live, readLive); len(diagnostics) != 0 {
+		test.Errorf("diagnostics of an unchanged plan = %v, want none", diagnostics)
+	}
+
+	if diagnostics := entry.warnMovedTables(plan, func() (tftypes.Value, bool) { return tftypes.Value{}, false }); len(diagnostics) != 0 {
+		test.Errorf("diagnostics with an unreadable live spec = %v, want none", diagnostics)
+	}
+}
+
+func TestSchemaNameRequiresDefaultNamespace(test *testing.T) {
+	if _, err := newCodec[materializationDocument[testConfig, testSchemaResource]](testNamedConnector, materializationType[testConfig, testSchemaResource]()); err == nil || !strings.Contains(err.Error(), "x-default-namespace") {
+		test.Errorf("codec of a schema resource without a default namespace config = %v, want an x-default-namespace error", err)
+	}
+
+	if _, err := newCodec[materializationDocument[testWarehouseConfig, testSchemaResource]](testNamedConnector, materializationType[testWarehouseConfig, testSchemaResource]()); err != nil {
+		test.Errorf("codec of a schema resource with a default namespace config: %v", err)
+	}
+}
+
+func TestResourceUpdateRequiresBackfillsOfStandardSwitches(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	expectations := map[string]struct {
+		prior    bool
+		live     bool
+		planned  bool
+		disabled bool
+		trigger  any
+		entry    any
+		rejected bool
+		sales    any
+	}{
+		"rejects a switch to standard updates without a raise":   {true, true, false, false, 1, nil, true, nil},
+		"rejects a switch from delta updates set outside":        {false, true, false, false, 1, nil, true, nil},
+		"backfills a switch to standard updates with a raise":    {true, true, false, false, 2, nil, false, 4},
+		"backfills a switch with the materialization trigger":    {true, true, false, false, 1, 1, false, 4},
+		"accepts a switch to delta updates without a raise":      {false, false, true, false, 1, nil, false, 3},
+		"accepts a switch of a disabled binding without a raise": {true, true, false, true, 1, nil, false, 3},
+	}
+
+	for name, expected := range expectations {
+		var configureResp resource.ConfigureResponse
+		var backend *testBackend = &testBackend{live: map[string]any{
+			"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"address": "db:5432", "user": "flow"}}},
+			"bindings": []any{
+				map[string]any{"resource": map[string]any{"table": "sales", "delta_updates": expected.live}, "source": "acmeCo/sales", "backfill": 3, "disable": expected.disabled},
+			},
+		}}
+
+		entry := NewMaterialization[materializepostgres.Config, materializepostgres.Resource](testNamedConnector)().(*entryResource[materializationDocument[materializepostgres.Config, materializepostgres.Resource], MaterializationSpec[materializepostgres.Config, materializepostgres.Resource]])
+
+		entry.Configure(ctx, resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: backend, Tenant: "acmeCo/"}}, &configureResp)
+
+		var prior MaterializationSpec[materializepostgres.Config, materializepostgres.Resource] = MaterializationSpec[materializepostgres.Config, materializepostgres.Resource]{
+			Endpoint: endpoint.ConnectorSpec[materializepostgres.Config]{Connector: endpoint.Connector[materializepostgres.Config]{
+				Image:  testNamedConnector.Image,
+				Config: materializepostgres.Config{Address: "db:5432", User: "flow"},
+			}},
+			Bindings: []materialization.Binding[materializepostgres.Resource]{
+				{Resource: materializepostgres.Resource{Table: "sales", DeltaUpdates: expected.prior}, Source: materialization.BindingSource{Name: "acmeCo/sales"}, Disable: expected.disabled},
+			},
+		}
+		var planned MaterializationSpec[materializepostgres.Config, materializepostgres.Resource] = prior
+
+		planned.Bindings = []materialization.Binding[materializepostgres.Resource]{
+			{Resource: materializepostgres.Resource{Table: "sales", DeltaUpdates: expected.planned}, Source: materialization.BindingSource{Name: "acmeCo/sales"}, Disable: expected.disabled},
+		}
+
+		priorValue, err := entry.codec.Value("warehouse", prior)
+
+		if err == nil {
+			priorValue, err = withValue(priorValue, testBackfillBlockPath, map[string]tftypes.Value{"trigger": tftypes.NewValue(tftypes.Number, 1)})
+		}
+
+		if err == nil && expected.entry != nil {
+			priorValue, err = withValue(priorValue, testEntryBackfillPath, map[string]tftypes.Value{"trigger": tftypes.NewValue(tftypes.Number, nil)})
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		planValue, err := entry.codec.Value("warehouse", planned)
+
+		if err == nil {
+			planValue, err = withValue(planValue, testBackfillBlockPath, map[string]tftypes.Value{"trigger": tftypes.NewValue(tftypes.Number, expected.trigger)})
+		}
+
+		if err == nil && expected.entry != nil {
+			planValue, err = withValue(planValue, testEntryBackfillPath, map[string]tftypes.Value{"trigger": tftypes.NewValue(tftypes.Number, expected.entry)})
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		diagnostics := entry.validateMissingBackfills(planValue, entry.newPublicationReader(planValue, priorValue, entry.newLiveReader(ctx, priorValue)))
+
+		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), "resource.delta_updates of acmeCo/sales is true in Estuary")) {
+			test.Errorf("%s: plan diagnostics = %v, want rejected %v", name, diagnostics, expected.rejected)
+		}
+
+		if len(diagnostics) == 1 {
+			var attributePath path.Path = diagnostics[0].(diag.DiagnosticWithPath).Path()
+
+			if !attributePath.Equal(path.Root("bindings").AtListIndex(0).AtName("resource").AtName("delta_updates")) {
+				test.Errorf("%s: diagnostic path = %s, want bindings[0].resource.delta_updates", name, attributePath)
+			}
+		}
+
+		var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+		entry.Update(ctx, resource.UpdateRequest{
+			State: tfsdk.State{Schema: entry.codec.Schema(), Raw: priorValue},
+			Plan:  tfsdk.Plan{Schema: entry.codec.Schema(), Raw: planValue},
+		}, &updateResp)
+
+		if updateResp.Diagnostics.HasError() != expected.rejected {
+			test.Errorf("%s: apply diagnostics = %v, want rejected %v", name, updateResp.Diagnostics, expected.rejected)
+			continue
+		}
+
+		if expected.rejected {
+			if backend.published != nil {
+				test.Errorf("%s: published %v, want nothing published", name, backend.published)
+			}
+
+			continue
+		}
+
+		bindings, _ := backend.published["bindings"].([]any)
+
+		if len(bindings) != 1 || bindings[0].(map[string]any)["backfill"] != expected.sales {
+			test.Errorf("%s: published bindings = %v, want the sales backfill counter %v", name, bindings, expected.sales)
 		}
 	}
 }

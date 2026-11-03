@@ -2,9 +2,11 @@ package flowctl
 
 import (
 	"cmp"
-	"encoding/json"
+	"fmt"
+	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"gopkg.in/yaml.v3"
@@ -16,40 +18,83 @@ const mask string = "***"
 // minimumLineLength is the shortest multiline secret line masked on its own, so masking doesn't mangle other text.
 const minimumLineLength int = 4
 
-// secretForms returns each secret's forms in text, longest first: raw, YAML/JSON quoted and escaped, and each line of a
-// multiline secret, which YAML writes as an indented block.
-func secretForms(secrets []string) []string {
-	var forms []string
+// jsonEscapes are the short escapes JSON and YAML double-quoted strings write for a character.
+var jsonEscapes map[rune]string = map[rune]string{'"': `\"`, '\\': `\\`, '/': `\/`, '\n': `\n`, '\t': `\t`, '\r': `\r`, '\b': `\b`, '\f': `\f`}
+
+// secretPatterns returns a pattern per secret, longest first, matching it whatever the encoding each character is
+// written in, see characterPattern, so a secret in a URL or JSON is masked even when only some characters are escaped.
+// Each line of a multiline secret, which YAML writes as an indented block, gets its own pattern.
+func secretPatterns(secrets []string) []*regexp.Regexp {
+	var parts []string
 
 	for _, secret := range secrets {
 		if secret == "" {
 			continue
 		}
 
-		forms = append(forms, secret, strings.ReplaceAll(secret, "'", "''"))
-
-		if encoded, err := json.Marshal(secret); err == nil {
-			forms = append(forms, string(encoded[1:len(encoded)-1]))
-		}
+		parts = append(parts, secret)
 
 		for _, line := range strings.Split(secret, "\n") {
 			if line = strings.TrimSpace(line); len(line) >= minimumLineLength {
-				forms = append(forms, line)
+				parts = append(parts, line)
 			}
 		}
 	}
 
-	slices.SortFunc(forms, func(left string, right string) int {
+	slices.SortFunc(parts, func(left string, right string) int {
 		return cmp.Compare(len(right), len(left))
 	})
 
-	return slices.Compact(forms)
+	var patterns []*regexp.Regexp
+
+	for _, part := range slices.Compact(parts) {
+		var pattern strings.Builder
+
+		for _, character := range part {
+			pattern.WriteString(characterPattern(character))
+		}
+
+		patterns = append(patterns, regexp.MustCompile(pattern.String()))
+	}
+
+	return patterns
 }
 
-// maskStrings replaces every form of every secret in text, see secretForms.
+// characterPattern matches a character raw, percent-encoded in either hex case, as a JSON \u escape or short escape,
+// doubled as a YAML single-quoted quote, or as + for a space in a query.
+func characterPattern(character rune) string {
+	var alternatives []string = []string{regexp.QuoteMeta(string(character))}
+	var percent strings.Builder
+	var unicode strings.Builder
+
+	for _, octet := range []byte(string(character)) {
+		fmt.Fprintf(&percent, "%%%02x", octet)
+	}
+
+	for _, unit := range utf16.Encode([]rune{character}) {
+		fmt.Fprintf(&unicode, `\\u%04x`, unit)
+	}
+
+	alternatives = append(alternatives, "(?i:"+percent.String()+")", "(?i:"+unicode.String()+")")
+
+	if escape, found := jsonEscapes[character]; found {
+		alternatives = append(alternatives, regexp.QuoteMeta(escape))
+	}
+
+	switch character {
+	case '\'':
+		alternatives = append(alternatives, "''")
+	case ' ':
+		alternatives = append(alternatives, `\+`)
+	}
+
+	return "(?:" + strings.Join(alternatives, "|") + ")"
+}
+
+// maskStrings replaces every secret in text, in any encoding, see secretPatterns.
 func maskStrings(text string, secrets []string) string {
-	for _, form := range secretForms(secrets) {
-		text = strings.ReplaceAll(text, form, mask)
+	for _, pattern := range secretPatterns(secrets) {
+		text = pattern.ReplaceAllLiteralString(text, mask)
 	}
 
 	return text

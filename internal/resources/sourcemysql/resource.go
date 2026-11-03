@@ -11,12 +11,14 @@ var aurora builder.Connector = builder.Connector{
 	TypeName:      "source_aurora_mysql",
 	Image:         mysql.ImageAmazonAurora,
 	ConnectorName: mysql.ConnectorNameAmazonAurora,
+	Description:   "Captures tables of an Amazon Aurora for MySQL database into Estuary collections, through change data capture on the MySQL binary log.",
 }
 
 var rds builder.Connector = builder.Connector{
 	TypeName:      "source_rds_mysql",
 	Image:         mysql.ImageAmazonRDS,
 	ConnectorName: mysql.ConnectorNameAmazonRDS,
+	Description:   "Captures tables of an Amazon RDS for MySQL database into Estuary collections, through change data capture on the MySQL binary log.",
 }
 
 // NewAurora returns the estuary_source_aurora_mysql resource.

@@ -6,6 +6,8 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationmysql"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationpostgres"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializations3iceberg"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationsnowflake"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationwebhook"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcedynamodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemongodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemysql"
@@ -33,6 +35,8 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	materializationmysql.NewRDS,
 	materializationpostgres.NewRDS,
 	materializations3iceberg.New,
+	materializationsnowflake.New,
+	materializationwebhook.New,
 	sourcemysql.NewAurora,
 	sourcepostgres.NewAurora,
 	sourcedynamodb.New,

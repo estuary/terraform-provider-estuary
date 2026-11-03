@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
@@ -78,7 +79,13 @@ func (entryResource *entryResource[D, S]) resolveTargets(ctx context.Context, un
 		addTargets(targets, discovered)
 
 		if missing = missingTargets(unset, paths, targets); missing != nil {
-			return nil, fmt.Errorf("discovery found no resource for bindings %v. Check the resources exist and the capture user can read them, or set their target", missing)
+			var named []string
+
+			for _, index := range missing {
+				named = append(named, fmt.Sprintf("bindings[%d] (%s)", index, paths[index]))
+			}
+
+			return nil, fmt.Errorf("discovery found no resource for %s. Check that the resources exist and that the capture's user can read them, or set each binding's target", strings.Join(named, ", "))
 		}
 	}
 

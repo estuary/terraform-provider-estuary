@@ -1,0 +1,80 @@
+materializations:
+  acmeCo/snowflake/key-pair:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-snowflake:v4
+        config:
+          host: orgname-accountname.snowflakecomputing.com
+          database: acmeCo_db
+          schema: acmeCo_flow_schema
+          warehouse: acmeCo_warehouse
+          timestamp_type: TIMESTAMP_LTZ
+          credentials:
+            auth_type: jwt
+            user: snowflake_user
+            private_key: |
+              -----BEGIN PRIVATE KEY-----
+              <private-key>
+              -----END PRIVATE KEY-----
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/snowflake/user-password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-snowflake:v4
+        config:
+          host: orgname-accountname.snowflakecomputing.com
+          database: acmeCo_db
+          schema: acmeCo_flow_schema
+          timestamp_type: TIMESTAMP_NTZ (discard TZ)
+          credentials:
+            auth_type: user_password
+            user: snowflake_user
+            password: <secret>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/snowflake/delta-updates:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-snowflake:v4
+        config:
+          host: orgname-accountname.snowflakecomputing.com
+          database: acmeCo_db
+          schema: acmeCo_flow_schema
+          timestamp_type: TIMESTAMP_NTZ (normalize to UTC)
+          credentials:
+            auth_type: jwt
+            user: snowflake_user
+            private_key: |
+              -----BEGIN PRIVATE KEY-----
+              <private-key>
+              -----END PRIVATE KEY-----
+    bindings:
+      - resource: { table: events, schema: raw, delta_updates: true }
+        source: acmeCo/events
+
+  acmeCo/snowflake/timestamp-tz:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-snowflake:v4
+        config:
+          host: orgname-accountname.snowflakecomputing.com
+          database: acmeCo_db
+          schema: acmeCo_flow_schema
+          role: acmeCo_role
+          timestamp_type: TIMESTAMP_TZ
+          hardDelete: true
+          credentials:
+            auth_type: jwt
+            user: snowflake_user
+            private_key: |
+              -----BEGIN PRIVATE KEY-----
+              <private-key>
+              -----END PRIVATE KEY-----
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders

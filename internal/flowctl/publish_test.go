@@ -2,12 +2,14 @@ package flowctl
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/capture"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/capture/mongodb"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
@@ -227,5 +229,27 @@ collections:
 
 	if !renamed || previous || len(catalogSpec.Collections) != 3 {
 		test.Errorf("collections = %v, want the discovered orders collection under its declared target", catalogSpec.Collections)
+	}
+}
+
+func TestPublicationErrorMarksConflicts(test *testing.T) {
+	expectations := map[string]struct {
+		err      error
+		conflict bool
+	}{
+		"expected publication ID not matched": {errors.New("stderr: expected publication ID 0000000000000000 was not matched (it's actually 117efc2f6100029f)"), true},
+		"build failure":                       {errors.New("stderr: failed with status: buildFailed"), false},
+	}
+
+	for name, expected := range expectations {
+		var got error = publicationError(expected.err)
+
+		if errors.Is(got, catalog.ErrPublicationConflict) != expected.conflict || got.Error() != expected.err.Error() || !errors.Is(got, expected.err) {
+			test.Errorf("%s: publicationError = %v, want the same error, conflict %v", name, got, expected.conflict)
+		}
+	}
+
+	if publicationError(nil) != nil {
+		test.Error("publicationError(nil) != nil")
 	}
 }

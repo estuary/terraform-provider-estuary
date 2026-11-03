@@ -31,6 +31,26 @@ func TestExecCommandMasksSecretsInErrors(test *testing.T) {
 	}
 }
 
+func TestExecCommandMasksURLAndJSONEncodedSecretsInErrors(test *testing.T) {
+	var script string = "#!/bin/sh\n" +
+		"echo 'connecting to postgres://flow:p%40ss%22w0rd%2Fsecret@123.4.567.89:5432/shop' >&2\n" +
+		"echo '{\"password\":\"p@ss\\\"w0rd/secret\",\"token\":\"p<\\\"x&y>\"}' >&2\n" +
+		"exit 1\n"
+	var client *Client = fakeFlowctl(test, script)
+
+	_, err := client.execCommand(catalog.WithSecrets(context.Background(), `p@ss"w0rd/secret`, `p<"x&y>`), "catalog", "publish")
+
+	if err == nil {
+		test.Fatal("execCommand succeeded, want the script failure")
+	}
+
+	for _, want := range []string{"connecting to postgres://flow:***@123.4.567.89:5432/shop", `{"password":"***","token":"***"}`} {
+		if !strings.Contains(err.Error(), want) {
+			test.Errorf("error = %v, want it to hold %q", err, want)
+		}
+	}
+}
+
 func TestRunOnSpecReturnsTheWrittenSpec(test *testing.T) {
 	var client *Client = fakeFlowctl(test, "#!/bin/sh\neval spec=\\${$#}\necho \"args: $*\" > \"$spec\"\n")
 	var workspace string

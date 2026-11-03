@@ -51,15 +51,17 @@ func redactedCredentialsWarning(diagnostics *diag.Diagnostics, catalogName strin
 	for _, redactedPath := range paths {
 		diagnostics.AddAttributeWarning(attributePath(redactedPath), "Credentials in "+attributePath(redactedPath).String()+" of "+catalogName,
 			"Estuary holds credentials in this connection string, so Terraform shows them as *** instead of storing them. "+
-				"The next apply publishes the configured value, which must hold only the host and connection options; set "+
-				"the credentials in user and password.")
+				"The next apply publishes the configured value, which must contain only the host and connection options. Set "+
+				"the credentials in user and password instead.")
 	}
 }
 
-// liveDocument returns a sealed live spec without encrypted secrets, control plane binding metadata, or the deprecated
-// source targetNaming.
+// liveDocument returns a sealed live spec without encrypted secrets, its publication ID, control plane binding
+// metadata, or the deprecated source targetNaming.
 func liveDocument(sealed map[string]any) map[string]any {
 	var live map[string]any = catalog.WithoutSecrets(sealed)
+
+	delete(live, catalog.ExpectPubIDKey)
 
 	for _, binding := range catalog.Bindings(live) {
 		delete(catalog.BindingResource(binding), catalog.ResourceMetaKey)

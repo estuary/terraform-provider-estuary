@@ -71,3 +71,5 @@ dist/
 
 # OS files
 .DS_Store
+
+docs/

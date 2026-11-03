@@ -14,6 +14,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
+// computedByRead reports the attributes Read and ImportState compute beside the refreshed ones, which tests check
+// apart.
+func computedByRead(path *tftypes.AttributePath) bool {
+	return path.Equal(catalogNamePath)
+}
+
 func liveCapture(bindings ...any) map[string]any {
 	return map[string]any{
 		"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
@@ -109,7 +115,7 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 			continue
 		}
 
-		stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+		stateWithoutLive, err := nullAttributes(readResp.State.Raw, computedByRead)
 
 		if err != nil {
 			test.Fatal(err)
@@ -160,7 +166,7 @@ func TestResourceReadRefreshesTheEntry(test *testing.T) {
 		test.Fatalf("read: %v", readResp.Diagnostics)
 	}
 
-	stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+	stateWithoutLive, err := nullAttributes(readResp.State.Raw, computedByRead)
 
 	if err != nil {
 		test.Fatal(err)
@@ -192,7 +198,7 @@ func TestResourceReadKeepsZeroValues(test *testing.T) {
 
 	entry.Read(context.Background(), resource.ReadRequest{State: readResp.State}, &readResp)
 
-	stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+	stateWithoutLive, err := nullAttributes(readResp.State.Raw, computedByRead)
 
 	if err != nil {
 		test.Fatal(err)
@@ -209,10 +215,10 @@ func TestResourceReadLiveEntry(test *testing.T) {
 	expectations := map[string]struct {
 		live    map[string]any
 		removed bool
-		warn    bool
+		fail    bool
 	}{
 		"removes a deleted entry":         {live: nil, removed: true},
-		"warns about an undecodable spec": {live: map[string]any{"bindings": "not a list"}, warn: true},
+		"fails on an undecodable spec":    {live: map[string]any{"bindings": "not a list"}, fail: true},
 		"keeps an entry without bindings": {live: liveCapture()},
 	}
 
@@ -229,8 +235,8 @@ func TestResourceReadLiveEntry(test *testing.T) {
 
 		entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
 
-		if readResp.Diagnostics.HasError() {
-			test.Errorf("%s: read: %v", name, readResp.Diagnostics)
+		if failed := readResp.Diagnostics.HasError(); failed != expected.fail {
+			test.Errorf("%s: failed = %v, want %v: %v", name, failed, expected.fail, readResp.Diagnostics)
 			continue
 		}
 
@@ -238,11 +244,11 @@ func TestResourceReadLiveEntry(test *testing.T) {
 			test.Errorf("%s: removed = %v, want %v", name, removed, expected.removed)
 		}
 
-		if warned := readResp.Diagnostics.WarningsCount() > 0; warned != expected.warn {
-			test.Errorf("%s: warned = %v, want %v", name, warned, expected.warn)
+		if readResp.Diagnostics.WarningsCount() > 0 {
+			test.Errorf("%s: warnings = %v, want none", name, readResp.Diagnostics.Warnings())
 		}
 
-		stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+		stateWithoutLive, err := nullAttributes(readResp.State.Raw, computedByRead)
 
 		if err != nil {
 			test.Fatal(err)
@@ -568,7 +574,7 @@ func TestResourceReadRefreshesSetShardSettings(test *testing.T) {
 			test.Fatalf("%s: read: %v", name, readResp.Diagnostics)
 		}
 
-		stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+		stateWithoutLive, err := nullAttributes(readResp.State.Raw, computedByRead)
 
 		if err != nil {
 			test.Fatal(err)
@@ -720,7 +726,7 @@ func TestResourceReadRefreshesLiveOnlyFields(test *testing.T) {
 		test.Fatalf("read: %v", readResp.Diagnostics)
 	}
 
-	stateWithoutLive, err := nullAttributes(readResp.State.Raw, liveBindingsPath.Equal)
+	stateWithoutLive, err := nullAttributes(readResp.State.Raw, computedByRead)
 
 	if err != nil {
 		test.Fatal(err)
@@ -761,12 +767,14 @@ func TestCodecLiveValueNullsUnencryptedSecrets(test *testing.T) {
 
 func TestCodecLiveValueRedactsCredentials(test *testing.T) {
 	type credentialsConfig struct {
-		Address  string `yaml:"address" credentials:"forbidden"`
-		Password string `yaml:"password,omitempty"`
+		Address     string `yaml:"address" credentials:"forbidden"`
+		SSHEndpoint string `yaml:"sshEndpoint" credentials:"password"`
+		Password    string `yaml:"password,omitempty"`
 	}
 
 	var sealed map[string]any = liveCapture()
 	var addressPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName("config").WithAttributeName("address")
+	var endpointPath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName("config").WithAttributeName("ssh_endpoint")
 
 	codec, err := newCodec[captureDocument[credentialsConfig, testResource]](testNamedConnector, captureType[testResource]())
 
@@ -774,7 +782,7 @@ func TestCodecLiveValueRedactsCredentials(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	sealed["endpoint"] = map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"address": "mongodb://flow_capture:secret@123.4.567.89:27017"}}}
+	sealed["endpoint"] = map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"address": "mongodb://flow_capture:secret@123.4.567.89:27017", "sshEndpoint": "ssh://ec2-user:secret@123.4.567.89:22"}}}
 
 	live, redactedPaths, err := codec.liveValue("movies", sealed)
 
@@ -788,7 +796,13 @@ func TestCodecLiveValueRedactsCredentials(test *testing.T) {
 		test.Errorf("live address = %v, want the credentials redacted", address)
 	}
 
-	if len(redactedPaths) != 1 || !redactedPaths[0].Equal(addressPath) {
-		test.Errorf("redacted paths = %v, want config.address", redactedPaths)
+	endpoint, _ := attributeValue(live, endpointPath)
+
+	if !endpoint.Equal(tftypes.NewValue(tftypes.String, "ssh://ec2-user:***@123.4.567.89:22")) {
+		test.Errorf("live ssh_endpoint = %v, want only the password redacted", endpoint)
+	}
+
+	if len(redactedPaths) != 2 {
+		test.Errorf("redacted paths = %v, want config.address and config.ssh_endpoint", redactedPaths)
 	}
 }

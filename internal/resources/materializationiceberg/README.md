@@ -247,7 +247,7 @@ resource "estuary_materialization_iceberg" "table_bucket" {
 ```
 
 > [!NOTE]
-> `aws_secret_access_key`, `credential` and `api_key` are [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) attributes: Terraform sends them to Estuary but never stores them in the state or shows them in plans. To still tell you when a secret changes, the provider keeps a read-only salted hash of each one (`aws_secret_access_key_hash`, `credential_hash`, `api_key_hash`) and warns in the plan when the value no longer matches. Write-only attributes require Terraform 1.11 or later.
+> `aws_secret_access_key`, `credential` and `api_key` are [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) attributes: Terraform never stores them in state or shows them in plans, and keeps only a salted hash of each to detect changes. See [Secrets](../../../docs/guides/secrets.md).
 
 > [!IMPORTANT]
 > The connector needs an EMR Serverless application with the Spark runtime, an execution role for its jobs, and an S3 bucket to stage data files, besides the catalog. See the [connector prerequisites](https://docs.estuary.dev/reference/Connectors/materialization-connectors/apache-iceberg/#prerequisites) for the setup and the IAM policies.
@@ -257,21 +257,16 @@ resource "estuary_materialization_iceberg" "table_bucket" {
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | Yes | Materialization name (e.g., `lake`). The provider `tenant` is added in front and `/materialize-iceberg` at the end, unless they're already there. |
-| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/materialize-iceberg:v1`, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
+| `catalog_name` | String | Read-only | Catalog name the materialization was created or imported under, with the tenant and connector name. Refreshes and deletions address it, so a provider `tenant` change replaces the materialization. |
+| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/materialize-iceberg:v1`, and only its tag can change. See [Connector Versions](../../../docs/guides/task-settings.md#connector-versions). |
 | `source` | Object | No | Settings of the bindings Estuary adds, optionally following a capture. See [`source`](#source). |
-| `target_naming` | Object | No | How Estuary names the namespaces and tables of the bindings it adds. See [`target_naming`](#target_naming). |
+| `target_naming` | Object | No | How Estuary names the namespaces and tables of the bindings it adds. A change only names the bindings added from then on: existing ones keep their schema and table. See [`target_naming`](#target_naming). |
 | `on_incompatible_schema_change` | String | No | What an automated change, such as a capture discovery, does when it's incompatible with a materialized table: `backfill` (default) backfills the affected bindings, `disableBinding` disables them, `disableTask` disables the materialization, and `abort` stops the automated change. Bindings can override it. See [Schema Evolution](https://docs.estuary.dev/concepts/advanced/evolutions/#what-do-schema-evolutions-do). |
 | `config` | Object | Yes | Catalog, compute and default namespace of the materialization. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Materialized collections, one per binding. See [`bindings`](#bindings). |
 | `backfill` | Object | No | Backfill control of the whole materialization. See [`backfill`](#backfill). |
-| `shards` | Dynamic | No | Shard settings of the materialization, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
-| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `source.capture`. Defaults to `true`. A provider control Estuary never sees. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
-
-> [!WARNING]
-> Changing `name` so that the resulting catalog name changes destroys the materialization and creates a new one. Changing the provider `tenant` doesn't: Terraform looks for the materialization under the new tenant, plans a new one and leaves the old one in Estuary, no longer managed. Destroy the materialization before changing `tenant`, or delete the old one in Estuary afterwards.
-
-> [!WARNING]
-> With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `source.capture`, stay in the materialization and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
+| `shards` | Dynamic | No | Shard settings of the materialization, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../docs/guides/task-settings.md#shard-settings). |
+| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `source.capture`. Defaults to `true`. A provider control Estuary never sees. See [Bindings](../../../docs/guides/bindings.md). |
 
 ### `source`
 
@@ -282,7 +277,7 @@ resource "estuary_materialization_iceberg" "table_bucket" {
 | `fields_recommended` | String | No | `fields.recommended` of added bindings: `"0"`, `"1"`, `"2"`, … or `"unlimited"`, see [`bindings.fields`](#bindingsfields). Defaults to `"unlimited"`. |
 
 > [!TIP]
-> With `capture` set, Terraform manages only the bindings in your configuration and keeps the ones Estuary adds, see [Bindings Lifecycle](../../../README.md#bindings-lifecycle). The other settings only apply to bindings added after they're set, never to existing ones. Bindings Estuary adds get only these settings and [`target_naming`](#target_naming), not per-binding ones such as `fields.require` or `on_incompatible_schema_change`: declare a binding to give it those, and the plan warns about it when `capture` is set.
+> Bindings Estuary adds through `capture` get only these settings and [`target_naming`](#target_naming). Declare a binding to give it its own settings, see [Bindings](../../../docs/guides/bindings.md).
 
 ### `target_naming`
 
@@ -303,7 +298,7 @@ The namespace of a binding plays the role of its schema.
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `url` | String | Yes | Base URL of the Iceberg REST catalog: `https://glue.<region>.amazonaws.com/iceberg` for AWS Glue, `https://s3tables.<region>.amazonaws.com/iceberg` for S3 Tables, or the URL of another REST catalog. |
+| `url` | String | Yes | Base URL of the Iceberg REST catalog: `https://glue.<region>.amazonaws.com/iceberg` for AWS Glue, `https://s3tables.<region>.amazonaws.com/iceberg` for S3 Tables, or the URL of another REST catalog. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `warehouse` | String | Yes | Warehouse to connect to: the AWS account ID without hyphens for AWS Glue (e.g., `123456789012`), or the table bucket ARN for S3 Tables (e.g., `arn:aws:s3tables:us-east-1:123456789012:bucket/<bucket>`). |
 | `namespace` | String | Yes | Namespace of the materialized tables, unless a binding sets its own. It can't contain dots. |
 | `base_location` | String | No | S3 location of the table data and metadata (e.g., `s3://<bucket>/<prefix>/`). Required with AWS Glue, optional with other catalogs. |
@@ -321,7 +316,7 @@ The namespace of a binding plays the role of its schema.
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `auth_type` | String | Yes | Authentication method: `OAuth 2.0 Client Credentials`, `AWS SigV4` or `AWS IAM`. AWS Glue and S3 Tables catalogs need `AWS SigV4` or `AWS IAM`. Only the attributes of the selected method are used. |
-| `oauth2_server_uri` | String | With `OAuth 2.0 Client Credentials` | OAuth 2.0 token endpoint: a path relative to `url`, `v1/oauth/tokens` (the dashboard default) for most catalogs, or a full http(s) URL when the token endpoint is on another host (e.g., `https://login.dremio.cloud/oauth/token`). The connector rejects an empty value. |
+| `oauth2_server_uri` | String | With `OAuth 2.0 Client Credentials` | OAuth 2.0 token endpoint: a path relative to `url`, `v1/oauth/tokens` (the dashboard default) for most catalogs, or a full http(s) URL when the token endpoint is on another host (e.g., `https://login.dremio.cloud/oauth/token`). The connector rejects an empty value. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `credential` | String | With `OAuth 2.0 Client Credentials` | Catalog credential: `<client_id>:<client_secret>` for OAuth client credentials, or `<token>` for Bearer authentication. Write-only, see the note above. |
 | `credential_hash` | String | Read-only | Salted hash of `credential`, used to detect when it changes. |
 | `scope` | String | No | Authorization scope requested with `OAuth 2.0 Client Credentials` (e.g., `PRINCIPAL_ROLE:<role>`). |
@@ -387,7 +382,7 @@ See the [EMR Serverless Spark defaults](https://docs.aws.amazon.com/emr/latest/E
 | `account_id` | String | Yes | ID of the dbt account. |
 | `api_key` | String | Yes | dbt API key used to trigger the job. Write-only, see the note above. |
 | `api_key_hash` | String | Read-only | Salted hash of `api_key`, used to detect when it changes. |
-| `access_url` | String | No | Access URL of the dbt account, found in its Account Settings (e.g., `https://cloud.getdbt.com`). It must start with `https://`. The job is only triggered when it's set. |
+| `access_url` | String | No | Access URL of the dbt account, found in its Account Settings (e.g., `https://cloud.getdbt.com`). It must start with `https://`. The job is only triggered when it's set. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `cause` | String | No | Message shown as the cause of each triggered run. Defaults to `Estuary`. |
 | `mode` | String | No | What happens when the job is already running: `skip` doesn't trigger it (default), `replace` cancels the running job and triggers a new one, and `ignore` triggers a new one anyway. |
 | `interval` | String | No | Minimum time between two triggers, which only happen after new data is materialized. Defaults to `30m`. |
@@ -422,7 +417,7 @@ Deprecated form of [`config.credentials`](#configcredentials), still accepted fo
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `catalog_auth_type` | String | Yes | Authentication method: `OAuth 2.0 Client Credentials` or `AWS SigV4`. Only the attributes of the selected method are used. |
-| `oauth2_server_uri` | String | With `OAuth 2.0 Client Credentials` | OAuth 2.0 token endpoint: a path relative to `url`, `v1/oauth/tokens` for most catalogs, or a full http(s) URL. The connector rejects an empty value. |
+| `oauth2_server_uri` | String | With `OAuth 2.0 Client Credentials` | OAuth 2.0 token endpoint: a path relative to `url`, `v1/oauth/tokens` for most catalogs, or a full http(s) URL. The connector rejects an empty value. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `credential` | String | With `OAuth 2.0 Client Credentials` | Catalog credential: `<client_id>:<client_secret>`, or `<token>` for Bearer authentication. Write-only, see the note above. |
 | `credential_hash` | String | Read-only | Salted hash of `credential`, used to detect when it changes. |
 | `scope` | String | No | Authorization scope requested with `OAuth 2.0 Client Credentials`. |
@@ -434,17 +429,17 @@ Deprecated form of [`config.credentials`](#configcredentials), still accepted fo
 
 ### `backfill`
 
-Backfill control of the whole materialization, as the dashboard's **Backfill** button under **Source Collections → Advanced options**. See [Backfill Control](../../../README.md#backfill-control).
+Backfill control of the whole materialization, as the dashboard's **Backfill** button under **Source Collections → Advanced options**. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the materialization, those Estuary adds through `source.capture` included: each table is dropped, created again and materialized again from its collection. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the materialization, those Estuary adds through `source.capture` included: each table is dropped, created again and materialized again from its collection. Disabled bindings are skipped. Starts at 1 and only goes up. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 
 ### `bindings`
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `source` | String | Yes | Estuary collection the binding materializes (e.g., `acmeCo/mongodb/shop/orders`). The provider `tenant` isn't added to it. Changing it replaces the binding, see [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
+| `source` | String | Yes | Estuary collection the binding materializes (e.g., `acmeCo/mongodb/shop/orders`). The provider `tenant` isn't added to it. Changing it replaces the binding, see [Bindings](../../../docs/guides/bindings.md). |
 | `not_before` | String | No | Materializes only the documents published at or after this RFC 3339 time (e.g., `2026-01-01T00:00:00Z`). It's only a filter: changing it doesn't reprocess the documents already read. See [Time Travel](https://docs.estuary.dev/reference/time-travel/). |
 | `not_after` | String | No | Materializes only the documents published before this RFC 3339 time. Like `not_before`, it's only a filter. |
 | `resource` | Object | Yes | Iceberg table the collection is materialized into. See [`bindings.resource`](#bindingsresource). |
@@ -457,18 +452,18 @@ Backfill control of the whole materialization, as the dashboard's **Backfill** b
 
 ### `bindings.backfill`
 
-Backfill control of the binding. See [Backfill Control](../../../README.md#backfill-control).
+Backfill control of the binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: drop the table, create it again and materialize the whole collection again. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
+| `trigger` | Number | No | Raise it to backfill the binding: drop the table, create it again and materialize the whole collection again. Starts at 1 and only goes up. Can't be raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 
 ### `bindings.resource`
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `table` | String | Yes | Iceberg table to materialize into. The connector creates it when missing, with the casing of `config.advanced.table_identifier_case`. |
-| `namespace` | String | No | Namespace of the table, overriding `config.namespace`. |
+| `table` | String | Yes | Iceberg table to materialize into. The connector creates it when missing, with the casing of `config.advanced.table_identifier_case`. Changing it on an existing binding moves it to a new table, which the connector backfills from the start of the collection, leaving the old table in place. |
+| `namespace` | String | No | Namespace of the table, overriding `config.namespace`. Omitted, it keeps the live one, and a new binding gets the one `target_naming` names, as in the dashboard, or the endpoint default without `target_naming`. Changing it on an existing binding moves it to a new table, which the connector backfills from the start of the collection, leaving the old table in place. |
 | `additional_table_properties` | Map of Strings | No | Iceberg table properties set when the table is created (e.g., `{ "write.parquet.compression-codec" = "zstd" }`). They can't be changed afterwards. |
 
 > [!TIP]
@@ -483,4 +478,4 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 | `exclude` | List of Strings | No | Fields never materialized. |
 | `group_by` | List of Strings | No | Fields keying the table instead of the collection key. Only fields with a scalar type (boolean, integer or string) can be keys, and changing them backfills the binding. See [Group-by keys](https://docs.estuary.dev/guides/customize-materialization-fields/#group-by-keys). |
 
-See [Field Selection](../../../README.md#field-selection) for examples and how `flow_document` is selected.
+See [Field Selection](../../../docs/guides/bindings.md#field-selection) for examples and how `flow_document` is selected.

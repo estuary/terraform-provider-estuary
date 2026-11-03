@@ -125,7 +125,7 @@ resource "estuary_source_dynamodb" "local" {
 ```
 
 > [!NOTE]
-> `aws_secret_access_key` is a [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) attribute: Terraform sends it to Estuary but never stores it in the state or shows it in plans. To still tell you when the secret changes, the provider keeps a read-only salted hash of it (`aws_secret_access_key_hash`) and warns in the plan when the value no longer matches. Write-only attributes require Terraform 1.11 or later.
+> `aws_secret_access_key` is a [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) attribute: Terraform never stores it in state or shows it in plans, and keeps only a salted hash of it to detect changes. See [Secrets](../../../docs/guides/secrets.md).
 
 > [!IMPORTANT]
 > Every captured table needs DynamoDB Streams enabled with the **New and old images** view type (`NEW_AND_OLD_IMAGES`). Discovery skips the tables without it, and a binding of such a table fails when the capture starts.
@@ -135,20 +135,14 @@ resource "estuary_source_dynamodb" "local" {
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | Yes | Capture name (e.g., `dynamodb`). The provider `tenant` is added in front and `/source-dynamodb` at the end, unless they're already there. |
-| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-dynamodb:v1`, and only its tag can change. See [Connector Versions](../../../README.md#connector-versions). |
+| `catalog_name` | String | Read-only | Catalog name the capture was created or imported under, with the tenant and connector name. Refreshes and deletions address it, so a provider `tenant` change replaces the capture. |
+| `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-dynamodb:v1`, and only its tag can change. See [Connector Versions](../../../docs/guides/task-settings.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the region for new tables and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Region, authentication and advanced settings of the capture. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Captured tables, one per binding. See [`bindings`](#bindings). |
-| `live_bindings` | List of Objects | Read-only | Every live binding, the declared ones and those discovery (`auto_discover`) adds, with the attributes of [`bindings`](#bindings). Refreshed on each plan, and planned with the binding changes the apply publishes. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
-| `shards` | Dynamic | No | Shard settings of the capture, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
-| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `auto_discover`. Defaults to `true`. A provider control Estuary never sees. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
+| `shards` | Dynamic | No | Shard settings of the capture, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../docs/guides/task-settings.md#shard-settings). |
+| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `auto_discover`. Defaults to `true`. A provider control Estuary never sees. See [Bindings](../../../docs/guides/bindings.md). |
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
-
-> [!WARNING]
-> Changing `name` so that the resulting catalog name changes destroys the capture and creates a new one. Changing the provider `tenant` doesn't: Terraform looks for the capture under the new tenant, plans a new one and leaves the old one in Estuary, no longer managed. Destroy the capture before changing `tenant`, or delete the old one in Estuary afterwards.
-
-> [!WARNING]
-> With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `auto_discover`, stay in the capture and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
 
 ### `auto_discover`
 
@@ -157,16 +151,13 @@ resource "estuary_source_dynamodb" "local" {
 | `add_new_bindings` | Bool | No | Adds a binding for each table found in the region that isn't declared, when the capture is created and on each later discovery. Terraform doesn't manage those bindings; declare a binding to manage it. |
 | `evolve_incompatible_collections` | Bool | No | Automatically updates the target collections when the source schema changes in a way they can't accept. |
 
-> [!TIP]
-> With `add_new_bindings = true`, a binding you remove from your configuration may be added back by the next discovery. To stop capturing a table, set `disable = true` on its binding instead.
-
 ### `backfill`
 
-Backfill control of the whole capture, as the dashboard's **Backfill** button and **Backfill mode**. See [Backfill Control](../../../README.md#backfill-control).
+Backfill control of the whole capture, as the dashboard's **Backfill** button and **Backfill mode**. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value, or resets its collection with `dataflowReset`, leaving its counter as is. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped. Starts at 1 and only goes up. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
@@ -194,7 +185,7 @@ The IAM user or role needs `ListTables` and `DescribeTable` on every table of th
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `endpoint` | String | No | AWS endpoint URI to connect to, for both DynamoDB and DynamoDB Streams. Use it to capture from a DynamoDB-compatible API that AWS doesn't provide. |
+| `endpoint` | String | No | AWS endpoint URI to connect to, for both DynamoDB and DynamoDB Streams. Use it to capture from a DynamoDB-compatible API that AWS doesn't provide. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `backfill_segments` | Number | No | Number of segments the backfill scan of each table is split into. Defaults to `100`. Has no effect once the backfill of a table has started. |
 | `scan_limit` | Number | No | Maximum number of items each backfill scan request evaluates. By default, it's unlimited, except for tables whose read capacity, from `rcu_allocation` or else provisioned, is 100 or less, which use `100`. |
 | `idle_backoff_max` | String | No | Maximum wait between polls of an open stream shard whose reads keep returning no records, as a whole number with one unit (`ms`, `s`, `m` or `h`, e.g., `30s`) between `1s` and `10m`. Defaults to `1s`. Higher values reduce billed DynamoDB Streams requests on idle shards, but delay the capture of new records by up to this wait. |
@@ -204,18 +195,18 @@ The IAM user or role needs `ListTables` and `DescribeTable` on every table of th
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `resource` | Object | Yes | DynamoDB table the binding captures. See [`bindings.resource`](#bindingsresource). |
-| `target` | String | No | Estuary collection the data is captured into. A binding without it keeps its current collection. A new one gets the collection the connector discovery names, which `terraform plan` runs against the source (e.g., `acmeCo/dynamodb/orders`), see [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
+| `target` | String | No | Estuary collection the data is captured into. A binding without it keeps its current collection. A new one gets the collection the connector discovery names, which `terraform plan` runs against the source (e.g., `acmeCo/dynamodb/orders`), see [Bindings](../../../docs/guides/bindings.md). |
 | `disable` | Bool | No | Stops capturing the table while keeping the binding in the capture. |
 | `backfill` | Object | No | Backfill control of the binding. See [`bindings.backfill`](#bindingsbackfill). |
 | `name` | String | Read-only | Collection of the binding, shown in every plan so you can tell which binding changes. |
 
 ### `bindings.backfill`
 
-Backfill control of the binding. See [Backfill Control](../../../README.md#backfill-control).
+Backfill control of the binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value, or resets the collection with `dataflowReset`, leaving the counter as is. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
+| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. Starts at 1 and only goes up. Can't be raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 | `strategy` | String | No | Overrides the capture's `backfill.strategy` for this binding: `incremental` captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `bindings.resource`
@@ -227,10 +218,16 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 
 ## Data Source
 
-`data "estuary_source_dynamodb"` reads the live bindings of a capture by name without managing it, such as a capture managed in another configuration or outside Terraform:
+`data "estuary_source_dynamodb"` reads every live binding of a capture by name: the declared ones, those discovery (`auto_discover`) adds and those added in the dashboard. Terraform doesn't manage live bindings, so the resource neither stores them nor shows them in plans: read them here, for a capture of this configuration or one managed elsewhere:
 
 ```hcl
+# A capture of this configuration
 data "estuary_source_dynamodb" "source" {
+  name = estuary_source_dynamodb.source.name
+}
+
+# A capture managed elsewhere
+data "estuary_source_dynamodb" "other" {
   name = "dynamodb"
 }
 ```
@@ -240,5 +237,5 @@ data "estuary_source_dynamodb" "source" {
 | `name` | String | Yes | Capture name, as in the resource: the provider `tenant` is added in front and `/source-dynamodb` at the end, unless they're already there. |
 | `live_bindings` | List of Objects | Read-only | Every live binding of the capture, with the attributes of [`bindings`](#bindings). |
 
-> [!WARNING]
-> For a capture managed in the same configuration, use the resource's `live_bindings` instead. A data source referencing the resource is read at apply whenever the capture has changes, so everything built from it shows as known after apply. Reading fails when the capture doesn't exist, rather than listing no bindings.
+> [!NOTE]
+> See [Bindings](../../../docs/guides/bindings.md) for when the data source is read and how to use it.

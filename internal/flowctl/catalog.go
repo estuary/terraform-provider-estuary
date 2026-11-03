@@ -3,18 +3,32 @@ package flowctl
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"gopkg.in/yaml.v3"
 )
 
-const expectPubIDKey string = "expectPubId"
-
 type pulledFile struct {
 	Captures         map[string]map[string]any `yaml:"captures"`
+	Collections      map[string]map[string]any `yaml:"collections"`
 	Materializations map[string]map[string]any `yaml:"materializations"`
+}
+
+// names returns the sorted names of every pulled entry.
+func (pulled pulledFile) names() []string {
+	var names []string = slices.Collect(maps.Keys(pulled.Captures))
+
+	names = slices.AppendSeq(names, maps.Keys(pulled.Collections))
+	names = slices.AppendSeq(names, maps.Keys(pulled.Materializations))
+
+	slices.Sort(names)
+
+	return names
 }
 
 // inlineConfigs replaces each endpoint config file reference flowctl wrote with its content, rejecting paths outside
@@ -54,6 +68,9 @@ func inlineConfigs(spec map[string]any, directory string) error {
 	return nil
 }
 
+// pulledSpec returns the spec of name in the pulled content, with its expectPubId, nil only when nothing was pulled,
+// as flowctl pulls nothing for a deleted entry. Content naming other entries, or a spec without a bindings list, fails
+// rather than reading as a deletion or as every binding removed.
 func pulledSpec(content []byte, name string, directory string) (map[string]any, error) {
 	var pulled pulledFile
 
@@ -64,14 +81,24 @@ func pulledSpec(content []byte, name string, directory string) (map[string]any, 
 	spec, found := pulled.Captures[name]
 
 	if !found {
-		spec = pulled.Materializations[name]
+		spec, found = pulled.Materializations[name]
+	}
+
+	if names := pulled.names(); !found && len(names) > 0 {
+		return nil, fmt.Errorf("pulling %s returned no capture or materialization with that name, only: %s", name, strings.Join(names, ", "))
+	}
+
+	if !found {
+		return nil, nil
+	}
+
+	if _, isList := spec[catalog.BindingsKey].([]any); !isList {
+		return nil, fmt.Errorf("the pulled spec of %s has no bindings list", name)
 	}
 
 	if err := inlineConfigs(spec, directory); err != nil {
 		return nil, err
 	}
-
-	delete(spec, expectPubIDKey)
 
 	return spec, nil
 }

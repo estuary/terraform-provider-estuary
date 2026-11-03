@@ -90,7 +90,7 @@ type CatalogCredentials struct {
 	AWSAccessKeyID     string          `yaml:"aws_access_key_id,omitempty" description:"AWS access key ID of the IAM user the connector authenticates as, with 'AWS SigV4'."`
 	AWSSecretAccessKey string          `yaml:"aws_secret_access_key,omitempty" description:"AWS secret access key of the IAM user, with 'AWS SigV4'. Write-only."`
 	AWSRegion          string          `yaml:"aws_region,omitempty" description:"AWS region of the catalog (e.g., 'us-east-1'), with 'AWS SigV4' and 'AWS IAM'."`
-	OAuth2ServerURI    string          `yaml:"oauth2_server_uri,omitempty" description:"OAuth 2.0 token endpoint, required with 'OAuth 2.0 Client Credentials': a path relative to url, 'v1/oauth/tokens' (the dashboard default) for most catalogs, or a full http(s) URL when the token endpoint is on another host (e.g., 'https://login.dremio.cloud/oauth/token')."`
+	OAuth2ServerURI    string          `yaml:"oauth2_server_uri,omitempty" credentials:"forbidden" description:"OAuth 2.0 token endpoint, required with 'OAuth 2.0 Client Credentials': a path relative to url, 'v1/oauth/tokens' (the dashboard default) for most catalogs, or a full http(s) URL when the token endpoint is on another host (e.g., 'https://login.dremio.cloud/oauth/token'). The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	Credential         string          `yaml:"credential,omitempty" description:"Catalog credential, with 'OAuth 2.0 Client Credentials': '<client_id>:<client_secret>' for OAuth client credentials, or '<token>' for Bearer authentication. Write-only."`
 	Scope              string          `yaml:"scope,omitempty" description:"Authorization scope requested with 'OAuth 2.0 Client Credentials' (e.g., 'PRINCIPAL_ROLE:<role>')."`
 }
@@ -101,7 +101,7 @@ type LegacyCatalogAuthentication struct {
 	AWSAccessKeyID     string                `yaml:"aws_access_key_id,omitempty" description:"AWS access key ID of the IAM user the connector authenticates as, with 'AWS SigV4'."`
 	AWSSecretAccessKey string                `yaml:"aws_secret_access_key,omitempty" description:"AWS secret access key of the IAM user, with 'AWS SigV4'. Write-only."`
 	Region             string                `yaml:"region,omitempty" description:"AWS region of the catalog (e.g., 'us-east-1'), with 'AWS SigV4'."`
-	OAuth2ServerURI    string                `yaml:"oauth2_server_uri,omitempty" description:"OAuth 2.0 token endpoint, required with 'OAuth 2.0 Client Credentials': a path relative to url, 'v1/oauth/tokens' for most catalogs, or a full http(s) URL."`
+	OAuth2ServerURI    string                `yaml:"oauth2_server_uri,omitempty" credentials:"forbidden" description:"OAuth 2.0 token endpoint, required with 'OAuth 2.0 Client Credentials': a path relative to url, 'v1/oauth/tokens' for most catalogs, or a full http(s) URL. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	Credential         string                `yaml:"credential,omitempty" description:"Catalog credential, with 'OAuth 2.0 Client Credentials': '<client_id>:<client_secret>', or '<token>' for Bearer authentication. Write-only."`
 	Scope              string                `yaml:"scope,omitempty" description:"Authorization scope requested with 'OAuth 2.0 Client Credentials'."`
 	SigningName        string                `yaml:"signing_name,omitempty" description:"Ignored by the connector, which derives the SigV4 signing name from url. Kept so existing materializations still decode."`
@@ -156,9 +156,9 @@ type GlueOptimizers struct {
 
 // Config is the materialize-iceberg connector configuration.
 type Config struct {
-	URL                   string                         `yaml:"url" description:"Base URL of the Iceberg REST catalog: 'https://glue.<region>.amazonaws.com/iceberg' for AWS Glue, 'https://s3tables.<region>.amazonaws.com/iceberg' for S3 Tables, or the URL of another REST catalog."`
+	URL                   string                         `yaml:"url" credentials:"forbidden" description:"Base URL of the Iceberg REST catalog: 'https://glue.<region>.amazonaws.com/iceberg' for AWS Glue, 'https://s3tables.<region>.amazonaws.com/iceberg' for S3 Tables, or the URL of another REST catalog. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	Warehouse             string                         `yaml:"warehouse" description:"Warehouse to connect to: the AWS account ID without hyphens for AWS Glue, or the table bucket ARN for S3 Tables."`
-	Namespace             string                         `yaml:"namespace" description:"Namespace of the materialized tables, unless a binding sets its own. It can't contain dots."`
+	Namespace             string                         `yaml:"namespace" x-default-namespace:"true" description:"Namespace of the materialized tables, unless a binding sets its own. It can't contain dots."`
 	BaseLocation          string                         `yaml:"base_location,omitempty" description:"S3 location of the table data and metadata (e.g., 's3://<bucket>/<prefix>/'). Required with AWS Glue, optional with other catalogs."`
 	HardDelete            bool                           `yaml:"hard_delete,omitempty" description:"Deletes from the table the documents deleted in the source. Otherwise, the _meta/op column marks deleted rows (soft delete). Defaults to false."`
 	Credentials           *CatalogCredentials            `yaml:"credentials,omitempty" description:"How the connector authenticates with the catalog. Set it, or the deprecated catalog_authentication, for the materialization to connect."`
@@ -172,8 +172,8 @@ type Config struct {
 
 // Resource identifies the target Iceberg table; AdditionalTableProperties apply only at creation.
 type Resource struct {
-	Table                     string            `yaml:"table" description:"Iceberg table to materialize into. The connector creates it when missing."`
-	Namespace                 string            `yaml:"namespace,omitempty" description:"Namespace of the table, overriding config.namespace."`
+	Table                     string            `yaml:"table" x-collection-name:"true" description:"Iceberg table to materialize into. The connector creates it when missing."`
+	Namespace                 string            `yaml:"namespace,omitempty" x-schema-name:"true" description:"Namespace of the table, overriding config.namespace."`
 	AdditionalTableProperties map[string]string `yaml:"additional_table_properties,omitempty" description:"Iceberg table properties set when the table is created (e.g., 'write.parquet.compression-codec' = 'zstd'). They can't be changed afterwards."`
 }
 

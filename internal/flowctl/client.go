@@ -62,7 +62,7 @@ func (client *Client) maskedContext(ctx context.Context) (context.Context, []str
 		return ctx, secrets
 	}
 
-	return tflog.MaskLogStrings(ctx, secretForms(secrets)...), secrets
+	return tflog.MaskLogRegexes(ctx, secretPatterns(secrets)...), secrets
 }
 
 // execCommand runs flowctl, masking the token and ctx secrets in logs and errors.

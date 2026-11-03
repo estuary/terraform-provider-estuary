@@ -54,6 +54,27 @@ func BackfillModeField(field reflect.StructField) bool {
 	return stringField(field) && field.Tag.Get("backfill") == "mode"
 }
 
+// DeltaUpdatesField reports whether a bool field is a binding resource's delta updates, by its connector x-delta-updates:"true" tag.
+func DeltaUpdatesField(field reflect.StructField) bool {
+	return field.Type.Kind() == reflect.Bool && field.Tag.Get("x-delta-updates") == "true"
+}
+
+// SchemaNameField reports whether a string field is a binding resource's schema, by its connector x-schema-name:"true" tag.
+func SchemaNameField(field reflect.StructField) bool {
+	return stringField(field) && field.Tag.Get("x-schema-name") == "true"
+}
+
+// CollectionNameField reports whether a string field is a binding resource's table, by its connector x-collection-name:"true" tag.
+func CollectionNameField(field reflect.StructField) bool {
+	return stringField(field) && field.Tag.Get("x-collection-name") == "true"
+}
+
+// DefaultNamespaceField reports whether a string field is the endpoint's default schema of bindings, by its
+// x-default-namespace:"true" tag.
+func DefaultNamespaceField(field reflect.StructField) bool {
+	return stringField(field) && field.Tag.Get("x-default-namespace") == "true"
+}
+
 func yamlOption(field reflect.StructField, option string) bool {
 	return slices.Contains(strings.Split(field.Tag.Get("yaml"), ",")[1:], option)
 }
@@ -74,18 +95,39 @@ func EnumValues(field reflect.StructField) ([]string, bool) {
 	return strings.Split(values, ","), true
 }
 
-// ForbidsCredentials reports whether a string field, such as a connection URI, must not embed credentials, by its
-// credentials:"forbidden" tag.
-func ForbidsCredentials(field reflect.StructField) bool {
-	return stringField(field) && field.Tag.Get("credentials") == "forbidden"
+// Credentials is which credentials a string field, such as a connection URI, must not embed, by its credentials tag.
+type Credentials string
+
+const (
+	CredentialsAllowed   Credentials = ""
+	CredentialsForbidden Credentials = "forbidden"
+	CredentialsPassword  Credentials = "password"
+)
+
+// FieldCredentials returns which credentials a string field must not embed, CredentialsAllowed without credentials tag.
+func FieldCredentials(field reflect.StructField) Credentials {
+	if !stringField(field) {
+		return CredentialsAllowed
+	}
+
+	return Credentials(field.Tag.Get("credentials"))
 }
 
-// ValidateTags rejects secret, enum, credentials and backfill tags on non-string fields.
+// ValidateTags rejects secret, enum, credentials, backfill, x-schema-name, x-collection-name and x-default-namespace tags
+// on non-string fields, x-delta-updates tags on non-bool fields, and unknown credentials tags.
 func ValidateTags(field reflect.StructField) error {
-	for _, tag := range []string{"secret", "enum", "credentials", "backfill"} {
+	for _, tag := range []string{"secret", "enum", "credentials", "backfill", "x-schema-name", "x-collection-name", "x-default-namespace"} {
 		if _, found := field.Tag.Lookup(tag); found && !stringField(field) {
-			return fmt.Errorf("field %s: secret, enum, credentials and backfill tags only apply to strings, not %s", field.Name, field.Type)
+			return fmt.Errorf("field %s: secret, enum, credentials, backfill, x-schema-name, x-collection-name and x-default-namespace tags only apply to strings, not %s", field.Name, field.Type)
 		}
+	}
+
+	if _, found := field.Tag.Lookup("x-delta-updates"); found && field.Type.Kind() != reflect.Bool {
+		return fmt.Errorf("field %s: x-delta-updates tag only applies to bools, not %s", field.Name, field.Type)
+	}
+
+	if credentials, found := field.Tag.Lookup("credentials"); found && Credentials(credentials) != CredentialsForbidden && Credentials(credentials) != CredentialsPassword {
+		return fmt.Errorf("field %s: credentials tag must be %q or %q, not %q", field.Name, CredentialsForbidden, CredentialsPassword, credentials)
 	}
 
 	return nil

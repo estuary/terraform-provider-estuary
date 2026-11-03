@@ -1,10 +1,14 @@
 package flowctl
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"gopkg.in/yaml.v3"
@@ -42,6 +46,72 @@ func TestMaskStringsMasksEncodedSecrets(test *testing.T) {
 				test.Errorf("masked %q still holds %q", masked, leaked)
 			}
 		}
+	}
+}
+
+// urlSecrets are secrets URLs and JSON escape: reserved and HTML characters, spaces, non-ASCII and non-BMP characters.
+var urlSecrets = []string{`p@ss"w0rd/secret`, `p<"x&y>`, "two words+plus", "pässwörd", "🔑key:with;semi=colon"}
+
+// secretEncodings returns secret as each encoder flowctl and connectors may write it, by encoding name.
+func secretEncodings(secret string) map[string]string {
+	var plainJSON bytes.Buffer
+	var encoder *json.Encoder = json.NewEncoder(&plainJSON)
+	var lowerPercent strings.Builder
+	var asciiJSON strings.Builder
+
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(secret)
+
+	htmlJSON, _ := json.Marshal(secret)
+
+	for _, octet := range []byte(secret) {
+		fmt.Fprintf(&lowerPercent, "%%%02x", octet)
+	}
+
+	for _, unit := range utf16.Encode([]rune(secret)) {
+		fmt.Fprintf(&asciiJSON, `\u%04X`, unit)
+	}
+
+	var userInfo string = (&url.URL{Scheme: "postgres", User: url.UserPassword("flow", secret), Host: "123.4.567.89"}).String()
+	var plainQuoted string = strings.TrimSuffix(plainJSON.String(), "\n")
+
+	return map[string]string{
+		"raw":               secret,
+		"Go JSON":           string(htmlJSON[1 : len(htmlJSON)-1]),
+		"JSON without HTML": plainQuoted[1 : len(plainQuoted)-1],
+		"JSON \\u escapes":  asciiJSON.String(),
+		"URL user info":     strings.TrimSuffix(strings.TrimPrefix(userInfo, "postgres://flow:"), "@123.4.567.89"),
+		"URL query":         url.QueryEscape(secret),
+		"URL path":          url.PathEscape(secret),
+		"lowercase percent": lowerPercent.String(),
+	}
+}
+
+func TestMaskStringsMasksURLAndJSONEncodedSecrets(test *testing.T) {
+	for _, secret := range urlSecrets {
+		for name, encoded := range secretEncodings(secret) {
+			var text string = "auth failed for [" + encoded + "] at host"
+
+			if masked := maskStrings(text, []string{secret}); masked != "auth failed for [***] at host" {
+				test.Errorf("%s of %q: masked = %q, want only the secret masked", name, secret, masked)
+			}
+		}
+	}
+}
+
+func TestMaskStringsMasksLongerSecretsFirst(test *testing.T) {
+	for _, secrets := range [][]string{{"abc", "abcdef"}, {"abcdef", "abc"}} {
+		if masked := maskStrings("token abcdef leaked, abc too", secrets); masked != "token *** leaked, *** too" {
+			test.Errorf("secrets %q: masked = %q, want no part of the longer one left", secrets, masked)
+		}
+	}
+}
+
+func TestMaskStringsKeepsOtherText(test *testing.T) {
+	var text string = "ABC abd %61%62 a+b a\\u0062 hunter"
+
+	if masked := maskStrings(text, []string{"abc", "hunter2"}); masked != text {
+		test.Errorf("masked = %q, want text without the secrets kept", masked)
 	}
 }
 

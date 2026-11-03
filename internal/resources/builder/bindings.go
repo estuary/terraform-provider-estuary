@@ -1,6 +1,8 @@
 package builder
 
 import (
+	"sync"
+
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
@@ -178,6 +180,43 @@ func indexedBindings(value tftypes.Value) (map[string]tftypes.Value, error) {
 	return byCollection(items), err
 }
 
+// liveBindingsReader returns a reader of the live bindings by collection, reading the live spec once and reporting false
+// when it can't.
+func liveBindingsReader(readLive liveReader) func() (map[string]tftypes.Value, bool) {
+	return sync.OnceValues(func() (map[string]tftypes.Value, bool) {
+		live, found := readLive()
+
+		if !found {
+			return nil, false
+		}
+
+		indexed, err := indexedBindings(live)
+
+		return indexed, err == nil
+	})
+}
+
+// resourceString returns a string attribute of a binding resource, null when absent and unknown when the binding is.
+func resourceString(binding tftypes.Value, attribute string) tftypes.Value {
+	var attributes map[string]tftypes.Value
+
+	if !binding.IsKnown() {
+		return tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+	}
+
+	if binding.IsNull() || binding.As(&attributes) != nil {
+		return tftypes.NewValue(tftypes.String, nil)
+	}
+
+	resource, found := attributes[bindingResourceAttribute]
+
+	if !found {
+		return tftypes.NewValue(tftypes.String, nil)
+	}
+
+	return blockAttribute(resource, attribute, tftypes.String)
+}
+
 // bindingCollectionValue returns a binding value's collection, empty when unknown.
 func bindingCollectionValue(binding tftypes.Value) string {
 	for _, attribute := range []string{bindingTargetAttribute, bindingSourceAttribute} {
@@ -246,6 +285,20 @@ func bindingAttributeIndex(path *tftypes.AttributePath, attribute string) (int, 
 	var steps []tftypes.AttributePathStep = path.Steps()
 
 	if len(steps) != 3 || steps[0] != tftypes.AttributeName(bindingsAttribute) || steps[2] != tftypes.AttributeName(attribute) {
+		return 0, false
+	}
+
+	index, isIndex := steps[1].(tftypes.ElementKeyInt)
+
+	return int(index), isIndex
+}
+
+// bindingResourceAttributeIndex returns the binding index of a path to a binding resource attribute.
+func bindingResourceAttributeIndex(path *tftypes.AttributePath, attribute string) (int, bool) {
+	var steps []tftypes.AttributePathStep = path.Steps()
+
+	if len(steps) != 4 || steps[0] != tftypes.AttributeName(bindingsAttribute) ||
+		steps[2] != tftypes.AttributeName(bindingResourceAttribute) || steps[3] != tftypes.AttributeName(attribute) {
 		return 0, false
 	}
 

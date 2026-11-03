@@ -81,7 +81,7 @@ type Advanced struct {
 // Config is the source-postgres configuration shared by every image in Images. Password is the deprecated form of
 // Credentials.
 type Config struct {
-	Address          string                    `yaml:"address" description:"Host or host:port of the database. The port defaults to 5432."`
+	Address          string                    `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database. The port defaults to 5432. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	User             string                    `yaml:"user" description:"Database user to authenticate as, usually 'flow_capture'."`
 	Password         string                    `yaml:"password,omitempty" description:"Deprecated form of credentials with auth_type 'UserPassword', still accepted for existing captures. Write-only."`
 	Database         string                    `yaml:"database" description:"Logical database to capture from, usually 'postgres'."`

@@ -1,0 +1,28 @@
+---
+page_title: "{{ .Name }} {{ .Type }} - Estuary"
+subcategory: "{{ if eq (index (split .Name "_") 1) "source" }}Captures{{ else }}Materializations{{ end }}"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{ .Name }} ({{ .Type }})
+
+{{ .Description | trimspace }}
+
+See the [Bindings](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/bindings), [Backfills](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/backfills) and [Secrets](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/secrets) guides for how the provider manages them.
+{{- if .HasExample }}
+
+## Example Usage
+
+{{ tffile .ExampleFile }}
+{{- end }}
+
+{{ .SchemaMarkdown | trimspace }}
+{{- if .HasImport }}
+
+## Import
+
+{{ codefile "shell" .ImportFile }}
+
+See [Importing](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/existing-pipelines#importing) for what an import brings into state.
+{{- end }}

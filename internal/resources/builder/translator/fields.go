@@ -11,14 +11,14 @@ import (
 )
 
 type field struct {
-	key                string
-	attribute          string
-	description        string
-	optional           bool
-	secret             bool
-	forbidsCredentials bool
-	enum               []string
-	kind               reflect.Type
+	key         string
+	attribute   string
+	description string
+	optional    bool
+	secret      bool
+	credentials catalog.Credentials
+	enum        []string
+	kind        reflect.Type
 }
 
 // AttributeName returns the Terraform attribute name of a YAML key, in snake case.
@@ -83,14 +83,14 @@ func fields(structType reflect.Type) ([]field, error) {
 		enum, _ := catalog.EnumValues(structField)
 
 		mappedFields = append(mappedFields, field{
-			key:                key,
-			attribute:          attribute,
-			description:        catalog.FieldDescription(structField),
-			optional:           catalog.FieldOmitEmpty(structField) || structField.Type.Kind() == reflect.Pointer,
-			secret:             catalog.SecretField(structField),
-			forbidsCredentials: catalog.ForbidsCredentials(structField),
-			enum:               enum,
-			kind:               structField.Type,
+			key:         key,
+			attribute:   attribute,
+			description: catalog.FieldDescription(structField),
+			optional:    catalog.FieldOmitEmpty(structField) || structField.Type.Kind() == reflect.Pointer,
+			secret:      catalog.SecretField(structField),
+			credentials: catalog.FieldCredentials(structField),
+			enum:        enum,
+			kind:        structField.Type,
 		})
 	}
 

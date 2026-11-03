@@ -39,11 +39,13 @@ func (entryDataSource *entryDataSource[D, S]) Schema(_ context.Context, _ dataso
 	bindings, isList := entryDataSource.codec.Schema().Attributes[bindingsAttribute].(schema.ListNestedAttribute)
 
 	if !isList {
-		schemaResp.Diagnostics.AddError("Invalid connector schema", "The "+entryDataSource.catalogType.name+" has no bindings list.")
+		schemaResp.Diagnostics.AddError("Invalid connector schema", "The "+entryDataSource.catalogType.name+" schema has no bindings list. This is a bug in the provider: please report it.")
 		return
 	}
 
 	schemaResp.Schema = datasourceschema.Schema{
+		Description: "Reads every live binding of a " + entryDataSource.catalogType.name + " by name, including those Terraform " +
+			"doesn't manage, such as the ones discovery or the dashboard adds.",
 		Attributes: map[string]datasourceschema.Attribute{
 			nameAttribute: datasourceschema.StringAttribute{
 				Description: entryDataSource.catalogType.nameDescription(),

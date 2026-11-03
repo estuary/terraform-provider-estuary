@@ -22,6 +22,13 @@ type Connector struct {
 	TypeName      string
 	Image         string
 	ConnectorName string
+
+	// Description introduces the resource in its documentation.
+	Description string
+
+	// RotatesSecrets marks connectors rewriting their own encrypted secrets, such as OAuth tokens, whose live secrets
+	// changing isn't drift.
+	RotatesSecrets bool
 }
 
 // Document is the Terraform shape of a catalog entry mapping to the catalog spec S.
@@ -78,6 +85,10 @@ func (connector Connector) catalogName(session *catalog.Session, name string) st
 
 // newCodec builds the node tree and Terraform schema from the spec YAML tags.
 func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogType) (*Codec[D, S], error) {
+	if catalogType.err != nil {
+		return nil, fmt.Errorf("building %s schema: %w", connector.TypeName, catalogType.err)
+	}
+
 	root, err := translator.NewObject(reflect.TypeFor[D]())
 
 	if err != nil {
@@ -91,9 +102,16 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 	}
 
 	attributes[nameAttribute] = schema.StringAttribute{
-		Description: catalogType.nameDescription() + " Changing the resulting catalog name through name replaces the " + catalogType.name +
-			"; through the provider tenant, it creates a new one and leaves the old one in Estuary, no longer managed.",
+		Description: catalogType.nameDescription() + " Changing the resulting catalog name, through name or the provider tenant, " +
+			"replaces the " + catalogType.name + ".",
 		Required: true,
+	}
+
+	attributes[catalogNameAttribute] = schema.StringAttribute{
+		Description: "Catalog name the " + catalogType.name + " was created or imported under, with the tenant and connector name. " +
+			"Refreshes and deletions address it, so a provider tenant change replaces the " + catalogType.name + " under the new " +
+			"tenant, with a plan warning, instead of managing whatever entry has its name there.",
+		Computed: true,
 	}
 
 	if catalogType.adjustAttributes != nil {
@@ -114,10 +132,6 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 				"adds, untouched. False manages every binding, removing undeclared ones, and conflicts with " +
 				catalogType.added.generator.String() + ". Defaults to true. A provider control Estuary never sees.",
 			Optional: true,
-		}
-
-		if catalogType.listsLiveBindings {
-			attributes[liveBindingsAttribute] = liveBindingsSchema(bindings)
 		}
 	}
 
@@ -147,7 +161,8 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 	}
 
 	var resourceSchema schema.Schema = schema.Schema{
-		Attributes: attributes,
+		Description: connector.Description,
+		Attributes:  attributes,
 	}
 
 	return &Codec[D, S]{

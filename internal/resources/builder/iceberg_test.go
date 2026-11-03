@@ -27,7 +27,7 @@ var s3IcebergConnector Connector = Connector{
 }
 
 func assertMaterializationSamplesRoundTrip[C, R any](test *testing.T, connector Connector, directory string) {
-	codec, err := newCodec[materializationDocument[C, R]](connector, materializationType)
+	codec, err := newCodec[materializationDocument[C, R]](connector, materializationType[C, R]())
 
 	if err != nil {
 		test.Fatal(err)
@@ -71,7 +71,7 @@ func TestS3IcebergSamplesRoundTrip(test *testing.T) {
 func TestS3IcebergDeltaUpdatesKeepsOmission(test *testing.T) {
 	var explicitFalse bool = false
 
-	codec, err := newCodec[materializationDocument[icebergdelta.Config, icebergdelta.Resource]](s3IcebergConnector, materializationType)
+	codec, err := newCodec[materializationDocument[icebergdelta.Config, icebergdelta.Resource]](s3IcebergConnector, materializationType[icebergdelta.Config, icebergdelta.Resource]())
 
 	if err != nil {
 		test.Fatal(err)

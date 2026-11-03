@@ -4,7 +4,7 @@
 
 These resources manage [Dekaf](https://docs.estuary.dev/reference/Connectors/materialization-connectors/Dekaf/) materializations. Dekaf is Estuary's Kafka-compatible API: each binding exposes one Estuary collection as a Kafka topic, which Kafka consumers read from Estuary's broker. There is no destination to connect to, so the configuration only holds the token consumers authenticate with and how topics and deletions are exposed.
 
-Estuary offers a dedicated Dekaf connector for each of these consumers, each with its own resource. They are configured the same way, so this page documents them together. Pick the one matching your consumer:
+They're configured the same way. Pick the resource matching your consumer:
 
 | Resource | Consumer | Connector name |
 |---|---|---|
@@ -97,7 +97,7 @@ resource "estuary_materialization_dekaf_generic" "events" {
 ```
 
 > [!NOTE]
-> `token` is a [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) attribute: Terraform sends it to Estuary but never stores it in the state or shows it in plans. To still tell you when it changes, the provider keeps a read-only salted hash of it (`token_hash`) and warns in the plan when the value no longer matches. Write-only attributes require Terraform 1.11 or later.
+> `token` is a [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) attribute: Terraform never stores it in state or shows it in plans, and keeps only a salted hash of it to detect changes. See [Secrets](../../../docs/guides/secrets.md).
 
 ## Connecting Consumers
 
@@ -118,20 +118,15 @@ Consumers connect to Estuary with these settings, see each consumer's page linke
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `name` | String | Yes | Materialization name (e.g., `analytics`). The provider `tenant` is added in front and the connector name of the resource (e.g., `/dekaf-tinybird`) at the end, unless they're already there. |
+| `catalog_name` | String | Read-only | Catalog name the materialization was created or imported under, with the tenant and connector name. Refreshes and deletions address it, so a provider `tenant` change replaces the materialization. |
 | `source` | Object | No | Settings of the bindings Estuary adds, optionally following a capture. See [`source`](#source). |
-| `target_naming` | Object | No | How Estuary names the topics of the bindings it adds. See [`target_naming`](#target_naming). |
+| `target_naming` | Object | No | How Estuary names the topics of the bindings it adds. A change only names the bindings added from then on: existing ones keep their schema and table. See [`target_naming`](#target_naming). |
 | `on_incompatible_schema_change` | String | No | What an automated change, such as a capture discovery, does when it's incompatible with a materialized binding: `backfill` (default) backfills the affected bindings, `disableBinding` disables them, `disableTask` disables the materialization, and `abort` stops the automated change. Bindings can override it. See [Schema Evolution](https://docs.estuary.dev/concepts/advanced/evolutions/#what-do-schema-evolutions-do). |
 | `config` | Object | Yes | Authentication and topic settings Kafka consumers see. See [`config`](#config). |
 | `bindings` | List of Objects | Yes | Materialized collections, one topic per binding. See [`bindings`](#bindings). |
 | `backfill` | Object | No | Backfill control of the whole materialization. See [`backfill`](#backfill). |
-| `shards` | Dynamic | No | Shard settings of the materialization, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../README.md#shard-settings). |
-| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `source.capture`. Defaults to `true`. A provider control Estuary never sees. See [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
-
-> [!WARNING]
-> Changing `name` so that the resulting catalog name changes destroys the materialization and creates a new one. Changing the provider `tenant` doesn't: Terraform looks for the materialization under the new tenant, plans a new one and leaves the old one in Estuary, no longer managed. Destroy the materialization before changing `tenant`, or delete the old one in Estuary afterwards. Consumers authenticate with that name, so they need the new one too.
-
-> [!WARNING]
-> With the default `keep_unmanaged_bindings = true`, Terraform never removes bindings it doesn't manage: those Estuary or the dashboard adds, including the ones kept when you remove `source.capture`, stay in the materialization and aren't shown in plans. Set `keep_unmanaged_bindings = false` to manage every binding and remove the undeclared ones; the plan lists them before the apply.
+| `shards` | Dynamic | No | Shard settings of the materialization, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../docs/guides/task-settings.md#shard-settings). |
+| `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `source.capture`. Defaults to `true`. A provider control Estuary never sees. See [Bindings](../../../docs/guides/bindings.md). |
 
 ### `source`
 
@@ -142,7 +137,7 @@ Consumers connect to Estuary with these settings, see each consumer's page linke
 | `fields_recommended` | String | No | `fields.recommended` of added bindings: `"0"`, `"1"`, `"2"`, … or `"unlimited"`, see [`bindings.fields`](#bindingsfields). Defaults to `"unlimited"`. |
 
 > [!TIP]
-> With `capture` set, Terraform manages only the bindings in your configuration and keeps the ones Estuary adds, see [Bindings Lifecycle](../../../README.md#bindings-lifecycle). Bindings Estuary adds get only these settings and `target_naming`: declare a binding to give it its own, and the plan warns about it when `capture` is set.
+> Bindings Estuary adds through `capture` get only these settings and [`target_naming`](#target_naming). Declare a binding to give it its own settings, see [Bindings](../../../docs/guides/bindings.md).
 
 ### `target_naming`
 
@@ -170,17 +165,17 @@ Topics have no schema, so only the topic name of the bindings Estuary adds follo
 
 ### `backfill`
 
-Backfill control of the whole materialization, as the dashboard's **Backfill** button under **Source Collections → Advanced options**. See [Backfill Control](../../../README.md#backfill-control).
+Backfill control of the whole materialization, as the dashboard's **Backfill** button under **Source Collections → Advanced options**. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the materialization, those Estuary adds through `source.capture` included. Disabled bindings are skipped, as in the dashboard: they keep their counter. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises each binding's counter by one from its live value. Starts at 1 and only goes up. |
+| `trigger` | Number | No | Raise it to backfill every enabled binding of the materialization, those Estuary adds through `source.capture` included. Disabled bindings are skipped. Starts at 1 and only goes up. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 
 ### `bindings`
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `source` | String | Yes | Estuary collection the binding exposes (e.g., `acmeCo/mongodb/shop/orders`). The provider `tenant` isn't added to it. Changing it replaces the binding, see [Bindings Lifecycle](../../../README.md#bindings-lifecycle). |
+| `source` | String | Yes | Estuary collection the binding exposes (e.g., `acmeCo/mongodb/shop/orders`). The provider `tenant` isn't added to it. Changing it replaces the binding, see [Bindings](../../../docs/guides/bindings.md). |
 | `not_before` | String | No | Exposes only the documents published at or after this RFC 3339 time (e.g., `2026-01-01T00:00:00Z`). It's only a filter: changing it doesn't reprocess the documents already read. See [Time Travel](https://docs.estuary.dev/reference/time-travel/). |
 | `not_after` | String | No | Exposes only the documents published before this RFC 3339 time. Like `not_before`, it's only a filter. |
 | `resource` | Object | Yes | Topic the collection is exposed as. See [`bindings.resource`](#bindingsresource). |
@@ -193,11 +188,11 @@ Backfill control of the whole materialization, as the dashboard's **Backfill** b
 
 ### `bindings.backfill`
 
-Backfill control of the binding. See [Backfill Control](../../../README.md#backfill-control).
+Backfill control of the binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `trigger` | Number | No | Raise it to backfill the binding. **Not Estuary's backfill counter**, but a provider control Estuary never sees: each raise raises Estuary's counter by one from its live value. Starts at 1 and only goes up. Raising it on a disabled binding is an error: set `disable = false` in the same change. |
+| `trigger` | Number | No | Raise it to backfill the binding. Starts at 1 and only goes up. Can't be raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 
 ### `bindings.resource`
 
@@ -214,4 +209,4 @@ Backfill control of the binding. See [Backfill Control](../../../README.md#backf
 | `exclude` | List of Strings | No | Fields never included. |
 | `group_by` | List of Strings | No | Fields keying the messages instead of the collection key. Only fields with a scalar type (boolean, integer or string) can be keys, and changing them backfills the binding. See [Group-by keys](https://docs.estuary.dev/guides/customize-materialization-fields/#group-by-keys). |
 
-See [Field Selection](../../../README.md#field-selection) for more examples.
+See [Field Selection](../../../docs/guides/bindings.md#field-selection) for more examples.

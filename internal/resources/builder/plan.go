@@ -1,7 +1,6 @@
 package builder
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -29,13 +28,13 @@ func (entryResource *entryResource[D, S]) warnDisabledLive(config tftypes.Value,
 		return diagnostics
 	}
 
-	var detail string = "The " + name + " is disabled in Estuary, for example from the dashboard, and the configuration doesn't " +
-		"set shards, so the apply keeps it disabled. Set shards = { disable = false } to enable it, or shards = { disable = true } " +
-		"to manage it as disabled."
+	var detail string = "The " + name + " was disabled outside Terraform, for example from the dashboard. The configuration " +
+		"doesn't set shards, so the apply keeps it disabled. Set shards = { disable = false } to enable it, or " +
+		"shards = { disable = true } to keep managing it as disabled."
 
 	if !shards.IsNull() {
-		detail = "The " + name + " is disabled in Estuary, for example from the dashboard, and the configured shards don't set " +
-			"disable, so the apply enables it. Add disable = true to shards to keep it disabled."
+		detail = "The " + name + " was disabled outside Terraform, for example from the dashboard. The configured shards don't " +
+			"set disable, so the apply enables it again. Add disable = true to shards to keep it disabled."
 	}
 
 	diagnostics.AddAttributeWarning(path.Root(shardsAttribute), entryResource.warningSummary("Disabled outside Terraform", state), detail)
@@ -44,19 +43,20 @@ func (entryResource *entryResource[D, S]) warnDisabledLive(config tftypes.Value,
 }
 
 // plannedPublication is what publishing the plan does to the bindings: the published binding documents, the entryWide
-// collections, the collections to backfill and to reset, and the backfill mode changes no backfill covers.
+// collections, the collections to backfill and to reset, and the binding changes requiring a backfill no backfill covers.
 type plannedPublication struct {
-	published    []any
-	wide         []string
-	backfills    []string
-	resets       []string
-	missingModes map[string]string
+	published []any
+	wide      []string
+	backfills []string
+	resets    []string
+	missing   []missingBackfill
 }
 
 // newPlannedPublication returns what publishing planned binding documents over live ones does, see mergedBindings and
-// backfillRequests. Each backfill mode change under modeKey is backfilled, as the connector requires, and reported in
-// missingModes when neither a backfill nor a reset covers it. Plan and apply both use it, so plans show what applies do.
-func newPlannedPublication(planned []any, previous []any, live []any, keepUnmanaged bool, plan tftypes.Value, prior tftypes.Value, modeKey string) (plannedPublication, error) {
+// backfillRequests. Each backfill mode change is backfilled, as the connector requires. Changes the connector only
+// accepts along with a backfill, backfill mode changes and switches from delta to standard updates, are reported in
+// missing when no backfill covers them. Plan and apply both use it, so plans show what applies do.
+func newPlannedPublication(planned []any, previous []any, live []any, keepUnmanaged bool, plan tftypes.Value, prior tftypes.Value, catalogType catalogType) (plannedPublication, error) {
 	var publication plannedPublication
 	var err error
 
@@ -68,9 +68,10 @@ func newPlannedPublication(planned []any, previous []any, live []any, keepUnmana
 		return publication, err
 	}
 
-	var changes map[string]string = modeBackfills(publication.published, live, modeKey)
+	var changes map[string]string = modeBackfills(publication.published, live, catalogType.backfillModeKey)
 
-	publication.missingModes = unbackfilledModes(changes, publication.backfills, publication.resets)
+	publication.missing = append(missingModeBackfills(changes, publication.backfills, publication.resets),
+		missingStandardUpdatesBackfills(publication.published, live, catalogType.deltaUpdatesKey, publication.backfills)...)
 
 	for _, collection := range slices.Sorted(maps.Keys(changes)) {
 		if !slices.Contains(publication.backfills, collection) {
@@ -79,21 +80,6 @@ func newPlannedPublication(planned []any, previous []any, live []any, keepUnmana
 	}
 
 	return publication, nil
-}
-
-// missingModesError returns the error of backfill mode changes no backfill covers, nil without any.
-func missingModesError(missing map[string]string) error {
-	var details []string
-
-	for _, collection := range slices.Sorted(maps.Keys(missing)) {
-		details = append(details, modeBackfillDetail(collection, missing[collection]))
-	}
-
-	if len(details) == 0 {
-		return nil
-	}
-
-	return errors.New(strings.Join(details, "\n"))
 }
 
 // publicationReader returns the planned publication, computed once, reporting false when the live spec or plan
@@ -136,18 +122,18 @@ func (entryResource *entryResource[D, S]) newPublicationReader(plan tftypes.Valu
 		}
 
 		publication, err = newPlannedPublication(catalog.Bindings(plannedDocument), catalog.Bindings(priorDocument), catalog.Bindings(liveDocument),
-			keepsUnmanagedBindings(plan), plan, state, entryResource.catalogType.backfillModeKey)
+			keepsUnmanagedBindings(plan), plan, state, entryResource.catalogType)
 
 		return publication, err == nil
 	})
 }
 
-// validateModeBackfills rejects backfill mode changes whose binding isn't backfilled, as the connector requires.
-// Failing to read the live spec skips the check.
-func (entryResource *entryResource[D, S]) validateModeBackfills(plan tftypes.Value, readPublication publicationReader) diag.Diagnostics {
+// validateMissingBackfills rejects the binding changes the connector only accepts along with a backfill, see
+// newPlannedPublication, whose binding isn't backfilled. Failing to read the live spec skips the check.
+func (entryResource *entryResource[D, S]) validateMissingBackfills(plan tftypes.Value, readPublication publicationReader) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
 
-	if entryResource.catalogType.backfillModeKey == "" {
+	if entryResource.catalogType.backfillModeKey == "" && entryResource.catalogType.deltaUpdatesKey == "" {
 		return diagnostics
 	}
 
@@ -160,19 +146,24 @@ func (entryResource *entryResource[D, S]) validateModeBackfills(plan tftypes.Val
 	plannedBindings, _, _ := bindings(plan)
 
 	for index, binding := range plannedBindings {
-		if change, isMissing := publication.missingModes[bindingCollectionValue(binding)]; isMissing {
-			diagnostics.AddAttributeError(path.Root(bindingsAttribute).AtListIndex(index).AtName(backfillAttribute).AtName(backfillModeAttribute),
-				"Backfill mode changed without a backfill", modeBackfillDetail(bindingCollectionValue(binding), change))
+		var collection string = bindingCollectionValue(binding)
+
+		for _, change := range publication.missing {
+			if change.collection != collection {
+				continue
+			}
+
+			var attributePath path.Path = path.Root(bindingsAttribute).AtListIndex(index)
+
+			for _, name := range change.attribute {
+				attributePath = attributePath.AtName(name)
+			}
+
+			diagnostics.AddAttributeError(attributePath, change.summary, change.detail)
 		}
 	}
 
 	return diagnostics
-}
-
-// modeBackfillDetail explains the backfill a changed backfill mode requires.
-func modeBackfillDetail(collection string, change string) string {
-	return "backfill.mode of " + collection + " changes " + change + ". The connector requires the binding to be backfilled " +
-		"when its mode changes: raise its backfill.trigger, or the capture's, in the same change."
 }
 
 // warnDataflowResets warns once about every collection the plan dataflow resets, which truncates its destination
@@ -199,14 +190,26 @@ func (entryResource *entryResource[D, S]) warnDataflowResets(plan tftypes.Value,
 	}
 
 	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Dataflow reset", plan),
-		"A raised backfill.trigger backfills these bindings with backfill.strategy = \"dataflowReset\", so the apply resets "+
-			"their collections:\n\n- "+strings.Join(resets, "\n- ")+"\n\n"+
-			"Their data is replaced by a fresh backfill from the source, and their inferred schemas are cleared. Every materialization "+
-			"of these collections is backfilled too, truncating its destination tables, and a materialization with "+
-			"on_incompatible_schema_change = \"abort\" makes the apply fail. Raising the backfill.trigger of the "+entryResource.catalogType.name+
-			" covers every enabled binding, including those Terraform doesn't manage.")
+		entryResource.resetCause(plan, state)+"\n\n- "+strings.Join(resets, "\n- ")+"\n\n"+
+			"Each collection's data is replaced by a fresh backfill from the source, and its inferred schema is cleared. Every "+
+			"materialization of these collections is backfilled too, which truncates its destination tables, and the apply fails "+
+			"if one has on_incompatible_schema_change = \"abort\". Derivations reading these collections are validated in the "+
+			"same publication, so the apply also fails if one relies on fields that only the inferred schemas had.")
 
 	return diagnostics
+}
+
+// resetCause explains which backfill trigger resets the collections: the entry one covers every enabled binding,
+// binding ones only their own.
+func (entryResource *entryResource[D, S]) resetCause(plan tftypes.Value, state tftypes.Value) string {
+	if raisesTrigger(plan, state) {
+		return "Raising the backfill.trigger of the " + entryResource.catalogType.name + " backfills every enabled binding, " +
+			"including those Terraform doesn't manage. These bindings use backfill.strategy = \"dataflowReset\", so the " +
+			"apply resets their collections:"
+	}
+
+	return "These bindings have a raised backfill.trigger and use backfill.strategy = \"dataflowReset\", so the apply resets " +
+		"their collections. The other bindings of the " + entryResource.catalogType.name + " aren't backfilled:"
 }
 
 // warnEntryBackfill warns, when the plan raises the entry backfill trigger, about every binding it backfills without
@@ -261,11 +264,12 @@ func (entryResource *entryResource[D, S]) warnPendingResets(plan tftypes.Value, 
 		return diagnostics
 	}
 
-	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Dataflow reset strategy", plan),
-		"These bindings resolve to backfill.strategy = \"dataflowReset\":\n\n- "+strings.Join(pending, "\n- ")+"\n\n"+
-			"This apply doesn't reset them, but the next time their backfill.trigger, or the "+entryResource.catalogType.name+"'s, is raised, "+
-			"it will: their collections will be replaced by a fresh backfill from the source, and every materialization of them "+
-			"will truncate its destination tables. To backfill a binding without a reset, set backfill.strategy = \"incremental\" on it.")
+	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Bindings set to dataflow reset", plan),
+		"These bindings use backfill.strategy = \"dataflowReset\", set on them or on the "+entryResource.catalogType.name+":\n\n- "+
+			strings.Join(pending, "\n- ")+"\n\n"+
+			"This apply doesn't reset them. But the next time their backfill.trigger or the "+entryResource.catalogType.name+"'s is raised, "+
+			"their collections are replaced by a fresh backfill from the source, and every materialization of them truncates its "+
+			"destination tables. To backfill a binding without a reset, set backfill.strategy = \"incremental\" on it.")
 
 	return diagnostics
 }
@@ -357,8 +361,8 @@ func (entryResource *entryResource[D, S]) warnUnmanagedBindingsRemoval(plan tfty
 
 	if err == nil && len(removed) > 0 {
 		diagnostics.AddAttributeWarning(path.Root(keepUnmanagedBindingsAttribute), entryResource.warningSummary("Unmanaged bindings removed", plan),
-			"With keep_unmanaged_bindings = false, Terraform manages every binding, so the apply removes these live bindings the "+
-				"configuration doesn't declare, which the plan can't show:\n\n- "+strings.Join(removed, "\n- ")+
+			"With keep_unmanaged_bindings = false, Terraform manages every binding, so the apply removes these bindings, which "+
+				"exist in Estuary but aren't declared in the configuration. The plan can't show their removal:\n\n- "+strings.Join(removed, "\n- ")+
 				"\n\nTo keep one, declare it in bindings.")
 	}
 
@@ -383,6 +387,54 @@ func (entryResource *entryResource[D, S]) warnAddedBindings(plan tftypes.Value, 
 	}
 
 	diagnostics.AddAttributeWarning(added.setting, entryResource.warningSummary(added.summary, plan), detail)
+
+	return diagnostics
+}
+
+// warnNamingChange warns that a target_naming change, as in the dashboard, only names the bindings added from now on.
+func (entryResource *entryResource[D, S]) warnNamingChange(plan tftypes.Value, state tftypes.Value) diag.Diagnostics {
+	var diagnostics diag.Diagnostics
+
+	previous, err := attributeValue(state, targetNamingPath)
+
+	if err != nil {
+		return diagnostics
+	}
+
+	current, err := attributeValue(plan, targetNamingPath)
+
+	if err != nil || !current.IsFullyKnown() || current.Equal(previous) {
+		return diagnostics
+	}
+
+	diagnostics.AddAttributeWarning(path.Root(targetNamingAttribute), entryResource.warningSummary("Target naming change only names new bindings", plan),
+		"As in the dashboard, the new target_naming only names the bindings added from now on: those the source capture "+
+			"adds and those declared without their own schema or table. Existing bindings keep theirs, so the plan shows no "+
+			"change to them.\n\nTo move an existing binding, declare it in bindings with its resource schema or table set to "+
+			"the new name. The connector then materializes it into a new table and leaves the old table in place.")
+
+	return diagnostics
+}
+
+// warnMovedTables warns about bindings the plan moves to another table, which the connector backfills from scratch.
+func (entryResource *entryResource[D, S]) warnMovedTables(plan tftypes.Value, readLive liveReader) diag.Diagnostics {
+	var diagnostics diag.Diagnostics
+
+	if entryResource.catalogType.movedTables == nil {
+		return diagnostics
+	}
+
+	var moved []string = entryResource.catalogType.movedTables(plan, readLive)
+
+	if len(moved) > 0 {
+		diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Bindings materialize into new tables", plan),
+			"These bindings change their schema or table, so the connector materializes each into a new table:\n\n- "+strings.Join(moved, "\n- ")+
+				"\n\nThe connector writes new data to each new table and leaves the old table in place, no longer updated. "+
+				"Depending on the connector, the data already materialized may not be copied over: to fill a new table from the "+
+				"start of its collection, raise the binding's backfill.trigger. For large collections, this can take a long time and "+
+				"cost warehouse credits.\n\nIf a new table already exists in the destination, the apply fails. Drop the table "+
+				"first, or ask Estuary support whether the allow_existing_tables_for_new_bindings feature flag suits your case.")
+	}
 
 	return diagnostics
 }

@@ -3,6 +3,7 @@ package builder
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -32,6 +33,18 @@ func TestSecretsHash(test *testing.T) {
 		test.Error("hashes of the same secret are equal, want a new salt for each hash")
 	}
 
+	fewerIterations, err := secretHash("secret", make([]byte, secretsHashSaltSize), 1000)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	longerSalt, err := secretHash("secret", make([]byte, 2*secretsHashSaltSize), secretsHashIterations)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
 	expectations := map[string]struct {
 		secret string
 		stored string
@@ -45,11 +58,20 @@ func TestSecretsHash(test *testing.T) {
 		"malformed iterations":  {"secret", strings.Replace(hash, "$600000$", "$many$", 1), false},
 		"malformed stored hash": {"secret", "secret", false},
 		"empty stored hash":     {"secret", "", false},
+		"fewer iterations":      {"secret", fewerIterations, true},
+		"more iterations":       {"secret", strings.Replace(hash, "$600000$", "$2147483647$", 1), false},
+		"another salt size":     {"secret", longerSalt, false},
 	}
 
 	for name, expected := range expectations {
+		var start time.Time = time.Now()
+
 		if got := verifySecret(expected.secret, expected.stored); got != expected.want {
 			test.Errorf("%s: verifySecret = %v, want %v", name, got, expected.want)
+		}
+
+		if elapsed := time.Since(start); elapsed > 10*time.Second {
+			test.Errorf("%s: verifySecret took %s, want stored hash parameters bounded", name, elapsed)
 		}
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
@@ -53,8 +52,14 @@ func (stringNode) attribute(field field) schema.Attribute {
 		validators = append(validators, stringvalidator.OneOf(field.enum...))
 	}
 
-	if field.forbidsCredentials {
-		validators = append(validators, credentialsValidator{})
+	if field.credentials != catalog.CredentialsAllowed {
+		validators = append(validators, credentialsValidator{credentials: field.credentials})
+	}
+
+	// A declared secret must hold a value, so an empty variable never publishes an entry without its credential.
+	// Leaving the attribute out stays valid, publishing the entry without it.
+	if field.secret {
+		validators = append(validators, stringvalidator.LengthAtLeast(1))
 	}
 
 	return schema.StringAttribute{
@@ -125,10 +130,17 @@ func (check yamlStringValidator) ValidateString(_ context.Context, validateReq v
 // redacted replaces each credential RedactCredentials removes.
 const redacted string = "***"
 
-// credentialsValidator rejects connection URIs holding credentials, which state and logs would hold in plain text.
-type credentialsValidator struct{}
+// credentialsValidator rejects connection URIs holding the credentials its field forbids, which state and logs would
+// hold in plain text.
+type credentialsValidator struct {
+	credentials catalog.Credentials
+}
 
-func (credentialsValidator) Description(context.Context) string {
+func (check credentialsValidator) Description(context.Context) string {
+	if check.credentials == catalog.CredentialsPassword {
+		return "value must hold only the user, host and connection options, without password"
+	}
+
 	return "value must hold only the host and connection options, without credentials"
 }
 
@@ -136,51 +148,78 @@ func (check credentialsValidator) MarkdownDescription(ctx context.Context) strin
 	return check.Description(ctx)
 }
 
-func (credentialsValidator) ValidateString(_ context.Context, validateReq validator.StringRequest, validateResp *validator.StringResponse) {
+func (check credentialsValidator) ValidateString(_ context.Context, validateReq validator.StringRequest, validateResp *validator.StringResponse) {
 	if validateReq.ConfigValue.IsNull() || validateReq.ConfigValue.IsUnknown() {
 		return
 	}
 
-	if _, holds := redactCredentials(validateReq.ConfigValue.ValueString()); holds {
-		validateResp.Diagnostics.AddAttributeError(validateReq.Path, "Credentials in connection string",
-			"Set only the host and connection options here. Credentials, such as user:password@ or a password option, "+
-				"would be stored in plain text in state and logs: set them in user and password instead, which are write-only.")
+	if _, holds := redactCredentials(validateReq.ConfigValue.ValueString(), check.credentials); !holds {
+		return
 	}
+
+	if check.credentials == catalog.CredentialsPassword {
+		validateResp.Diagnostics.AddAttributeError(validateReq.Path, "Password in connection string",
+			"A password, such as user:password@ or a password option, would be stored in plain text in state and logs. "+
+				"Keep only the user, as in user@hostname, and authenticate with the connector's write-only attributes instead, such as private_key.")
+
+		return
+	}
+
+	validateResp.Diagnostics.AddAttributeError(validateReq.Path, "Credentials in connection string",
+		"Credentials, such as user:password@ or a password or token option, would be stored in plain text in state and logs. "+
+			"Set them in the connector's write-only attributes instead, such as password or a header value.")
 }
 
-// ForbidsCredentials reports whether a schema attribute rejects connection URIs holding credentials.
-func ForbidsCredentials(attribute schema.Attribute) bool {
+// AttributeCredentials returns which credentials a schema attribute rejects in connection URIs, CredentialsAllowed when
+// it rejects none.
+func AttributeCredentials(attribute schema.Attribute) catalog.Credentials {
 	text, isString := attribute.(schema.StringAttribute)
 
-	return isString && slices.ContainsFunc(text.Validators, func(check validator.String) bool {
-		_, isCredentials := check.(credentialsValidator)
+	if !isString {
+		return catalog.CredentialsAllowed
+	}
 
-		return isCredentials
-	})
+	for _, check := range text.Validators {
+		if credentials, isCredentials := check.(credentialsValidator); isCredentials {
+			return credentials.credentials
+		}
+	}
+
+	return catalog.CredentialsAllowed
 }
 
 // uriScheme matches the scheme starting a URI, such as mongodb+srv://.
 var uriScheme *regexp.Regexp = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
 
-// RedactCredentials returns a connection URI, with or without scheme, with its user info and the values of its
-// credential options replaced by ***. Any @ counts as user info, as hosts and options never hold one.
-func RedactCredentials(value string) string {
-	safe, _ := redactCredentials(value)
+// RedactCredentials returns a connection URI, with or without scheme, with the credentials its field forbids replaced
+// by ***: the whole user info, or only its password with CredentialsPassword, and the values of credential options.
+// Any @ counts as user info, as hosts and options never hold one.
+func RedactCredentials(value string, credentials catalog.Credentials) string {
+	safe, _ := redactCredentials(value, credentials)
 
 	return safe
 }
 
 // redactCredentials returns RedactCredentials of value, and whether value holds credentials, *** placeholders
 // included, so a redacted value is never accepted as configuration.
-func redactCredentials(value string) (string, bool) {
+func redactCredentials(value string, credentials catalog.Credentials) (string, bool) {
 	var start int = len(uriScheme.FindString(value))
 	var holds bool
 
 	if at := strings.LastIndex(value, "@"); at >= 0 {
 		start = min(start, at)
-		holds = true
 
-		value = value[:start] + redacted + value[at:]
+		if credentials == catalog.CredentialsPassword {
+			if user, _, hasPassword := strings.Cut(value[start:at], ":"); hasPassword {
+				holds = true
+
+				value = value[:start] + user + ":" + redacted + value[at:]
+			}
+		} else {
+			holds = true
+
+			value = value[:start] + redacted + value[at:]
+		}
 	}
 
 	base, options, hasOptions := strings.Cut(value, "?")

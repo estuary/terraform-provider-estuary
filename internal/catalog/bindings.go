@@ -5,8 +5,11 @@ import (
 )
 
 // Spec document keys of captures and materializations. ResourceMetaKey holds the control-plane metadata of a binding
-// resource, such as the resource path.
+// resource, such as the resource path. ExpectPubIDKey holds the publication ID the control plane must find live,
+// NewEntryPubID asserting no entry has the name yet.
 const (
+	ExpectPubIDKey  string = "expectPubId"
+	NewEntryPubID   string = "00:00:00:00:00:00:00:00"
 	EndpointKey     string = "endpoint"
 	ConnectorKey    string = "connector"
 	ImageKey        string = "image"
@@ -50,6 +53,14 @@ func Bindings(document map[string]any) []any {
 	bindings, _ := document[BindingsKey].([]any)
 
 	return bindings
+}
+
+// BindingDisabled reports whether a binding document sets disable.
+func BindingDisabled(binding any) bool {
+	object, _ := binding.(map[string]any)
+	disable, _ := object[DisableKey].(bool)
+
+	return disable
 }
 
 // BindingResource returns a binding document's resource, nil without one.

@@ -19,10 +19,31 @@ type taggedSpec struct {
 	Keys        []string          `yaml:"keys" secret:"true"`
 	Labels      map[string]string `yaml:"labels"`
 	Address     string            `yaml:"address" credentials:"forbidden"`
+	Endpoint    string            `yaml:"endpoint" credentials:"password"`
+	Misspelled  string            `yaml:"misspelled" credentials:"forbiden"`
 	Hosts       []string          `yaml:"hosts" credentials:"forbidden"`
 	Mode        string            `yaml:"mode,omitempty" backfill:"mode" description:"Backfill mode."`
 	Counter     int               `yaml:"counter" backfill:"mode"`
+	Delta       bool              `yaml:"delta_updates,omitempty" x-delta-updates:"true"`
+	Merge       bool              `yaml:"merge,omitempty"`
+	Append      string            `yaml:"append" x-delta-updates:"true"`
 	Inlined     struct{}          `yaml:",inline"`
+}
+
+func TestDeltaUpdatesField(test *testing.T) {
+	expectations := map[string]bool{
+		"Delta":  true,
+		"Merge":  false,
+		"Append": false,
+	}
+
+	for name, want := range expectations {
+		field, _ := reflect.TypeOf(taggedSpec{}).FieldByName(name)
+
+		if got := catalog.DeltaUpdatesField(field); got != want {
+			test.Errorf("%s: DeltaUpdatesField = %v, want %v", name, got, want)
+		}
+	}
 }
 
 func TestFieldOptions(test *testing.T) {
@@ -109,15 +130,19 @@ func TestEnumValues(test *testing.T) {
 
 func TestValidateTags(test *testing.T) {
 	expectations := map[string]bool{
-		"ServerCA": true,
-		"SSLMode":  true,
-		"Labels":   true,
-		"Ports":    false,
-		"Keys":     false,
-		"Address":  true,
-		"Hosts":    false,
-		"Mode":     true,
-		"Counter":  false,
+		"ServerCA":   true,
+		"SSLMode":    true,
+		"Labels":     true,
+		"Ports":      false,
+		"Keys":       false,
+		"Address":    true,
+		"Endpoint":   true,
+		"Misspelled": false,
+		"Hosts":      false,
+		"Mode":       true,
+		"Counter":    false,
+		"Delta":      true,
+		"Append":     false,
 	}
 
 	for name, valid := range expectations {
@@ -129,18 +154,19 @@ func TestValidateTags(test *testing.T) {
 	}
 }
 
-func TestForbidsCredentials(test *testing.T) {
-	expectations := map[string]bool{
-		"Address":  true,
-		"Hosts":    false,
-		"Password": false,
+func TestFieldCredentials(test *testing.T) {
+	expectations := map[string]catalog.Credentials{
+		"Address":  catalog.CredentialsForbidden,
+		"Endpoint": catalog.CredentialsPassword,
+		"Hosts":    catalog.CredentialsAllowed,
+		"Password": catalog.CredentialsAllowed,
 	}
 
 	for name, want := range expectations {
 		field, _ := reflect.TypeOf(taggedSpec{}).FieldByName(name)
 
-		if got := catalog.ForbidsCredentials(field); got != want {
-			test.Errorf("%s: ForbidsCredentials = %v, want %v", name, got, want)
+		if got := catalog.FieldCredentials(field); got != want {
+			test.Errorf("%s: FieldCredentials = %q, want %q", name, got, want)
 		}
 	}
 }

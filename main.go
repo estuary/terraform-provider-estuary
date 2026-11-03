@@ -9,10 +9,15 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )
 
+// Generates the Terraform Registry documentation under docs from the provider schema, examples and templates.
+//go:generate go tool tfplugindocs generate --provider-name estuary
+
 var version string = "dev"
 var debug bool = false
 
 func main() {
+	//go:generate go tool tfplugindocs generate --provider-name estuary --rendered-provider-name Estuary
+
 	flag.BoolVar(&debug, "debug", false, "Set to true to run the provider with support for debuggers like delve")
 	flag.Parse()
 

@@ -11,4 +11,5 @@ var New func() resource.Resource = builder.NewMaterialization[icebergdelta.Confi
 	TypeName:      "materialization_s3_iceberg",
 	Image:         icebergdelta.Image,
 	ConnectorName: icebergdelta.ConnectorName,
+	Description:   "Materializes Estuary collections into Apache Iceberg tables in Amazon S3, appending every change as delta updates.",
 })

@@ -72,14 +72,14 @@ func TestPulledSpec(test *testing.T) {
 					"config": map[string]any{"address": "db.example.com:5432", "user": "flow_capture", "password_sops": "ENC[AES256_GCM,data:abc,type:str]"},
 				},
 			},
-			"bindings": []any{},
+			"bindings":    []any{},
+			"expectPubId": "10:a5:1e:b0:27:dc:fe:5a",
 		},
 		"acmeCo/warehouse/materialize-postgres": {
 			"bindings": []any{
 				map[string]any{"resource": map[string]any{"table": "users"}, "source": map[string]any{"name": "acmeCo/movies/users", "notBefore": time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}},
 			},
 		},
-		"acmeCo/missing/source-mongodb": nil,
 	}
 
 	var directory string = test.TempDir()
@@ -106,6 +106,34 @@ func TestPulledSpec(test *testing.T) {
 
 	if _, err := pulledSpec(content, "acmeCo/movies/source-postgres", test.TempDir()); err == nil {
 		test.Error("pulledSpec accepted a config file that doesn't exist")
+	}
+}
+
+func TestPulledSpecReadsNothingAsDeleted(test *testing.T) {
+	for _, content := range []string{"", "\n", "{}", "captures: {}\nmaterializations: {}\n"} {
+		spec, err := pulledSpec([]byte(content), "acmeCo/movies/source-mongodb", test.TempDir())
+
+		if err != nil || spec != nil {
+			test.Errorf("%q: spec = %v, %v, want nil for a deleted entry", content, spec, err)
+		}
+	}
+}
+
+func TestPulledSpecRejectsUnexpectedContent(test *testing.T) {
+	expectations := map[string]string{
+		"a sibling entry":           "captures:\n  acmeCo/movies-v2/source-mongodb: { bindings: [] }\n",
+		"another case":              "captures:\n  AcmeCo/movies/source-mongodb: { bindings: [] }\n",
+		"a collection of the name":  "collections:\n  acmeCo/movies/source-mongodb: { key: [/id] }\n",
+		"a null spec":               "captures:\n  acmeCo/movies/source-mongodb: null\n",
+		"no bindings":               "captures:\n  acmeCo/movies/source-mongodb: { endpoint: {} }\n",
+		"null bindings":             "captures:\n  acmeCo/movies/source-mongodb: { bindings: null }\n",
+		"bindings that aren't list": "materializations:\n  acmeCo/movies/source-mongodb: { bindings: {} }\n",
+	}
+
+	for name, content := range expectations {
+		if spec, err := pulledSpec([]byte(content), "acmeCo/movies/source-mongodb", test.TempDir()); err == nil {
+			test.Errorf("%s: pulledSpec = %v, want an error rather than a deletion or removed bindings", name, spec)
+		}
 	}
 }
 

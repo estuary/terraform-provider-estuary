@@ -1,4 +1,20 @@
 captures:
+  acmeCo/postgres/password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-postgres:v3
+        config:
+          address: 123.4.567.89:5432
+          user: flow_capture
+          database: postgres
+          historyMode: false
+          credentials:
+            auth_type: UserPassword
+            password: <secret>
+    bindings:
+      - resource: { namespace: public, stream: orders }
+        target: acmeCo/postgres/orders
+
   acmeCo/aurora/postgres-password:
     endpoint:
       connector:

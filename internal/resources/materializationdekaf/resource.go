@@ -71,7 +71,7 @@ func (document[V]) FromSpec(name string, spec dekaf.Spec) document[V] {
 func newResource[V variant](typeName string, consumer string) func() resource.Resource {
 	var fixed V
 
-	return builder.NewMaterializationFromDocument[document[V]](builder.Connector{
+	return builder.NewMaterializationFromDocument[document[V], dekaf.Spec, dekaf.Config, dekaf.Resource](builder.Connector{
 		TypeName:      typeName,
 		ConnectorName: dekaf.ConnectorName(fixed.variant()),
 		Description:   "Exposes Estuary collections as Kafka topics through Dekaf, for " + consumer + " to read.",

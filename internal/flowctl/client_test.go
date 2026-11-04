@@ -51,21 +51,21 @@ func TestExecCommandMasksURLAndJSONEncodedSecretsInErrors(test *testing.T) {
 	}
 }
 
-func TestRunOnSpecReturnsTheWrittenSpec(test *testing.T) {
-	var client *Client = fakeFlowctl(test, "#!/bin/sh\neval spec=\\${$#}\necho \"args: $*\" > \"$spec\"\n")
+func TestPullReadsTheWrittenTree(test *testing.T) {
+	var client *Client = fakeFlowctl(test, "#!/bin/sh\neval spec=\\${$#}\nprintf 'captures:\\n  acmeCo/source: { args: \"%s\" }\\n' \"$*\" > \"$spec\"\n")
 	var workspace string
 
 	err := inWorkspace(map[string][]byte{"dekaf.config.yaml": []byte("token: x")}, func(directory string) error {
 		workspace = directory
 
-		content, err := client.runOnSpec(context.Background(), directory, specFile, "--target", "catalog", "pull-specs")
+		tree, err := client.pull(context.Background(), directory, "acmeCo/source")
 
 		if err != nil {
 			return err
 		}
 
-		if want := "args: catalog pull-specs --target " + filepath.Join(directory, specFile) + "\n"; string(content) != want {
-			test.Errorf("spec = %q, want %q", content, want)
+		if want := "catalog pull-specs --name=acmeCo/source --overwrite --target " + filepath.Join(directory, specFile); tree.capture("acmeCo/source")["args"] != want {
+			test.Errorf("pulled tree = %v, want the capture flowctl wrote with %q", tree.files, want)
 		}
 
 		if _, err := os.Stat(filepath.Join(directory, "dekaf.config.yaml")); err != nil {

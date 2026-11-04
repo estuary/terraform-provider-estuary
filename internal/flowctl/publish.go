@@ -3,6 +3,7 @@ package flowctl
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -12,27 +13,18 @@ import (
 )
 
 const dekafConfigFile string = "dekaf.config.yaml"
-const resetsFile string = "resets.flow.yaml"
 
 // withDeclaredBindings replaces discovered bindings with declared ones of the same resource, keeping discovered
-// metadata such as the path. A declared binding naming another target takes over the discovered collection.
-func withDeclaredBindings(content []byte, name string, declared []any, identifier catalog.BindingsIdentifier) ([]byte, error) {
-	var catalogSpec map[string]any
+// metadata. A declared binding naming another target renames the discovered collection.
+func withDeclaredBindings(tree *catalogTree, name string, declared []any, identifier catalog.BindingsIdentifier) error {
 	var positions map[string]int = map[string]int{}
-
-	if err := yaml.Unmarshal(content, &catalogSpec); err != nil {
-		return nil, fmt.Errorf("parsing discovered spec: %w", err)
-	}
-
-	var capture map[string]any = utils.Lookup(catalogSpec, "captures", name)
+	var capture map[string]any = tree.capture(name)
 
 	if capture == nil {
-		return nil, fmt.Errorf("discovered spec has no capture %s", name)
+		return fmt.Errorf("discovered spec has no capture %s", name)
 	}
 
 	var discovered []any = catalog.Bindings(capture)
-
-	collections, _ := catalogSpec["collections"].(map[string]any)
 
 	for position, binding := range discovered {
 		if key, err := bindingKey(binding, identifier); err == nil {
@@ -44,7 +36,7 @@ func withDeclaredBindings(content []byte, name string, declared []any, identifie
 		key, err := bindingKey(binding, identifier)
 
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		position, found := positions[key]
@@ -60,9 +52,9 @@ func withDeclaredBindings(content []byte, name string, declared []any, identifie
 
 		catalog.KeepResourceMeta(discovered[position], binding)
 
-		if spec, isDiscovered := collections[previous]; isDiscovered && target != previous {
-			if _, exists := collections[target]; !exists {
-				collections[target] = spec
+		if collections := tree.collections(previous); collections != nil && target != previous {
+			if tree.collections(target) == nil {
+				collections[target] = collections[previous]
 			}
 
 			delete(collections, previous)
@@ -73,7 +65,7 @@ func withDeclaredBindings(content []byte, name string, declared []any, identifie
 
 	capture[catalog.BindingsKey] = discovered
 
-	return yaml.Marshal(catalogSpec)
+	return nil
 }
 
 // bindingKey identifies a binding by its resource path, else by its target.
@@ -89,38 +81,38 @@ func bindingKey(binding any, identifier catalog.BindingsIdentifier) (string, err
 	return "target:" + catalog.BindingCollection(binding), nil
 }
 
-// withResets adds the live spec of each collection with reset set, so the control plane runs a dataflow reset,
-// backfilling every binding of it, as the dashboard does.
-func withResets(spec []byte, pulled []byte, collections []string) ([]byte, error) {
-	var catalogSpec map[string]any
-	var pulledSpec struct {
-		Collections map[string]map[string]any `yaml:"collections"`
-	}
-	var resets map[string]any = map[string]any{}
+// resetsDirectory is the workspace directory the collections to reset are pulled into, imported from the spec file.
+const resetsDirectory string = "resets"
 
-	if err := yaml.Unmarshal(spec, &catalogSpec); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", specFile, err)
-	}
-
-	if err := yaml.Unmarshal(pulled, &pulledSpec); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", resetsFile, err)
-	}
-
+// markResets sets reset and drops the publication ID of each pulled collection, so the control plane runs a dataflow
+// reset, as the dashboard does.
+func markResets(tree *catalogTree, collections []string) error {
 	for _, name := range collections {
-		collection, found := pulledSpec.Collections[name]
+		collection, _, _ := tree.entry(collectionsKey, name)
 
-		if !found {
-			return nil, fmt.Errorf("collection %s to reset isn't in the pulled spec", name)
+		if collection == nil {
+			return fmt.Errorf("collection %s to reset isn't in the pulled spec", name)
 		}
 
 		delete(collection, catalog.ExpectPubIDKey)
 
 		collection["reset"] = true
-
-		resets[name] = collection
 	}
 
-	catalogSpec["collections"] = resets
+	return nil
+}
+
+// withImport adds file to the imports of the spec.
+func withImport(spec []byte, file string) ([]byte, error) {
+	var catalogSpec map[string]any
+
+	if err := yaml.Unmarshal(spec, &catalogSpec); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", specFile, err)
+	}
+
+	imports, _ := catalogSpec[importKey].([]any)
+
+	catalogSpec[importKey] = append(imports, file)
 
 	return yaml.Marshal(catalogSpec)
 }
@@ -217,13 +209,17 @@ func (err conflictError) Unwrap() error {
 
 // addDiscovered discovers every resource of the binding-less capture, then lays the declared bindings over them.
 func (client *Client) addDiscovered(ctx context.Context, directory string, name string, declared []any, identifier catalog.BindingsIdentifier) error {
-	if _, err := client.discover(ctx, directory); err != nil {
+	tree, err := client.discover(ctx, directory)
+
+	if err != nil {
 		return err
 	}
 
-	return rewriteSpec(directory, func(content []byte) ([]byte, error) {
-		return withDeclaredBindings(content, name, declared, identifier)
-	})
+	if err := withDeclaredBindings(tree, name, declared, identifier); err != nil {
+		return err
+	}
+
+	return tree.write()
 }
 
 // addResetsStep returns the step adding the collections to reset, nil without any.
@@ -237,22 +233,29 @@ func (client *Client) addResetsStep(resets []string) func(ctx context.Context, d
 	}
 }
 
-// addResets pulls the collections to reset into the workspace and adds them with reset set, see withResets.
+// addResets pulls the collections to reset into the resets directory of the workspace, marks them, see markResets,
+// and imports them from the spec file, so they publish along with it.
 func (client *Client) addResets(ctx context.Context, directory string, collections []string) error {
-	var arguments []string = []string{"catalog", "pull-specs"}
-
-	for _, collection := range collections {
-		arguments = append(arguments, flagValue("--name", collection))
+	if err := os.Mkdir(filepath.Join(directory, resetsDirectory), 0700); err != nil {
+		return fmt.Errorf("creating the workspace of the collections to reset: %w", err)
 	}
 
-	pulled, err := client.runOnSpec(ctx, directory, resetsFile, "--target", append(arguments, "--flat", "--overwrite")...)
+	tree, err := client.pull(ctx, filepath.Join(directory, resetsDirectory), collections...)
 
 	if err != nil {
 		return err
 	}
 
+	if err := markResets(tree, collections); err != nil {
+		return err
+	}
+
+	if err := tree.write(); err != nil {
+		return err
+	}
+
 	return rewriteSpec(directory, func(spec []byte) ([]byte, error) {
-		return withResets(spec, pulled, collections)
+		return withImport(spec, resetsDirectory+"/"+specFile)
 	})
 }
 

@@ -8,22 +8,22 @@ import (
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
-	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization/icebergdelta"
-	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization/icebergs3"
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization/iceberg"
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization/s3iceberg"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 	"gopkg.in/yaml.v3"
 )
 
 var icebergConnector Connector = Connector{
 	TypeName:      "materialization_iceberg",
-	Image:         icebergs3.Image,
-	ConnectorName: icebergs3.ConnectorName,
+	Image:         iceberg.Image,
+	ConnectorName: iceberg.ConnectorName,
 }
 
 var s3IcebergConnector Connector = Connector{
 	TypeName:      "materialization_s3_iceberg",
-	Image:         icebergdelta.Image,
-	ConnectorName: icebergdelta.ConnectorName,
+	Image:         s3iceberg.Image,
+	ConnectorName: s3iceberg.ConnectorName,
 }
 
 func assertMaterializationSamplesRoundTrip[C, R any](test *testing.T, connector Connector, directory string) {
@@ -61,30 +61,30 @@ func assertMaterializationSamplesRoundTrip[C, R any](test *testing.T, connector 
 }
 
 func TestIcebergSamplesRoundTrip(test *testing.T) {
-	assertMaterializationSamplesRoundTrip[icebergs3.Config, icebergs3.Resource](test, icebergConnector, "../../catalog/materialization/icebergs3/testdata")
+	assertMaterializationSamplesRoundTrip[iceberg.Config, iceberg.Resource](test, icebergConnector, "../../catalog/materialization/iceberg/testdata")
 }
 
 func TestS3IcebergSamplesRoundTrip(test *testing.T) {
-	assertMaterializationSamplesRoundTrip[icebergdelta.Config, icebergdelta.Resource](test, s3IcebergConnector, "../../catalog/materialization/icebergdelta/testdata")
+	assertMaterializationSamplesRoundTrip[s3iceberg.Config, s3iceberg.Resource](test, s3IcebergConnector, "../../catalog/materialization/s3iceberg/testdata")
 }
 
 func TestS3IcebergDeltaUpdatesKeepsOmission(test *testing.T) {
 	var explicitFalse bool = false
 
-	codec, err := newCodec[materializationDocument[icebergdelta.Config, icebergdelta.Resource]](s3IcebergConnector, materializationType[icebergdelta.Config, icebergdelta.Resource]())
+	codec, err := newCodec[materializationDocument[s3iceberg.Config, s3iceberg.Resource]](s3IcebergConnector, materializationType[s3iceberg.Config, s3iceberg.Resource]())
 
 	if err != nil {
 		test.Fatal(err)
 	}
 
 	for label, deltaUpdates := range map[string]*bool{"omitted": nil, "false": &explicitFalse} {
-		var spec MaterializationSpec[icebergdelta.Config, icebergdelta.Resource] = MaterializationSpec[icebergdelta.Config, icebergdelta.Resource]{
-			Endpoint: endpoint.ConnectorSpec[icebergdelta.Config]{Connector: endpoint.Connector[icebergdelta.Config]{
-				Image:  icebergdelta.Image,
-				Config: icebergdelta.Config{Bucket: "lake", Region: "us-east-1", Namespace: "analytics", Catalog: icebergdelta.CatalogConfig{CatalogType: icebergdelta.CatalogTypeGlue}},
+		var spec MaterializationSpec[s3iceberg.Config, s3iceberg.Resource] = MaterializationSpec[s3iceberg.Config, s3iceberg.Resource]{
+			Endpoint: endpoint.ConnectorSpec[s3iceberg.Config]{Connector: endpoint.Connector[s3iceberg.Config]{
+				Image:  s3iceberg.Image,
+				Config: s3iceberg.Config{Bucket: "lake", Region: "us-east-1", Namespace: "analytics", Catalog: s3iceberg.CatalogConfig{CatalogType: s3iceberg.CatalogTypeGlue}},
 			}},
-			Bindings: []materialization.Binding[icebergdelta.Resource]{
-				{Resource: icebergdelta.Resource{Table: "orders", DeltaUpdates: deltaUpdates}, Source: materialization.BindingSource{Name: "acmeCo/orders"}},
+			Bindings: []materialization.Binding[s3iceberg.Resource]{
+				{Resource: s3iceberg.Resource{Table: "orders", DeltaUpdates: deltaUpdates}, Source: materialization.BindingSource{Name: "acmeCo/orders"}},
 			},
 		}
 

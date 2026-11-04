@@ -2,12 +2,13 @@
 
 [Back to the provider documentation](../../../README.md)
 
-These resources manage PostgreSQL capture connectors on Amazon. Each binding captures one table into an Estuary collection, using change data capture through PostgreSQL logical replication: an initial backfill of the table contents, followed by its inserts, updates and deletes as they happen.
+These resources manage PostgreSQL capture connectors. Each binding captures one table into an Estuary collection, using change data capture through PostgreSQL logical replication: an initial backfill of the table contents, followed by its inserts, updates and deletes as they happen.
 
 They're configured the same way. Pick the resource matching your database:
 
 | Resource | Database | Default image | Connector name |
 |---|---|---|---|
+| `estuary_source_postgres` | [PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/), self-hosted or on Google Cloud SQL, Azure Database for PostgreSQL and other platforms | `ghcr.io/estuary/source-postgres:v3` | `source-postgres` |
 | `estuary_source_aurora_postgres` | [Amazon Aurora for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-aurora-postgres/) | `ghcr.io/estuary/source-amazon-aurora-postgres:v3` | `source-amazon-aurora-postgres` |
 | `estuary_source_rds_postgres` | [Amazon RDS for PostgreSQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/PostgreSQL/amazon-rds-postgres/) | `ghcr.io/estuary/source-amazon-rds-postgres:v3` | `source-amazon-rds-postgres` |
 
@@ -311,7 +312,7 @@ Backfill control of the binding. See [Backfill Control](../../../docs/guides/bac
 
 ## Data Source
 
-`data "estuary_source_aurora_postgres"` and `data "estuary_source_rds_postgres"` read every live binding of a capture by name: the declared ones, those discovery (`auto_discover`) adds and those added in the dashboard. Terraform doesn't manage live bindings, so the resource neither stores them nor shows them in plans: read them here, for a capture of this configuration or one managed elsewhere:
+`data "estuary_source_postgres"`, `data "estuary_source_aurora_postgres"` and `data "estuary_source_rds_postgres"` read every live binding of a capture by name: the declared ones, those discovery (`auto_discover`) adds and those added in the dashboard. Terraform doesn't manage live bindings, so the resource neither stores them nor shows them in plans: read them here, for a capture of this configuration or one managed elsewhere:
 
 ```hcl
 # A capture of this configuration

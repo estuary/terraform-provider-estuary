@@ -73,8 +73,8 @@ Connectors configured the same way share one page, with examples and every attri
 |---|---|
 | [Amazon DynamoDB](internal/resources/sourcedynamodb/README.md) | `estuary_source_dynamodb` |
 | [MongoDB](internal/resources/sourcemongodb/README.md) | `estuary_source_mongodb` |
-| [MySQL](internal/resources/sourcemysql/README.md) | `estuary_source_aurora_mysql`, `estuary_source_rds_mysql` |
-| [PostgreSQL](internal/resources/sourcepostgres/README.md) | `estuary_source_aurora_postgres`, `estuary_source_rds_postgres` |
+| [MySQL](internal/resources/sourcemysql/README.md) | `estuary_source_mysql`, `estuary_source_aurora_mysql`, `estuary_source_rds_mysql` |
+| [PostgreSQL](internal/resources/sourcepostgres/README.md) | `estuary_source_postgres`, `estuary_source_aurora_postgres`, `estuary_source_rds_postgres` |
 
 ### Materializations
 
@@ -96,7 +96,6 @@ Connectors configured the same way share one page, with examples and every attri
 - [Adding a Connector](#adding-a-connector)
 - [Testing](#testing)
 - [Documentation](#documentation)
-- [Dependency Scanning](#dependency-scanning)
 - [Submitting Changes](#submitting-changes)
 
 ### Prerequisites
@@ -106,7 +105,6 @@ Connectors configured the same way share one page, with examples and every attri
 | [Go](https://go.dev/dl/) | >= 1.27 | Build and test the provider |
 | [Terraform](https://developer.hashicorp.com/terraform/install) | >= 1.11 | Run the provider locally |
 | [`flowctl`](https://docs.estuary.dev/concepts/flowctl/) | Latest | Backend the provider calls to act on Estuary |
-| [mise](https://mise.jdx.dev) | Latest | Installs the pinned Trivy release for dependency scans |
 
 ### Local Setup
 
@@ -151,14 +149,17 @@ internal/
 ├── provider/             # Provider configuration and resource registry
 └── resources/
     ├── builder/          # Generic resource and data source built from a spec
-    └── <connector>/      # One package per connector, with its README
+    ├── materialization*/ # Destination resources of one connector family, with its README
+    └── source*/          # Source resources and data sources of one connector family, with its README
 examples/                 # HCL samples rendered into the Registry docs
 templates/                # tfplugindocs templates and guides
 ```
 
 ### Adding a Connector
 
-The steps below use the HTTP Webhook materialization as the reference. Captures follow the same steps under `capture/`.
+The steps below use the HTTP Webhook materialization as the reference. Captures follow the same steps, with the spec under `internal/catalog/capture/` and the resource in a `source*` package.
+
+A resource package covers a connector family, not one connector: `sourcemysql` holds the MySQL, RDS MySQL and Aurora MySQL resources, all built from the `capture/mysql` spec. Add a variant of an existing family to that package instead of creating a new one.
 
 **1. Define the spec** in `internal/catalog/materialization/webhook/spec.go`. Each field maps to a key of the connector's config, and its tags drive the Terraform schema:
 
@@ -176,8 +177,17 @@ type Config struct {
 |---|---|
 | `yaml` | Key in the connector config; `omitempty` makes the attribute optional |
 | `description` | Attribute description in the schema and the Registry docs (required) |
-| `secret:"true"` | Write-only attribute, never stored in state |
-| `credentials:"forbidden"` | The plan rejects values with embedded credentials |
+| `secret:"true"` | Write-only attribute, never stored in state. String fields whose key contains `password`, `secret`, `token`, `private`, `credential`, `api_key` or `client_key` are secret without the tag |
+| `credentials:"forbidden"` | The plan rejects connection strings with embedded credentials |
+| `credentials:"password"` | The plan rejects connection strings with an embedded password, but allows the user |
+| `enum:"a,b"` | Restricts the attribute to the comma-separated values |
+| `backfill:"mode"` | Marks the binding resource's backfill mode; changing it requires a backfill |
+| `x-collection-name:"true"` | Marks the binding resource's target table or topic |
+| `x-schema-name:"true"` | Marks the binding resource's target schema |
+| `x-delta-updates:"true"` | Marks the binding resource's delta-updates flag (bool fields only) |
+| `x-default-namespace:"true"` | Marks the endpoint's default schema for bindings |
+
+Every tag except `yaml`, `description` and `x-delta-updates` applies only to string fields. On other types, building the schema fails, which `go test ./...` catches.
 
 **2. Create the resource** in `internal/resources/materializationwebhook/resource.go`:
 
@@ -191,6 +201,8 @@ var New func() resource.Resource = builder.NewMaterialization[webhook.Config, we
 ```
 
 Captures use `builder.NewCapture`, and also expose a data source through `builder.NewCaptureDataSource`.
+
+Materializations that don't run a connector image, such as Dekaf, use `builder.NewMaterializationFromDocument` instead. They define their own Terraform document type, which maps to and from the catalog spec through `Spec` and `FromSpec` (see `internal/resources/materializationdekaf/resource.go`).
 
 **3. Register it** in `internal/provider/registry.go`, keeping the list sorted by Terraform type name:
 
@@ -225,7 +237,7 @@ go test ./...
 go test ./internal/catalog/materialization/webhook/ -run TestSpec -v
 ```
 
-`internal/provider/registry_test.go` fails when any attribute is missing a description.
+`internal/provider/registry_test.go` fails when an attribute is missing a description. It walks every resource attribute, nested ones included, and every data source attribute. Data source schemas are flat (`name` and `live_bindings`), so a top-level check covers them.
 
 ### Documentation
 
@@ -239,10 +251,16 @@ The documentation comes from three places:
 
 Each new resource needs `examples/resources/estuary_<type>/resource.tf`, and each data source `examples/data-sources/estuary_<type>/data-source.tf`. Attribute descriptions live in the spec's `description` tags and in the connector README's tables, so change both together.
 
-Never edit `docs/` by hand. Regenerate it:
+Never edit `docs/` by hand. Regenerate it and commit the result with your change, since the Terraform Registry publishes the `docs/` of each release tag:
 
 ```bash
 go generate ./...
+```
+
+A pre-commit hook does this for you: when a commit touches `internal/`, `examples/`, `templates/`, `main.go` or `go.mod`, it regenerates `docs/` and stages the result. Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
 ```
 
 ### Submitting Changes
@@ -251,5 +269,5 @@ go generate ./...
 2. Write commit messages as `<type>: <summary>`, where the type is `feat`, `fix` or `chore`.
 3. Before opening the pull request, check that:
    - [ ] `go vet ./...` and `go test ./...` pass
-   - [ ] `go generate ./...` ran, and new resources have examples and a README
+   - [ ] `go generate ./...` ran, by hand or through the pre-commit hook, and its `docs/` changes are committed, and new resources have examples and a README
 4. Open the pull request against `main`.

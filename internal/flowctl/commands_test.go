@@ -13,14 +13,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// recordingFlowctl records each call, writes the pulled spec to --target and copies published --source files.
+// recordingFlowctl records each call, writes the pulled spec to --target and copies the published --source file, and
+// the resets file it imports, if any.
 const recordingFlowctl string = `#!/bin/sh
 line=""
 previous=""
 for argument in "$@"; do
 	line="$line[$argument]"
 	if [ "$previous" = "--target" ]; then cat "$FLOWCTL_PULLED" > "$argument"; fi
-	if [ "$previous" = "--source" ] && [ "$2" = "publish" ]; then cp "$argument" "$FLOWCTL_PUBLISHED"; fi
+	if [ "$previous" = "--source" ] && [ "$2" = "publish" ]; then
+		cp "$argument" "$FLOWCTL_PUBLISHED"
+		resets="$(dirname "$argument")/resets/flow.yaml"
+		if [ -f "$resets" ]; then cp "$resets" "$FLOWCTL_PUBLISHED_RESETS"; fi
+	fi
 	previous="$argument"
 done
 echo "$line" >> "$FLOWCTL_CALLS"
@@ -32,6 +37,7 @@ const dashName string = "-acmeCo/orders"
 type recording struct {
 	calls     string
 	published string
+	resets    string
 	temporary string
 }
 
@@ -41,12 +47,14 @@ func recordFlowctl(test *testing.T) (*Client, recording) {
 	var record recording = recording{
 		calls:     filepath.Join(directory, "calls"),
 		published: filepath.Join(directory, "published.yaml"),
+		resets:    filepath.Join(directory, "published-resets.yaml"),
 		temporary: test.TempDir(),
 	}
 	var pulled string = filepath.Join(directory, "pulled.yaml")
 
 	test.Setenv("FLOWCTL_CALLS", record.calls)
 	test.Setenv("FLOWCTL_PUBLISHED", record.published)
+	test.Setenv("FLOWCTL_PUBLISHED_RESETS", record.resets)
 	test.Setenv("FLOWCTL_PULLED", pulled)
 	test.Setenv("TMPDIR", record.temporary)
 
@@ -90,29 +98,71 @@ func TestPublishCaptureCommandLines(test *testing.T) {
 	}
 
 	assertCommandLines(test, record.commandLines(test), []string{
-		"[catalog][pull-specs][--name=" + dashName + "][--flat][--overwrite][--target][$WORKSPACE/resets.flow.yaml]",
+		"[catalog][pull-specs][--name=" + dashName + "][--overwrite][--target][$WORKSPACE/resets/flow.yaml]",
 		"[catalog][publish][--source][$WORKSPACE/flow.yaml][--auto-approve][--init-data-plane=ops/dp/private/acmeCo/example-data-plane]",
 	})
 
-	content, err := os.ReadFile(record.published)
+	var published map[string]any = readPublished(test, record.published)
+
+	if utils.Lookup(published, "captures", "acmeCo/source-mongodb", "endpoint", "connector", "config")["address"] != "mongodb://db" {
+		test.Errorf("published spec lost the capture: %v", published)
+	}
+
+	if imports, _ := published["import"].([]any); len(imports) != 1 || imports[0] != "resets/flow.yaml" {
+		test.Errorf("published imports = %v, want the pulled collections to reset", published["import"])
+	}
+
+	if reset := utils.Lookup(readPublished(test, record.resets), "collections", dashName); reset["reset"] != true || reset[catalog.ExpectPubIDKey] != nil {
+		test.Errorf("published resets = %v, want the collection with reset and without its publication ID", reset)
+	}
+}
+
+func TestPublishCaptureResetsCollectionsSharingALastSegment(test *testing.T) {
+	client, record := recordFlowctl(test)
+	var pulled string = filepath.Join(test.TempDir(), "pulled.yaml")
+	var spec catalog.CaptureSpec = catalog.RawCapture(map[string]any{"bindings": []any{}})
+
+	if err := os.WriteFile(pulled, []byte("collections:\n  acmeCo/mysql/sales:\n    key: [/id]\n  acmeCo/postgres/sales:\n    key: [/id]\n"), 0600); err != nil {
+		test.Fatal(err)
+	}
+
+	test.Setenv("FLOWCTL_PULLED", pulled)
+
+	if err := client.PublishCapture(context.Background(), "acmeCo/source-mysql", spec, []string{"acmeCo/mysql/sales", "acmeCo/postgres/sales"}); err != nil {
+		test.Fatal(err)
+	}
+
+	assertCommandLines(test, record.commandLines(test), []string{
+		"[catalog][pull-specs][--name=acmeCo/mysql/sales][--name=acmeCo/postgres/sales][--overwrite][--target][$WORKSPACE/resets/flow.yaml]",
+		"[catalog][publish][--source][$WORKSPACE/flow.yaml][--auto-approve][--init-data-plane=ops/dp/private/acmeCo/example-data-plane]",
+	})
+
+	var resets map[string]any = readPublished(test, record.resets)
+
+	for _, name := range []string{"acmeCo/mysql/sales", "acmeCo/postgres/sales"} {
+		if utils.Lookup(resets, "collections", name)["reset"] != true {
+			test.Errorf("published resets = %v, want %s reset", resets, name)
+		}
+	}
+}
+
+// readPublished returns the parsed content of a published file the fake flowctl copied.
+func readPublished(test *testing.T, file string) map[string]any {
+	test.Helper()
+
+	var published map[string]any
+
+	content, err := os.ReadFile(file)
 
 	if err != nil {
 		test.Fatal(err)
 	}
 
-	var published map[string]any
-
 	if err := yaml.Unmarshal(content, &published); err != nil {
 		test.Fatal(err)
 	}
 
-	if utils.Lookup(published, "captures", "acmeCo/source-mongodb", "endpoint", "connector", "config")["address"] != "mongodb://db" {
-		test.Errorf("published spec lost the capture: %s", content)
-	}
-
-	if reset := utils.Lookup(published, "collections", dashName); reset["reset"] != true || reset[catalog.ExpectPubIDKey] != nil {
-		test.Errorf("published spec lost the reset collection: %s", content)
-	}
+	return published
 }
 
 func TestPublishMaterializationCommandLines(test *testing.T) {
@@ -159,9 +209,9 @@ func TestReadDeleteAndDiscoverCommandLines(test *testing.T) {
 	}
 
 	assertCommandLines(test, record.commandLines(test), []string{
-		"[catalog][pull-specs][--name=" + dashName + "][--flat][--overwrite][--target][$WORKSPACE/flow.yaml]",
+		"[catalog][pull-specs][--name=" + dashName + "][--overwrite][--target][$WORKSPACE/flow.yaml]",
 		"[catalog][delete][--name=" + dashName + "][--dangerous-auto-approve]",
-		"[discover][--flat][--data-plane=ops/dp/private/acmeCo/example-data-plane][--source][$WORKSPACE/flow.yaml]",
+		"[discover][--data-plane=ops/dp/private/acmeCo/example-data-plane][--source][$WORKSPACE/flow.yaml]",
 	})
 }
 

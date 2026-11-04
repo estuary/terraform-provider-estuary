@@ -1,4 +1,4 @@
-package icebergdelta
+package s3iceberg
 
 import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/auth"

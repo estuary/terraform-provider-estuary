@@ -2,12 +2,13 @@
 
 [Back to the provider documentation](../../../README.md)
 
-These resources manage MySQL capture connectors on Amazon. Each binding captures one table into an Estuary collection, using change data capture through the MySQL binary log: an initial backfill of the table contents, followed by its inserts, updates and deletes as they happen.
+These resources manage MySQL capture connectors. Each binding captures one table into an Estuary collection, using change data capture through the MySQL binary log: an initial backfill of the table contents, followed by its inserts, updates and deletes as they happen.
 
 They're configured the same way. Pick the resource matching your database:
 
 | Resource | Database | Default image | Connector name |
 |---|---|---|---|
+| `estuary_source_mysql` | [MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/), self-hosted or on Google Cloud SQL, Azure Database for MySQL and other platforms | `ghcr.io/estuary/source-mysql:v3` | `source-mysql` |
 | `estuary_source_aurora_mysql` | [Amazon Aurora for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/#amazon-aurora) | `ghcr.io/estuary/source-amazon-aurora-mysql:v3` | `source-amazon-aurora-mysql` |
 | `estuary_source_rds_mysql` | [Amazon RDS for MySQL](https://docs.estuary.dev/reference/Connectors/capture-connectors/MySQL/amazon-rds-mysql/) | `ghcr.io/estuary/source-amazon-rds-mysql:v3` | `source-amazon-rds-mysql` |
 
@@ -313,7 +314,7 @@ Backfill control of the binding. See [Backfill Control](../../../docs/guides/bac
 
 ## Data Source
 
-`data "estuary_source_aurora_mysql"` and `data "estuary_source_rds_mysql"` read every live binding of a capture by name: the declared ones, those discovery (`auto_discover`) adds and those added in the dashboard. Terraform doesn't manage live bindings, so the resource neither stores them nor shows them in plans: read them here, for a capture of this configuration or one managed elsewhere:
+`data "estuary_source_mysql"`, `data "estuary_source_aurora_mysql"` and `data "estuary_source_rds_mysql"` read every live binding of a capture by name: the declared ones, those discovery (`auto_discover`) adds and those added in the dashboard. Terraform doesn't manage live bindings, so the resource neither stores them nor shows them in plans: read them here, for a capture of this configuration or one managed elsewhere:
 
 ```hcl
 # A capture of this configuration

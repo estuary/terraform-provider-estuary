@@ -15,6 +15,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization/dekaf"
+	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -132,48 +133,68 @@ func TestPublishDiscoveredCaptureDiscoversBeforePublishing(test *testing.T) {
 
 	var lines []string = strings.Split(strings.TrimSpace(string(content)), "\n")
 
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "discover --flat --data-plane=ops/dp/private/acmeCo/example-data-plane --source ") || !strings.HasPrefix(lines[1], "catalog publish --source ") {
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "discover --data-plane=ops/dp/private/acmeCo/example-data-plane --source ") || !strings.HasPrefix(lines[1], "catalog publish --source ") {
 		test.Fatalf("calls = %q, want a discovery on the data plane then a publication", lines)
 	}
 
-	var discovered string = strings.Fields(lines[0])[4]
+	var discovered string = strings.Fields(lines[0])[3]
 
 	if !strings.Contains(lines[1], "--source "+discovered+" ") || !strings.HasSuffix(lines[1], "--init-data-plane=ops/dp/private/acmeCo/example-data-plane") {
 		test.Errorf("publication %q, want the discovered spec %s published on the data plane", lines[1], discovered)
 	}
 }
 
-func TestWithResetsAddsTheCollectionsWithReset(test *testing.T) {
-	var spec []byte = []byte("captures:\n  acmeCo/source-postgres:\n    bindings: []\n")
-	var pulled []byte = []byte("collections:\n  acmeCo/orders:\n    key: [/id]\n    writeSchema: orders.write.schema.yaml\n    expectPubId: 0011223344556677\n  acmeCo/users:\n    key: [/id]\n")
+func TestMarkResetsMarksTheCollectionsWhereFlowctlWroteThem(test *testing.T) {
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml":                 "import: [acmeCo/mysql/flow.yaml, acmeCo/postgres/flow.yaml]\n",
+		"acmeCo/mysql/flow.yaml":    "collections:\n  acmeCo/mysql/sales: { key: [/id], writeSchema: sales.write.schema.yaml, expectPubId: \"0011\" }\n",
+		"acmeCo/postgres/flow.yaml": "collections:\n  acmeCo/postgres/sales: { key: [/id], writeSchema: sales.write.schema.yaml }\n",
+	})
 
-	content, err := withResets(spec, pulled, []string{"acmeCo/orders"})
-
-	if err != nil {
-		test.Fatalf("withResets: %v", err)
+	if err := markResets(tree, []string{"acmeCo/mysql/sales", "acmeCo/postgres/sales"}); err != nil {
+		test.Fatalf("markResets: %v", err)
 	}
 
-	var catalogSpec map[string]map[string]map[string]any
+	for file, name := range map[string]string{"acmeCo/mysql/flow.yaml": "acmeCo/mysql/sales", "acmeCo/postgres/flow.yaml": "acmeCo/postgres/sales"} {
+		var want map[string]any = map[string]any{"key": []any{"/id"}, "writeSchema": "sales.write.schema.yaml", "reset": true}
+
+		if got := tree.files[file]["collections"].(map[string]any)[name]; !reflect.DeepEqual(got, want) {
+			test.Errorf("%s in %s = %v, want %v", name, file, got, want)
+		}
+	}
+
+	if err := markResets(tree, []string{"acmeCo/missing"}); err == nil || !strings.Contains(err.Error(), "acmeCo/missing") {
+		test.Errorf("markResets error = %v, want the missing collection named", err)
+	}
+}
+
+func TestWithImportAddsTheFile(test *testing.T) {
+	var spec []byte = []byte("import: [other.flow.yaml]\ncaptures:\n  acmeCo/source-postgres:\n    bindings: []\n")
+
+	content, err := withImport(spec, "resets/flow.yaml")
+
+	if err != nil {
+		test.Fatalf("withImport: %v", err)
+	}
+
+	var catalogSpec map[string]any
 
 	if err := yaml.Unmarshal(content, &catalogSpec); err != nil {
 		test.Fatal(err)
 	}
 
-	var want map[string]any = map[string]any{"key": []any{"/id"}, "writeSchema": "orders.write.schema.yaml", "reset": true}
-
-	if len(catalogSpec["collections"]) != 1 || !reflect.DeepEqual(catalogSpec["collections"]["acmeCo/orders"], want) || catalogSpec["captures"]["acmeCo/source-postgres"] == nil {
-		test.Errorf("spec = %s, want the capture and only the reset collection, without its publication ID", content)
-	}
-
-	if _, err := withResets(spec, pulled, []string{"acmeCo/missing"}); err == nil || !strings.Contains(err.Error(), "acmeCo/missing") {
-		test.Errorf("withResets error = %v, want the missing collection named", err)
+	if !reflect.DeepEqual(catalogSpec["import"], []any{"other.flow.yaml", "resets/flow.yaml"}) || utils.Lookup(catalogSpec, "captures", "acmeCo/source-postgres") == nil {
+		test.Errorf("spec = %s, want the capture and both imports", content)
 	}
 }
 
 func TestWithDeclaredBindingsReplacesTheDiscoveredOnes(test *testing.T) {
 	var identifier mongodb.Spec
 	var name string = "acmeCo/mongodb/source-mongodb"
-	var discovered []byte = []byte(`captures:
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml": "import: [acmeCo/mongodb/flow.yaml]\n",
+		"acmeCo/mongodb/flow.yaml": `import: [shop/flow.yaml]
+captures:
   acmeCo/mongodb/source-mongodb:
     bindings:
       - resource: { _meta: { path: [shop, users] }, database: shop, collection: users }
@@ -182,53 +203,46 @@ func TestWithDeclaredBindingsReplacesTheDiscoveredOnes(test *testing.T) {
         target: acmeCo/mongodb/shop/orders
       - resource: { database: shop, collection: events }
         target: acmeCo/mongodb/shop/events
-collections:
-  acmeCo/mongodb/shop/users: { key: [/_id] }
-  acmeCo/mongodb/shop/orders: { key: [/_id] }
-  acmeCo/mongodb/shop/events: { key: [/_id] }
-`)
+`,
+		"acmeCo/mongodb/shop/flow.yaml": `collections:
+  acmeCo/mongodb/shop/users: { key: [/_id], writeSchema: users.write.schema.yaml }
+  acmeCo/mongodb/shop/orders: { key: [/_id], writeSchema: orders.write.schema.yaml }
+  acmeCo/mongodb/shop/events: { key: [/_id], writeSchema: events.write.schema.yaml }
+`,
+	})
 	var declared []any = []any{
 		map[string]any{"resource": map[string]any{"database": "shop", "collection": "users", "captureMode": "Change Stream Incremental"}, "target": "acmeCo/mongodb/shop/users"},
 		map[string]any{"resource": map[string]any{"database": "shop", "collection": "orders"}, "target": "acmeCo/orders"},
 		map[string]any{"resource": map[string]any{"database": "shop", "collection": "missing"}, "target": "acmeCo/missing"},
 	}
 
-	content, err := withDeclaredBindings(discovered, name, declared, identifier)
-
-	if err != nil {
+	if err := withDeclaredBindings(tree, name, declared, identifier); err != nil {
 		test.Fatalf("withDeclaredBindings: %v", err)
 	}
 
-	var catalogSpec struct {
-		Captures    map[string]map[string][]map[string]any `yaml:"captures"`
-		Collections map[string]any                         `yaml:"collections"`
-	}
-
-	if err := yaml.Unmarshal(content, &catalogSpec); err != nil {
-		test.Fatal(err)
-	}
-
 	var targets []string
+	var bindings []any = catalog.Bindings(tree.capture(name))
 
-	for _, binding := range catalogSpec.Captures[name]["bindings"] {
-		targets = append(targets, binding["target"].(string))
+	for _, binding := range bindings {
+		targets = append(targets, catalog.BindingCollection(binding))
 	}
 
 	if !reflect.DeepEqual(targets, []string{"acmeCo/mongodb/shop/users", "acmeCo/orders", "acmeCo/mongodb/shop/events", "acmeCo/missing"}) {
 		test.Errorf("targets = %v, want the declared bindings in place of the discovered ones, and the undiscovered one appended", targets)
 	}
 
-	var users map[string]any = catalogSpec.Captures[name]["bindings"][0]["resource"].(map[string]any)
+	var users map[string]any = catalog.BindingResource(bindings[0])
 
 	if users["captureMode"] != "Change Stream Incremental" || users["_meta"] == nil {
 		test.Errorf("users resource = %v, want the declared one with the discovered metadata", users)
 	}
 
-	_, renamed := catalogSpec.Collections["acmeCo/orders"]
-	_, previous := catalogSpec.Collections["acmeCo/mongodb/shop/orders"]
+	var collections map[string]any = tree.files["acmeCo/mongodb/shop/flow.yaml"]["collections"].(map[string]any)
+	orders, renamed := collections["acmeCo/orders"].(map[string]any)
+	_, previous := collections["acmeCo/mongodb/shop/orders"]
 
-	if !renamed || previous || len(catalogSpec.Collections) != 3 {
-		test.Errorf("collections = %v, want the discovered orders collection under its declared target", catalogSpec.Collections)
+	if !renamed || previous || len(collections) != 3 || orders["writeSchema"] != "orders.write.schema.yaml" {
+		test.Errorf("collections = %v, want the discovered orders collection under its declared target, in the file holding its schema", collections)
 	}
 }
 

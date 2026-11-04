@@ -224,7 +224,7 @@ func TestMaterializationFromDocument(test *testing.T) {
 		},
 	}
 
-	codec, err := newCodec[testDekafDocument](connector, materializationType[any, any]())
+	codec, err := newCodec[testDekafDocument](connector, materializationType[testConfig, testTopic]())
 
 	if err != nil {
 		test.Fatal(err)
@@ -252,7 +252,7 @@ func TestMaterializationFromDocument(test *testing.T) {
 
 	var metadataResp resource.MetadataResponse
 
-	NewMaterializationFromDocument[testDekafDocument](connector)().Metadata(ctx, resource.MetadataRequest{ProviderTypeName: "estuary"}, &metadataResp)
+	NewMaterializationFromDocument[testDekafDocument, testDekafSpec, testConfig, testTopic](connector)().Metadata(ctx, resource.MetadataRequest{ProviderTypeName: "estuary"}, &metadataResp)
 
 	if metadataResp.TypeName != "estuary_materialization_test_dekaf" {
 		test.Errorf("type name = %q, want estuary_materialization_test_dekaf", metadataResp.TypeName)

@@ -143,7 +143,12 @@ func (entryResource *entryResource[D, S]) validateMissingBackfills(plan tftypes.
 		return diagnostics
 	}
 
-	plannedBindings, _, _ := bindings(plan)
+	plannedBindings, _, err := bindings(plan)
+
+	if err != nil {
+		diagnostics.AddError("Planning "+entryResource.catalogType.name+" bindings", err.Error())
+		return diagnostics
+	}
 
 	for index, binding := range plannedBindings {
 		var collection string = bindingCollectionValue(binding)

@@ -41,6 +41,8 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	sourcepostgres.NewAurora,
 	sourcedynamodb.New,
 	sourcemongodb.New,
+	sourcemysql.New,
+	sourcepostgres.New,
 	sourcemysql.NewRDS,
 	sourcepostgres.NewRDS,
 }
@@ -51,6 +53,8 @@ var dataSources []func() datasource.DataSource = []func() datasource.DataSource{
 	sourcepostgres.NewAuroraDataSource,
 	sourcedynamodb.NewDataSource,
 	sourcemongodb.NewDataSource,
+	sourcemysql.NewDataSource,
+	sourcepostgres.NewDataSource,
 	sourcemysql.NewRDSDataSource,
 	sourcepostgres.NewRDSDataSource,
 }

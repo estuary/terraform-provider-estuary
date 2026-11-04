@@ -1,4 +1,4 @@
-package icebergs3
+package iceberg
 
 import (
 	"slices"

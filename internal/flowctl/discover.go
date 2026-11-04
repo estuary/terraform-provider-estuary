@@ -2,41 +2,33 @@ package flowctl
 
 import (
 	"context"
-	"fmt"
+	"path/filepath"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
-	"gopkg.in/yaml.v3"
 )
 
-type discoveredTask struct {
-	Bindings []map[string]any `yaml:"bindings"`
-}
-
-type discoveredFile struct {
-	Captures map[string]discoveredTask `yaml:"captures"`
-}
-
-func discoveredResources(content []byte, name string) (map[string]map[string]any, error) {
-	var discovered discoveredFile
-
-	if err := yaml.Unmarshal(content, &discovered); err != nil {
-		return nil, fmt.Errorf("parsing discovered spec: %w", err)
-	}
-
+// discoveredResources returns each binding resource of the discovered capture name, by target, none without it.
+func discoveredResources(tree *catalogTree, name string) map[string]map[string]any {
 	var resources map[string]map[string]any = map[string]map[string]any{}
 
-	for _, binding := range discovered.Captures[name].Bindings {
+	for _, binding := range catalog.Bindings(tree.capture(name)) {
 		if target := catalog.BindingCollection(binding); target != "" {
 			resources[target] = catalog.BindingResource(binding)
 		}
 	}
 
-	return resources, nil
+	return resources
 }
 
-// discover runs flowctl discover on the workspace spec file and returns the discovered spec.
-func (client *Client) discover(ctx context.Context, directory string) ([]byte, error) {
-	return client.runOnSpec(ctx, directory, specFile, "--source", client.withDataPlane([]string{"discover", "--flat"}, "--data-plane")...)
+// discover runs flowctl discover on the workspace spec file and reads the discovered catalog tree back.
+func (client *Client) discover(ctx context.Context, directory string) (*catalogTree, error) {
+	var arguments []string = client.withDataPlane([]string{"discover"}, "--data-plane")
+
+	if _, err := client.execCommand(ctx, append(arguments, "--source", filepath.Join(directory, specFile))...); err != nil {
+		return nil, err
+	}
+
+	return readCatalogTree(directory)
 }
 
 // DiscoverCapture discovers the capture on the client data plane, returning each binding resource by target.
@@ -54,10 +46,10 @@ func (client *Client) DiscoverCapture(ctx context.Context, name string, spec cat
 	defer cancel()
 
 	err = inWorkspace(files, func(directory string) error {
-		content, err := client.discover(ctx, directory)
+		tree, err := client.discover(ctx, directory)
 
 		if err == nil {
-			resources, err = discoveredResources(content, name)
+			resources = discoveredResources(tree, name)
 		}
 
 		return err

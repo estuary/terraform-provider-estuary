@@ -1,6 +1,8 @@
 package flowctl
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -25,12 +27,12 @@ func TestDiscoveredResources(test *testing.T) {
 			acmeCo/mongodb/users:
 				key: [/_id]
 	`))
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml":                "import: [acmeCo/mongodb/flow.yaml]\n",
+		"acmeCo/mongodb/flow.yaml": string(content),
+	})
 
-	resources, err := discoveredResources(content, "acmeCo/mongodb/source")
-
-	if err != nil {
-		test.Fatalf("discoveredResources: %v", err)
-	}
+	var resources map[string]map[string]any = discoveredResources(tree, "acmeCo/mongodb/source")
 
 	expected := map[string]map[string]any{
 		"acmeCo/mongodb/users":  {"database": "shop", "collection": "users"},
@@ -41,7 +43,17 @@ func TestDiscoveredResources(test *testing.T) {
 		test.Errorf("resources = %+v, want %+v", resources, expected)
 	}
 
-	if _, err := discoveredResources([]byte("captures: [unclosed"), "acmeCo/mongodb/source"); err == nil {
-		test.Error("discoveredResources accepted an unparseable spec")
+	if missing := discoveredResources(tree, "acmeCo/mongodb/missing"); len(missing) != 0 {
+		test.Errorf("resources of a missing capture = %v, want none", missing)
+	}
+
+	var directory string = test.TempDir()
+
+	if err := os.WriteFile(filepath.Join(directory, specFile), []byte("captures: [unclosed"), 0600); err != nil {
+		test.Fatal(err)
+	}
+
+	if _, err := readCatalogTree(directory); err == nil {
+		test.Error("readCatalogTree accepted an unparseable spec")
 	}
 }

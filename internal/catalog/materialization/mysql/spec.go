@@ -13,13 +13,6 @@ const (
 	ImageAmazonRDS    string = "ghcr.io/estuary/materialize-amazon-rds-mysql:v2"
 )
 
-// Images lists every MySQL materialization image, useful for schema validators.
-var Images = []string{
-	ImageMySQL,
-	ImageAmazonAurora,
-	ImageAmazonRDS,
-}
-
 // Connector names are the catalog name suffixes of the tasks of each image, as the dashboard names them.
 const (
 	ConnectorNameMySQL        string = "materialize-mysql"
@@ -34,7 +27,7 @@ type Advanced struct {
 	FeatureFlags     string `yaml:"feature_flags,omitempty" description:"Connector settings for edge cases and experimental features, see https://docs.estuary.dev/guides/advanced-usage/feature-flags/. Intended for Estuary internal use: change them only as directed by Estuary support."`
 }
 
-// Config is the materialize-mysql configuration shared by every image in Images.
+// Config is the materialize-mysql configuration shared by every image variant.
 type Config struct {
 	Address       string                         `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database. The port defaults to 3306. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	User          string                         `yaml:"user" description:"Database user to connect as. It needs permission to create tables."`

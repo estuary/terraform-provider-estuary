@@ -1,4 +1,4 @@
-package icebergdelta
+package s3iceberg
 
 import (
 	"slices"

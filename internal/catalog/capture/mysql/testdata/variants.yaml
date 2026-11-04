@@ -1,4 +1,19 @@
 captures:
+  acmeCo/mysql/password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-mysql:v3
+        config:
+          address: 123.4.567.89:3306
+          user: flow_capture
+          historyMode: false
+          credentials:
+            auth_type: UserPassword
+            password: <secret>
+    bindings:
+      - resource: { namespace: shop, stream: orders }
+        target: acmeCo/mysql/orders
+
   acmeCo/aurora/mysql-password:
     endpoint:
       connector:

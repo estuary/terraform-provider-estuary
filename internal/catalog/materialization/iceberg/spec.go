@@ -1,4 +1,4 @@
-package icebergs3
+package iceberg
 
 import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"

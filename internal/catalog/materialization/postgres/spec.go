@@ -14,13 +14,6 @@ const (
 	ImageAmazonRDS    string = "ghcr.io/estuary/materialize-amazon-rds-postgres:v5"
 )
 
-// Images lists every PostgreSQL materialization image, useful for schema validators.
-var Images = []string{
-	ImagePostgres,
-	ImageAmazonAurora,
-	ImageAmazonRDS,
-}
-
 // Connector names are the catalog name suffixes of the tasks of each image, as the dashboard names them.
 const (
 	ConnectorNamePostgres     string = "materialize-postgres"
@@ -35,7 +28,7 @@ type Advanced struct {
 	FeatureFlags   string           `yaml:"feature_flags,omitempty" description:"Connector settings for edge cases and experimental features, see https://docs.estuary.dev/guides/advanced-usage/feature-flags/. Intended for Estuary internal use: change them only as directed by Estuary support."`
 }
 
-// Config is the materialize-postgres configuration shared by every image in Images; Password is the deprecated form of
+// Config is the materialize-postgres configuration shared by every image variant; Password is the deprecated form of
 // Credentials.
 type Config struct {
 	Address       string                         `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database. The port defaults to 5432. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`

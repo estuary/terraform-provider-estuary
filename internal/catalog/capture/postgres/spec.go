@@ -13,18 +13,14 @@ type StatementTimeout string
 
 // Images of the connector variants, re-tags of one connector named after the dashboard tiles.
 const (
+	ImagePostgres     string = "ghcr.io/estuary/source-postgres:v3"
 	ImageAmazonAurora string = "ghcr.io/estuary/source-amazon-aurora-postgres:v3"
 	ImageAmazonRDS    string = "ghcr.io/estuary/source-amazon-rds-postgres:v3"
 )
 
-// Images lists every PostgreSQL capture image, useful for schema validators.
-var Images = []string{
-	ImageAmazonAurora,
-	ImageAmazonRDS,
-}
-
 // Connector names are the catalog name suffixes of the tasks of each image, as the dashboard names them.
 const (
+	ConnectorNamePostgres     string = "source-postgres"
 	ConnectorNameAmazonAurora string = "source-amazon-aurora-postgres"
 	ConnectorNameAmazonRDS    string = "source-amazon-rds-postgres"
 )
@@ -78,7 +74,7 @@ type Advanced struct {
 	StatementTimeout          StatementTimeout `yaml:"statement_timeout,omitempty" enum:",0,30s,1m,2m,5m,30m" description:"Statement timeout of the connector's queries: '30s', '1m', '2m', '5m', '30m', or '0' to disable it. Defaults to '2m' when unset."`
 }
 
-// Config is the source-postgres configuration shared by every image in Images. Password is the deprecated form of
+// Config is the source-postgres configuration shared by every image variant. Password is the deprecated form of
 // Credentials.
 type Config struct {
 	Address          string                    `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database. The port defaults to 5432. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`

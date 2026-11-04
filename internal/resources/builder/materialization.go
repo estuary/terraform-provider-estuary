@@ -377,9 +377,10 @@ func defaultBindingFields(fieldsType tftypes.Type) (tftypes.Value, error) {
 	return tftypes.NewValue(objectType, attributes), nil
 }
 
-// NewMaterializationFromDocument returns the resource factory of a non-connector materialization, such as Dekaf.
-func NewMaterializationFromDocument[D Document[D, S], S catalog.MaterializationSpec](connector Connector) func() resource.Resource {
-	return newResource[D, S](connector, materializationType[any, any]())
+// NewMaterializationFromDocument returns the resource factory of a non-connector materialization, such as Dekaf. C and
+// R are its config and resource, whose tags drive the materialization behaviors.
+func NewMaterializationFromDocument[D Document[D, S], S catalog.MaterializationSpec, C, R any](connector Connector) func() resource.Resource {
+	return newResource[D, S](connector, materializationType[C, R]())
 }
 
 // Spec returns the materialization catalog name and spec, nesting image and config under endpoint.connector.

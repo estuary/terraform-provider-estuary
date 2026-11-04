@@ -82,14 +82,14 @@ func TestPulledSpec(test *testing.T) {
 		},
 	}
 
-	var directory string = test.TempDir()
-
-	if err := os.WriteFile(filepath.Join(directory, "source-postgres.config.yaml"), []byte("address: db.example.com:5432\nuser: flow_capture\npassword_sops: ENC[AES256_GCM,data:abc,type:str]\n"), 0600); err != nil {
-		test.Fatal(err)
-	}
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml":               "import: [acmeCo/movies/flow.yaml]\n",
+		"acmeCo/movies/flow.yaml": string(content),
+		"acmeCo/movies/source-postgres.config.yaml": "address: db.example.com:5432\nuser: flow_capture\npassword_sops: ENC[AES256_GCM,data:abc,type:str]\n",
+	})
 
 	for name, want := range expectations {
-		spec, err := pulledSpec(content, name, directory)
+		spec, err := pulledSpec(tree, name)
 
 		if err != nil {
 			test.Fatalf("%s: %v", name, err)
@@ -100,22 +100,30 @@ func TestPulledSpec(test *testing.T) {
 		}
 	}
 
-	if _, err := pulledSpec([]byte("captures: [unclosed"), "acmeCo/movies/source-mongodb", directory); err == nil {
-		test.Error("pulledSpec accepted an unparseable spec")
-	}
+	var missingConfig *catalogTree = writeTree(test, map[string]string{"flow.yaml": string(content)})
 
-	if _, err := pulledSpec(content, "acmeCo/movies/source-postgres", test.TempDir()); err == nil {
+	if _, err := pulledSpec(missingConfig, "acmeCo/movies/source-postgres"); err == nil {
 		test.Error("pulledSpec accepted a config file that doesn't exist")
 	}
 }
 
 func TestPulledSpecReadsNothingAsDeleted(test *testing.T) {
 	for _, content := range []string{"", "\n", "{}", "captures: {}\nmaterializations: {}\n"} {
-		spec, err := pulledSpec([]byte(content), "acmeCo/movies/source-mongodb", test.TempDir())
+		spec, err := pulledSpec(writeTree(test, map[string]string{"flow.yaml": content}), "acmeCo/movies/source-mongodb")
 
 		if err != nil || spec != nil {
 			test.Errorf("%q: spec = %v, %v, want nil for a deleted entry", content, spec, err)
 		}
+	}
+
+	tree, err := readCatalogTree(test.TempDir())
+
+	if err != nil {
+		test.Fatalf("readCatalogTree of a workspace without spec file: %v", err)
+	}
+
+	if spec, err := pulledSpec(tree, "acmeCo/movies/source-mongodb"); err != nil || spec != nil {
+		test.Errorf("spec = %v, %v, want nil when flowctl wrote no spec file", spec, err)
 	}
 }
 
@@ -131,46 +139,45 @@ func TestPulledSpecRejectsUnexpectedContent(test *testing.T) {
 	}
 
 	for name, content := range expectations {
-		if spec, err := pulledSpec([]byte(content), "acmeCo/movies/source-mongodb", test.TempDir()); err == nil {
+		if spec, err := pulledSpec(writeTree(test, map[string]string{"flow.yaml": content}), "acmeCo/movies/source-mongodb"); err == nil {
 			test.Errorf("%s: pulledSpec = %v, want an error rather than a deletion or removed bindings", name, spec)
 		}
 	}
 }
 
-func TestInlineConfigsReadsNestedConfigs(test *testing.T) {
-	var directory string = test.TempDir()
-	var spec map[string]any = map[string]any{"endpoint": map[string]any{"connector": map[string]any{"config": "acmeCo/movies/source-postgres.config.yaml"}}}
+func TestInlineConfigsResolvesFromTheReferringFile(test *testing.T) {
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml":                        "{}\n",
+		"acmeCo/movies/flow.yaml":          "{}\n",
+		"acmeCo/movies/source.config.yaml": "address: db:5432\n",
+	})
 
-	if err := os.MkdirAll(filepath.Join(directory, "acmeCo", "movies"), 0700); err != nil {
-		test.Fatal(err)
-	}
+	for file, reference := range map[string]string{"flow.yaml": "acmeCo/movies/source.config.yaml", "acmeCo/movies/flow.yaml": "source.config.yaml"} {
+		var spec map[string]any = map[string]any{"endpoint": map[string]any{"connector": map[string]any{"config": reference}}}
 
-	if err := os.WriteFile(filepath.Join(directory, "acmeCo", "movies", "source-postgres.config.yaml"), []byte("address: db:5432\n"), 0600); err != nil {
-		test.Fatal(err)
-	}
+		if err := tree.inlineConfigs(spec, file); err != nil {
+			test.Fatalf("%s: %v", file, err)
+		}
 
-	if err := inlineConfigs(spec, directory); err != nil {
-		test.Fatal(err)
-	}
-
-	if config := utils.Lookup(spec, "endpoint", "connector", "config"); config["address"] != "db:5432" {
-		test.Errorf("config = %v, want the nested config file inlined", config)
+		if config := utils.Lookup(spec, "endpoint", "connector", "config"); config["address"] != "db:5432" {
+			test.Errorf("%s: config = %v, want %s inlined", file, config, reference)
+		}
 	}
 }
 
 func TestInlineConfigsRejectsPathsOutOfTheWorkspace(test *testing.T) {
 	var outside string = filepath.Join(test.TempDir(), "credentials.yaml")
-	var directory string = test.TempDir()
+	var tree *catalogTree = writeTree(test, map[string]string{"flow.yaml": "{}\n"})
 
 	if err := os.WriteFile(outside, []byte("aws_secret_access_key: leaked\n"), 0600); err != nil {
 		test.Fatal(err)
 	}
 
-	if err := os.Symlink(outside, filepath.Join(directory, "link.config.yaml")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(tree.directory, "link.config.yaml")); err != nil {
 		test.Fatal(err)
 	}
 
-	relative, err := filepath.Rel(directory, outside)
+	relative, err := filepath.Rel(tree.directory, outside)
 
 	if err != nil {
 		test.Fatal(err)
@@ -179,7 +186,7 @@ func TestInlineConfigsRejectsPathsOutOfTheWorkspace(test *testing.T) {
 	for _, path := range []string{relative, outside, "link.config.yaml"} {
 		var spec map[string]any = map[string]any{"endpoint": map[string]any{"connector": map[string]any{"config": path}}}
 
-		if err := inlineConfigs(spec, directory); err == nil {
+		if err := tree.inlineConfigs(spec, "flow.yaml"); err == nil {
 			test.Errorf("%s: inlineConfigs read a file out of the workspace: %v", path, spec)
 		}
 	}

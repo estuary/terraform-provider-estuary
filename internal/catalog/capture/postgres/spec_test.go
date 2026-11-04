@@ -12,7 +12,7 @@ import (
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunCaptureSuite[Spec](test, spectest.Connector{Image: ImageAmazonAurora, Name: ConnectorNameAmazonAurora}, spectest.Connector{Image: ImageAmazonRDS, Name: ConnectorNameAmazonRDS})
+	spectest.RunCaptureSuite[Spec](test, spectest.Connector{Image: ImagePostgres, Name: ConnectorNamePostgres}, spectest.Connector{Image: ImageAmazonAurora, Name: ConnectorNameAmazonAurora}, spectest.Connector{Image: ImageAmazonRDS, Name: ConnectorNameAmazonRDS})
 }
 
 func TestSchemaConformance(test *testing.T) {

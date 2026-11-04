@@ -109,23 +109,6 @@ func (client *Client) withDataPlane(arguments []string, flag string) []string {
 	return append(arguments, flagValue(flag, client.dataPlane))
 }
 
-// runOnSpec runs flowctl on the workspace file passed with fileFlag and returns its resulting content.
-func (client *Client) runOnSpec(ctx context.Context, directory string, file string, fileFlag string, arguments ...string) ([]byte, error) {
-	var path string = filepath.Join(directory, file)
-
-	if _, err := client.execCommand(ctx, append(arguments, fileFlag, path)...); err != nil {
-		return nil, err
-	}
-
-	content, err := os.ReadFile(path)
-
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", file, err)
-	}
-
-	return content, nil
-}
-
 // rewriteSpec replaces the workspace spec file content with what rewrite returns for it.
 func rewriteSpec(directory string, rewrite func(content []byte) ([]byte, error)) error {
 	var path string = filepath.Join(directory, specFile)

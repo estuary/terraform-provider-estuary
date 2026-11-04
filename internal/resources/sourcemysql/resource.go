@@ -7,6 +7,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 )
 
+var self builder.Connector = builder.Connector{
+	TypeName:      "source_mysql",
+	Image:         mysql.ImageMySQL,
+	ConnectorName: mysql.ConnectorNameMySQL,
+	Description:   "Captures tables of a MySQL database, such as a self-hosted server, Google Cloud SQL or Azure Database for MySQL, into Estuary collections, through change data capture on the MySQL binary log.",
+}
+
 var aurora builder.Connector = builder.Connector{
 	TypeName:      "source_aurora_mysql",
 	Image:         mysql.ImageAmazonAurora,
@@ -20,6 +27,12 @@ var rds builder.Connector = builder.Connector{
 	ConnectorName: mysql.ConnectorNameAmazonRDS,
 	Description:   "Captures tables of an Amazon RDS for MySQL database into Estuary collections, through change data capture on the MySQL binary log.",
 }
+
+// New returns the estuary_source_mysql resource.
+var New func() resource.Resource = builder.NewCapture[mysql.Config, mysql.Resource](self)
+
+// NewDataSource returns the estuary_source_mysql data source, reading the live bindings of a capture by name.
+var NewDataSource func() datasource.DataSource = builder.NewCaptureDataSource[mysql.Config, mysql.Resource](self)
 
 // NewAurora returns the estuary_source_aurora_mysql resource.
 var NewAurora func() resource.Resource = builder.NewCapture[mysql.Config, mysql.Resource](aurora)

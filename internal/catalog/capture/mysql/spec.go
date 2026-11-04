@@ -13,18 +13,14 @@ type StatementTimeout string
 
 // Images of the connector variants, re-tags of one connector named after the dashboard tiles.
 const (
+	ImageMySQL        string = "ghcr.io/estuary/source-mysql:v3"
 	ImageAmazonAurora string = "ghcr.io/estuary/source-amazon-aurora-mysql:v3"
 	ImageAmazonRDS    string = "ghcr.io/estuary/source-amazon-rds-mysql:v3"
 )
 
-// Images lists every MySQL capture image, useful for schema validators.
-var Images = []string{
-	ImageAmazonAurora,
-	ImageAmazonRDS,
-}
-
 // Connector names are the catalog name suffixes of the tasks of each image, as the dashboard names them.
 const (
+	ConnectorNameMySQL        string = "source-mysql"
 	ConnectorNameAmazonAurora string = "source-amazon-aurora-mysql"
 	ConnectorNameAmazonRDS    string = "source-amazon-rds-mysql"
 )
@@ -71,7 +67,7 @@ type Advanced struct {
 	HeartbeatInterval        string `yaml:"heartbeat_interval,omitempty" description:"Deprecated and has no effect, kept for existing captures. Defaults to '60s'."`
 }
 
-// Config is the source-mysql configuration shared by every image in Images. Password is the deprecated form of
+// Config is the source-mysql configuration shared by every image variant. Password is the deprecated form of
 // Credentials.
 type Config struct {
 	Address          string                    `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database endpoint. The port defaults to 3306. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`

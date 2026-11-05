@@ -162,6 +162,8 @@ func TestObjectRejectsCredentialsInForbiddingFields(test *testing.T) {
 		"https://123.4.567.89/api/orders?code=abc":                                                   false,
 		"https://123.4.567.89/workflows/run?sv=1.0&sig=abc":                                          false,
 		"https://123.4.567.89/?APIKEY=abc":                                                           false,
+		"https://123.4.567.89/?access_key=abc":                                                       false,
+		"https://123.4.567.89/?AccessKey=abc":                                                        false,
 		"https://123.4.567.89/object?X-Amz-Expires=60&X-Amz-Signature=abc":                           false,
 		"https://123.4.567.89/object?X-Goog-Signature=abc":                                           false,
 		"https://123.4.567.89/?signature=abc":                                                        false,
@@ -204,6 +206,7 @@ func TestRedactCredentials(test *testing.T) {
 		"https://123.4.567.89/api/orders?code=abc&page=2":                                               "https://123.4.567.89/api/orders?code=***&page=2",
 		"https://123.4.567.89/workflows/run?sv=1.0&sig=abc":                                             "https://123.4.567.89/workflows/run?sv=1.0&sig=***",
 		"https://123.4.567.89/?apiKey=abc":                                                              "https://123.4.567.89/?apiKey=***",
+		"https://123.4.567.89/?access_key=abc&page=2":                                                   "https://123.4.567.89/?access_key=***&page=2",
 		"https://123.4.567.89/object?X-Amz-Expires=60&X-Amz-Signature=abc":                              "https://123.4.567.89/object?X-Amz-Expires=60&X-Amz-Signature=***",
 		"https://123.4.567.89/?country_code=pt":                                                         "https://123.4.567.89/?country_code=pt",
 	}

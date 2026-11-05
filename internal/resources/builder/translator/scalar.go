@@ -272,6 +272,8 @@ func redactOptions(options string) (string, bool) {
 // credentialOptions are option names holding a credential that no sensitive key fragment matches, such as an Azure SAS
 // sig, a function URL code or a presigned URL signature. They match whole, as fragments like code or sig are too broad.
 var credentialOptions []string = []string{
+	"access_key",
+	"accesskey",
 	"apikey",
 	"code",
 	"sig",

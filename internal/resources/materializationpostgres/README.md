@@ -236,7 +236,7 @@ resource "estuary_materialization_rds_postgres" "private" {
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `address` | String | Yes | Host or `host:port` of the database, as shown in the RDS console for Aurora and RDS (e.g., `123.4.567.89:5432`). The port defaults to `5432`. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `address` | String | Yes | Host or `host:port` of the database, as shown in the RDS console for Aurora and RDS (e.g., `123.4.567.89:5432`). The port defaults to `5432`. The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `user` | String | Yes | Database user to connect as. |
 | `database` | String | No | Logical database to materialize to. |
 | `schema` | String | No | Schema of the materialized tables and of the connector's metadata tables, unless a binding sets its own. Defaults to `public`. |
@@ -273,7 +273,7 @@ resource "estuary_materialization_rds_postgres" "private" {
 | `account_id` | String | Yes | ID of the dbt account. |
 | `api_key` | String | Yes | dbt API key used to trigger the job. Write-only, see the note above. |
 | `api_key_hash` | String | Read-only | Salted hash of `api_key`, used to detect when it changes. |
-| `access_url` | String | No | Access URL of the dbt account, found in its Account Settings (e.g., `https://cloud.getdbt.com`). It must start with `https://`. The job is only triggered when it's set. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `access_url` | String | No | Access URL of the dbt account, found in its Account Settings (e.g., `https://cloud.getdbt.com`). It must start with `https://`. The job is only triggered when it's set. The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `cause` | String | No | Message shown as the cause of each triggered run. Defaults to `Estuary`. |
 | `mode` | String | No | What happens when the job is already running: `skip` doesn't trigger it (default), `replace` cancels the running job and triggers a new one, and `ignore` triggers a new one anyway. |
 | `interval` | String | No | Minimum time between two triggers, which only happen after new data is materialized. Defaults to `30m`. |

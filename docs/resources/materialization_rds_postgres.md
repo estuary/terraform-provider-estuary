@@ -249,7 +249,7 @@ Optional:
 
 Required:
 
-- `address` (String) Host or host:port of the database. The port defaults to 5432. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `address` (String) Host or host:port of the database. The port defaults to 5432. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `user` (String) Database user to connect as.
 
 Optional:
@@ -310,7 +310,7 @@ Required:
 
 Optional:
 
-- `access_url` (String) Access URL of the dbt account, found in its Account Settings (e.g., https://cloud.getdbt.com). It must start with https://. The job is only triggered when it's set. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `access_url` (String) Access URL of the dbt account, found in its Account Settings (e.g., https://cloud.getdbt.com). It must start with https://. The job is only triggered when it's set. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `cause` (String) Message shown as the cause of each triggered run. Defaults to 'Estuary'.
 - `interval` (String) Minimum time between two triggers, which only happen after new data is materialized. Defaults to '30m'.
 - `mode` (String) What happens when the job is already running: 'skip' doesn't trigger it (default), 'replace' cancels the running job and triggers a new one, and 'ignore' triggers a new one anyway.

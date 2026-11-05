@@ -253,7 +253,7 @@ Optional:
 - `aws_secret_access_key` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Deprecated form of credentials with auth_type 'AWSAccessKey', still accepted for existing materializations. Ignored when credentials is set. Write-only.
 - `credentials` (Attributes) How the connector authenticates with AWS. Set it, or the deprecated aws_access_key_id and aws_secret_access_key, for the materialization to connect. (see [below for nested schema](#nestedatt--config--credentials))
 - `prefix` (String) Prefix of the data files in bucket.
-- `s3_endpoint` (String) S3 endpoint URL for S3-compatible storage, which is then addressed path-style. Defaults to the AWS S3 endpoint of region. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `s3_endpoint` (String) S3 endpoint URL for S3-compatible storage, which is then addressed path-style. Defaults to the AWS S3 endpoint of region. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `upload_interval` (String) How often data files are uploaded and appended to the tables, as an ISO 8601 duration of at most 4 hours (e.g., 'PT5M', the dashboard default). Set it: the connector's validation fails without a value.
 
 Read-Only:
@@ -273,7 +273,7 @@ Optional:
 - `glue_id` (String) ID of the Glue catalog, with 'AWS Glue', for cross-account access. Defaults to the account ID of the credentials.
 - `scope` (String) Scope of the requested security token, with 'Iceberg REST Server' (e.g., 'PRINCIPAL_ROLE:ALL').
 - `token` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Bearer token for the REST catalog, with 'Iceberg REST Server'. Write-only.
-- `uri` (String) URL of the REST catalog (e.g., 'https://<server>/api/catalog'). Required with 'Iceberg REST Server'. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `uri` (String) URL of the REST catalog (e.g., 'https://<server>/api/catalog'). Required with 'Iceberg REST Server'. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `warehouse` (String) Warehouse to connect to in the REST catalog. Required with 'Iceberg REST Server'.
 
 Read-Only:

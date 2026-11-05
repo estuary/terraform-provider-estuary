@@ -29,7 +29,7 @@ type Advanced struct {
 
 // Config is the materialize-webhook connector configuration.
 type Config struct {
-	Address  string    `yaml:"address" credentials:"forbidden" description:"Base URL the requests are sent to, ending in a trailing '/' (e.g., 'https://hooks.example.com/estuary/'). The plan rejects credentials in it, such as user:password@ or a token query option, as state and logs would hold them in plain text: send them in a header instead. Credentials found in the live value show as ***."`
+	Address  string    `yaml:"address" credentials:"forbidden" description:"Base URL the requests are sent to, ending in a trailing '/' (e.g., 'https://hooks.example.com/estuary/'). The plan rejects credentials in it, such as user:password@ or a token, API key or signature query option, as state and logs would hold them in plain text: send them in a header instead. Credentials found in the live value show as ***."`
 	Headers  *Headers  `yaml:"headers,omitempty" description:"HTTP headers of the requests."`
 	Advanced *Advanced `yaml:"advanced,omitempty" description:"Options for advanced users, rarely needed."`
 }

@@ -362,7 +362,7 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 
 	if paths := entryResource.codec.secrets.credentialPaths(planned); len(paths) > 0 {
 		diagnostics.AddError("Credentials in connection string",
-			strings.Join(paths, ", ")+" of the "+entryResource.catalogType.name+" holds credentials, such as user:password@ or a password or token option, "+
+			strings.Join(paths, ", ")+" of the "+entryResource.catalogType.name+" holds credentials, such as user:password@ or a password, token, API key or signature option, "+
 				"which the catalog entry and state would store in plain text. Set them in the connector's write-only attributes instead.")
 		return "", diagnostics
 	}

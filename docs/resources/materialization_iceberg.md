@@ -306,7 +306,7 @@ Required:
 
 - `compute` (Attributes) EMR Serverless application that merges the staged data into the tables. (see [below for nested schema](#nestedatt--config--compute))
 - `namespace` (String) Namespace of the materialized tables, unless a binding sets its own. It can't contain dots.
-- `url` (String) Base URL of the Iceberg REST catalog: 'https://glue.<region>.amazonaws.com/iceberg' for AWS Glue, 'https://s3tables.<region>.amazonaws.com/iceberg' for S3 Tables, or the URL of another REST catalog. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `url` (String) Base URL of the Iceberg REST catalog: 'https://glue.<region>.amazonaws.com/iceberg' for AWS Glue, 'https://s3tables.<region>.amazonaws.com/iceberg' for S3 Tables, or the URL of another REST catalog. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `warehouse` (String) Warehouse to connect to: the AWS account ID without hyphens for AWS Glue, or the table bucket ARN for S3 Tables.
 
 Optional:
@@ -394,7 +394,7 @@ Optional:
 - `aws_access_key_id` (String) AWS access key ID of the IAM user the connector authenticates as, with 'AWS SigV4'.
 - `aws_secret_access_key` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) AWS secret access key of the IAM user, with 'AWS SigV4'. Write-only.
 - `credential` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Catalog credential, with 'OAuth 2.0 Client Credentials': '<client_id>:<client_secret>', or '<token>' for Bearer authentication. Write-only.
-- `oauth2_server_uri` (String) OAuth 2.0 token endpoint, required with 'OAuth 2.0 Client Credentials': a path relative to url, 'v1/oauth/tokens' for most catalogs, or a full http(s) URL. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `oauth2_server_uri` (String) OAuth 2.0 token endpoint, required with 'OAuth 2.0 Client Credentials': a path relative to url, 'v1/oauth/tokens' for most catalogs, or a full http(s) URL. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `region` (String) AWS region of the catalog (e.g., 'us-east-1'), with 'AWS SigV4'.
 - `scope` (String) Authorization scope requested with 'OAuth 2.0 Client Credentials'.
 - `signing_name` (String) Ignored by the connector, which derives the SigV4 signing name from url. Kept so existing materializations still decode.
@@ -419,7 +419,7 @@ Optional:
 - `aws_role_arn` (String) ARN of the IAM role Estuary assumes to connect, with 'AWS IAM'. See https://docs.estuary.dev/guides/iam-auth/aws/.
 - `aws_secret_access_key` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) AWS secret access key of the IAM user, with 'AWS SigV4'. Write-only.
 - `credential` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Catalog credential, with 'OAuth 2.0 Client Credentials': '<client_id>:<client_secret>' for OAuth client credentials, or '<token>' for Bearer authentication. Write-only.
-- `oauth2_server_uri` (String) OAuth 2.0 token endpoint, required with 'OAuth 2.0 Client Credentials': a path relative to url, 'v1/oauth/tokens' (the dashboard default) for most catalogs, or a full http(s) URL when the token endpoint is on another host (e.g., 'https://login.dremio.cloud/oauth/token'). The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `oauth2_server_uri` (String) OAuth 2.0 token endpoint, required with 'OAuth 2.0 Client Credentials': a path relative to url, 'v1/oauth/tokens' (the dashboard default) for most catalogs, or a full http(s) URL when the token endpoint is on another host (e.g., 'https://login.dremio.cloud/oauth/token'). The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `scope` (String) Authorization scope requested with 'OAuth 2.0 Client Credentials' (e.g., 'PRINCIPAL_ROLE:<role>').
 
 Read-Only:
@@ -439,7 +439,7 @@ Required:
 
 Optional:
 
-- `access_url` (String) Access URL of the dbt account, found in its Account Settings (e.g., https://cloud.getdbt.com). It must start with https://. The job is only triggered when it's set. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `access_url` (String) Access URL of the dbt account, found in its Account Settings (e.g., https://cloud.getdbt.com). It must start with https://. The job is only triggered when it's set. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `cause` (String) Message shown as the cause of each triggered run. Defaults to 'Estuary'.
 - `interval` (String) Minimum time between two triggers, which only happen after new data is materialized. Defaults to '30m'.
 - `mode` (String) What happens when the job is already running: 'skip' doesn't trigger it (default), 'replace' cancels the running job and triggers a new one, and 'ignore' triggers a new one anyway.

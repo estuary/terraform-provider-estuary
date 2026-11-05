@@ -207,7 +207,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `address` | String | Yes | Host or `host:port` of the database, as shown in the RDS console (e.g., `shop.cluster-123456789.us-east-1.rds.amazonaws.com:5432`). The port defaults to `5432`. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `address` | String | Yes | Host or `host:port` of the database, as shown in the RDS console (e.g., `shop.cluster-123456789.us-east-1.rds.amazonaws.com:5432`). The port defaults to `5432`. The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `user` | String | Yes | Database user to authenticate as, usually `flow_capture`. |
 | `database` | String | Yes | Logical database to capture from, usually `postgres`. |
 | `credentials` | Object | No | How the user authenticates. See [`config.credentials`](#configcredentials). Set it, or the deprecated `password`, for the capture to connect. |

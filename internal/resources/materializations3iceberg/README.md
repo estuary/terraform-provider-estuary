@@ -233,7 +233,7 @@ The bindings of this connector have no schema, so Estuary can't set the namespac
 | `region` | String | Yes | AWS region of `bucket` (e.g., `us-east-1`). |
 | `namespace` | String | Yes | Namespace of the materialized tables, unless a binding sets its own. It can't contain dots. |
 | `upload_interval` | String | No | How often data files are uploaded and appended to the tables, as an ISO 8601 duration of at most 4 hours (e.g., `PT5M`, the dashboard default). Set it: the connector's validation fails without a value. |
-| `s3_endpoint` | String | No | S3 endpoint URL for S3-compatible storage, which is then addressed path-style. Defaults to the AWS S3 endpoint of `region`. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `s3_endpoint` | String | No | S3 endpoint URL for S3-compatible storage, which is then addressed path-style. Defaults to the AWS S3 endpoint of `region`. The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `credentials` | Object | No | How the connector authenticates with AWS. See [`config.credentials`](#configcredentials). Set it, or the deprecated `aws_access_key_id` and `aws_secret_access_key`, for the materialization to connect. |
 | `catalog` | Object | Yes | Iceberg catalog the tables are registered in. See [`config.catalog`](#configcatalog). |
 | `advanced` | Object | No | Options for advanced users, rarely needed. See [`config.advanced`](#configadvanced). |
@@ -261,7 +261,7 @@ The bindings of this connector have no schema, so Estuary can't set the namespac
 |---|---|---|---|
 | `catalog_type` | String | Yes | Catalog the tables are registered in: `Iceberg REST Server` or `AWS Glue`. Only the attributes of the selected catalog are used. |
 | `glue_id` | String | No | ID of the Glue catalog, with `AWS Glue`, for cross-account access. Defaults to the account ID of the credentials. |
-| `uri` | String | With `Iceberg REST Server` | URL of the REST catalog (e.g., `https://<server>/api/catalog`). The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `uri` | String | With `Iceberg REST Server` | URL of the REST catalog (e.g., `https://<server>/api/catalog`). The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `warehouse` | String | With `Iceberg REST Server` | Warehouse to connect to in the REST catalog. |
 | `credential` | String | No | Credential for the REST catalog, such as `<client_id>:<client_secret>`, with `Iceberg REST Server`. Write-only, see the note above. |
 | `credential_hash` | String | Read-only | Salted hash of `credential`, used to detect when it changes. |

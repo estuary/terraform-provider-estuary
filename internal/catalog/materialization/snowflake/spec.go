@@ -60,7 +60,7 @@ type Advanced struct {
 
 // Config is the materialize-snowflake connector configuration.
 type Config struct {
-	Host          string                         `yaml:"host" credentials:"forbidden" description:"Snowflake account URL, without the protocol and ending in .snowflakecomputing.com (e.g., 'orgname-accountname.snowflakecomputing.com'). The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
+	Host          string                         `yaml:"host" credentials:"forbidden" description:"Snowflake account URL, without the protocol and ending in .snowflakecomputing.com (e.g., 'orgname-accountname.snowflakecomputing.com'). The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	Database      string                         `yaml:"database" description:"Snowflake database to materialize into."`
 	Schema        string                         `yaml:"schema" x-default-namespace:"true" description:"Schema of the bound tables, unless a binding sets its own, and of the materialization metadata tables."`
 	Warehouse     string                         `yaml:"warehouse,omitempty" description:"Snowflake virtual warehouse that runs the queries. Defaults to the user's default warehouse."`

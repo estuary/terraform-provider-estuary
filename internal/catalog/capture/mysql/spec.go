@@ -70,7 +70,7 @@ type Advanced struct {
 // Config is the source-mysql configuration shared by every image variant. Password is the deprecated form of
 // Credentials.
 type Config struct {
-	Address          string                    `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database endpoint. The port defaults to 3306. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
+	Address          string                    `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database endpoint. The port defaults to 3306. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	User             string                    `yaml:"user" description:"Database user to authenticate as, usually 'flow_capture'."`
 	Password         string                    `yaml:"password,omitempty" description:"Deprecated form of credentials with auth_type 'UserPassword', still accepted for existing captures. At most 32 characters. Write-only."`
 	Credentials      *auth.DatabaseCredentials `yaml:"credentials,omitempty" description:"How the user authenticates. Set it, or the deprecated password; the connector rejects a configuration with neither."`

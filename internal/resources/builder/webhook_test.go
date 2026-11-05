@@ -132,10 +132,11 @@ func TestWebhookURLsForbidCredentials(test *testing.T) {
 	}
 
 	expectations := map[string]string{
-		"https://user:secret@hooks.example.com/":     "https://***@hooks.example.com/",
-		"https://hooks.example.com/?access_token=t1": "https://hooks.example.com/?access_token=***",
-		"https://hooks.example.com/estuary/":         "https://hooks.example.com/estuary/",
-		"orders?api_key=k1&page=2":                   "orders?api_key=***&page=2",
+		"https://user:secret@hooks.example.com/":       "https://***@hooks.example.com/",
+		"https://hooks.example.com/?access_token=t1":   "https://hooks.example.com/?access_token=***",
+		"https://hooks.example.com/estuary/":           "https://hooks.example.com/estuary/",
+		"orders?api_key=k1&page=2":                     "orders?api_key=***&page=2",
+		"https://hooks.example.com/api/orders?code=k1": "https://hooks.example.com/api/orders?code=***",
 	}
 
 	for value, want := range expectations {

@@ -29,7 +29,7 @@ type Advanced struct {
 
 // Config is the materialize-mysql configuration shared by every image variant.
 type Config struct {
-	Address       string                         `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database. The port defaults to 3306. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
+	Address       string                         `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database. The port defaults to 3306. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	User          string                         `yaml:"user" description:"Database user to connect as. It needs permission to create tables."`
 	Password      string                         `yaml:"password" description:"Password of the database user. Write-only."`
 	Database      string                         `yaml:"database" description:"Logical database to materialize to."`

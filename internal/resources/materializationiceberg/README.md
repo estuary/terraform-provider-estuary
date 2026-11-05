@@ -298,7 +298,7 @@ The namespace of a binding plays the role of its schema.
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `url` | String | Yes | Base URL of the Iceberg REST catalog: `https://glue.<region>.amazonaws.com/iceberg` for AWS Glue, `https://s3tables.<region>.amazonaws.com/iceberg` for S3 Tables, or the URL of another REST catalog. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `url` | String | Yes | Base URL of the Iceberg REST catalog: `https://glue.<region>.amazonaws.com/iceberg` for AWS Glue, `https://s3tables.<region>.amazonaws.com/iceberg` for S3 Tables, or the URL of another REST catalog. The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `warehouse` | String | Yes | Warehouse to connect to: the AWS account ID without hyphens for AWS Glue (e.g., `123456789012`), or the table bucket ARN for S3 Tables (e.g., `arn:aws:s3tables:us-east-1:123456789012:bucket/<bucket>`). |
 | `namespace` | String | Yes | Namespace of the materialized tables, unless a binding sets its own. It can't contain dots. |
 | `base_location` | String | No | S3 location of the table data and metadata (e.g., `s3://<bucket>/<prefix>/`). Required with AWS Glue, optional with other catalogs. |
@@ -316,7 +316,7 @@ The namespace of a binding plays the role of its schema.
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `auth_type` | String | Yes | Authentication method: `OAuth 2.0 Client Credentials`, `AWS SigV4` or `AWS IAM`. AWS Glue and S3 Tables catalogs need `AWS SigV4` or `AWS IAM`. Only the attributes of the selected method are used. |
-| `oauth2_server_uri` | String | With `OAuth 2.0 Client Credentials` | OAuth 2.0 token endpoint: a path relative to `url`, `v1/oauth/tokens` (the dashboard default) for most catalogs, or a full http(s) URL when the token endpoint is on another host (e.g., `https://login.dremio.cloud/oauth/token`). The connector rejects an empty value. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `oauth2_server_uri` | String | With `OAuth 2.0 Client Credentials` | OAuth 2.0 token endpoint: a path relative to `url`, `v1/oauth/tokens` (the dashboard default) for most catalogs, or a full http(s) URL when the token endpoint is on another host (e.g., `https://login.dremio.cloud/oauth/token`). The connector rejects an empty value. The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `credential` | String | With `OAuth 2.0 Client Credentials` | Catalog credential: `<client_id>:<client_secret>` for OAuth client credentials, or `<token>` for Bearer authentication. Write-only, see the note above. |
 | `credential_hash` | String | Read-only | Salted hash of `credential`, used to detect when it changes. |
 | `scope` | String | No | Authorization scope requested with `OAuth 2.0 Client Credentials` (e.g., `PRINCIPAL_ROLE:<role>`). |
@@ -382,7 +382,7 @@ See the [EMR Serverless Spark defaults](https://docs.aws.amazon.com/emr/latest/E
 | `account_id` | String | Yes | ID of the dbt account. |
 | `api_key` | String | Yes | dbt API key used to trigger the job. Write-only, see the note above. |
 | `api_key_hash` | String | Read-only | Salted hash of `api_key`, used to detect when it changes. |
-| `access_url` | String | No | Access URL of the dbt account, found in its Account Settings (e.g., `https://cloud.getdbt.com`). It must start with `https://`. The job is only triggered when it's set. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `access_url` | String | No | Access URL of the dbt account, found in its Account Settings (e.g., `https://cloud.getdbt.com`). It must start with `https://`. The job is only triggered when it's set. The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `cause` | String | No | Message shown as the cause of each triggered run. Defaults to `Estuary`. |
 | `mode` | String | No | What happens when the job is already running: `skip` doesn't trigger it (default), `replace` cancels the running job and triggers a new one, and `ignore` triggers a new one anyway. |
 | `interval` | String | No | Minimum time between two triggers, which only happen after new data is materialized. Defaults to `30m`. |
@@ -417,7 +417,7 @@ Deprecated form of [`config.credentials`](#configcredentials), still accepted fo
 | Attribute | Type | Required | Description |
 |---|---|---|---|
 | `catalog_auth_type` | String | Yes | Authentication method: `OAuth 2.0 Client Credentials` or `AWS SigV4`. Only the attributes of the selected method are used. |
-| `oauth2_server_uri` | String | With `OAuth 2.0 Client Credentials` | OAuth 2.0 token endpoint: a path relative to `url`, `v1/oauth/tokens` for most catalogs, or a full http(s) URL. The connector rejects an empty value. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `oauth2_server_uri` | String | With `OAuth 2.0 Client Credentials` | OAuth 2.0 token endpoint: a path relative to `url`, `v1/oauth/tokens` for most catalogs, or a full http(s) URL. The connector rejects an empty value. The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `credential` | String | With `OAuth 2.0 Client Credentials` | Catalog credential: `<client_id>:<client_secret>`, or `<token>` for Bearer authentication. Write-only, see the note above. |
 | `credential_hash` | String | Read-only | Salted hash of `credential`, used to detect when it changes. |
 | `scope` | String | No | Authorization scope requested with `OAuth 2.0 Client Credentials`. |

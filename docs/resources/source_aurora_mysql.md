@@ -218,7 +218,7 @@ Optional:
 
 Required:
 
-- `address` (String) Host or host:port of the database endpoint. The port defaults to 3306. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `address` (String) Host or host:port of the database endpoint. The port defaults to 3306. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `history_mode` (Boolean) Captures every change event as its own document instead of reducing them to the latest state of each row.
 - `user` (String) Database user to authenticate as, usually 'flow_capture'.
 

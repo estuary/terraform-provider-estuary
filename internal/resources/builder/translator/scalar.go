@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
@@ -166,7 +167,7 @@ func (check credentialsValidator) ValidateString(_ context.Context, validateReq 
 	}
 
 	validateResp.Diagnostics.AddAttributeError(validateReq.Path, "Credentials in connection string",
-		"Credentials, such as user:password@ or a password or token option, would be stored in plain text in state and logs. "+
+		"Credentials, such as user:password@ or a password, token, API key or signature option, would be stored in plain text in state and logs. "+
 			"Set them in the connector's write-only attributes instead, such as password or a header value.")
 }
 
@@ -268,6 +269,22 @@ func redactOptions(options string) (string, bool) {
 	return redactedOptions.String(), holds
 }
 
+// credentialOptions are option names holding a credential that no sensitive key fragment matches, such as an Azure SAS
+// sig, a function URL code or a presigned URL signature. They match whole, as fragments like code or sig are too broad.
+var credentialOptions []string = []string{
+	"apikey",
+	"code",
+	"sig",
+	"signature",
+	"x-amz-signature",
+	"x-goog-signature",
+}
+
+// credentialOption reports whether an option or authMechanismProperties name holds a credential.
+func credentialOption(name string) bool {
+	return catalog.IsSensitiveKey(name) || slices.Contains(credentialOptions, strings.ToLower(name))
+}
+
 // redactOption replaces the value of a key=value option naming a credential, reporting whether it names one.
 func redactOption(option string) (string, bool) {
 	key, value, hasValue := strings.Cut(option, "=")
@@ -281,7 +298,7 @@ func redactOption(option string) (string, bool) {
 		return option, false
 	}
 
-	if catalog.IsSensitiveKey(decodedKey) {
+	if credentialOption(decodedKey) {
 		return key + "=" + redacted, true
 	}
 
@@ -299,7 +316,7 @@ func redactOption(option string) (string, bool) {
 	var holds bool
 
 	for index, property := range properties {
-		if name, _, _ := strings.Cut(property, ":"); catalog.IsSensitiveKey(name) {
+		if name, _, _ := strings.Cut(property, ":"); credentialOption(name) {
 			properties[index] = name + ":" + redacted
 			holds = true
 		}

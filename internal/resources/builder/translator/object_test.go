@@ -159,6 +159,13 @@ func TestObjectRejectsCredentialsInForbiddingFields(test *testing.T) {
 		"mongodb://***@123.4.567.89:27017":                                                           false,
 		"mongodb://123.4.567.89:27017/?password=***":                                                 false,
 		"flow_capture:secret@123.4.567.89:27017/?appName=http://x":                                   false,
+		"https://123.4.567.89/api/orders?code=abc":                                                   false,
+		"https://123.4.567.89/workflows/run?sv=1.0&sig=abc":                                          false,
+		"https://123.4.567.89/?APIKEY=abc":                                                           false,
+		"https://123.4.567.89/object?X-Amz-Expires=60&X-Amz-Signature=abc":                           false,
+		"https://123.4.567.89/object?X-Goog-Signature=abc":                                           false,
+		"https://123.4.567.89/?signature=abc":                                                        false,
+		"https://123.4.567.89/?country_code=pt&design=a":                                             true,
 	}
 
 	for address, valid := range expectations {
@@ -194,6 +201,11 @@ func TestRedactCredentials(test *testing.T) {
 		"flow_capture:sec://ret@123.4.567.89:27017":                                                     "***@123.4.567.89:27017",
 		"mongodb://123.4.567.89:27017/?password=sec#ret":                                                "mongodb://123.4.567.89:27017/?password=***",
 		"mongodb://123.4.567.89:27017/?tls=true#fragment":                                               "mongodb://123.4.567.89:27017/?tls=true#fragment",
+		"https://123.4.567.89/api/orders?code=abc&page=2":                                               "https://123.4.567.89/api/orders?code=***&page=2",
+		"https://123.4.567.89/workflows/run?sv=1.0&sig=abc":                                             "https://123.4.567.89/workflows/run?sv=1.0&sig=***",
+		"https://123.4.567.89/?apiKey=abc":                                                              "https://123.4.567.89/?apiKey=***",
+		"https://123.4.567.89/object?X-Amz-Expires=60&X-Amz-Signature=abc":                              "https://123.4.567.89/object?X-Amz-Expires=60&X-Amz-Signature=***",
+		"https://123.4.567.89/?country_code=pt":                                                         "https://123.4.567.89/?country_code=pt",
 	}
 
 	for value, want := range expectations {

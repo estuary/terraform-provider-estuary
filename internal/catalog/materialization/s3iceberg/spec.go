@@ -39,7 +39,7 @@ type Credentials struct {
 type CatalogConfig struct {
 	CatalogType CatalogType `yaml:"catalog_type" enum:"AWS Glue,Iceberg REST Server" description:"Catalog the tables are registered in: 'Iceberg REST Server' or 'AWS Glue'. Only the attributes of the selected catalog are used."`
 	GlueID      string      `yaml:"glue_id,omitempty" description:"ID of the Glue catalog, with 'AWS Glue', for cross-account access. Defaults to the account ID of the credentials."`
-	URI         string      `yaml:"uri,omitempty" credentials:"forbidden" description:"URL of the REST catalog (e.g., 'https://<server>/api/catalog'). Required with 'Iceberg REST Server'. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
+	URI         string      `yaml:"uri,omitempty" credentials:"forbidden" description:"URL of the REST catalog (e.g., 'https://<server>/api/catalog'). Required with 'Iceberg REST Server'. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	Warehouse   string      `yaml:"warehouse,omitempty" description:"Warehouse to connect to in the REST catalog. Required with 'Iceberg REST Server'."`
 	Credential  string      `yaml:"credential,omitempty" description:"Credential for the REST catalog, such as '<client_id>:<client_secret>', with 'Iceberg REST Server'. Write-only."`
 	Token       string      `yaml:"token,omitempty" description:"Bearer token for the REST catalog, with 'Iceberg REST Server'. Write-only."`
@@ -64,7 +64,7 @@ type Config struct {
 	Region             string        `yaml:"region" description:"AWS region of bucket (e.g., 'us-east-1')."`
 	Namespace          string        `yaml:"namespace" description:"Namespace of the materialized tables, unless a binding sets its own. It can't contain dots."`
 	UploadInterval     string        `yaml:"upload_interval,omitempty" description:"How often data files are uploaded and appended to the tables, as an ISO 8601 duration of at most 4 hours (e.g., 'PT5M', the dashboard default). Set it: the connector's validation fails without a value."`
-	S3Endpoint         string        `yaml:"s3_endpoint,omitempty" credentials:"forbidden" description:"S3 endpoint URL for S3-compatible storage, which is then addressed path-style. Defaults to the AWS S3 endpoint of region. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
+	S3Endpoint         string        `yaml:"s3_endpoint,omitempty" credentials:"forbidden" description:"S3 endpoint URL for S3-compatible storage, which is then addressed path-style. Defaults to the AWS S3 endpoint of region. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
 	Catalog            CatalogConfig `yaml:"catalog" description:"Iceberg catalog the tables are registered in."`
 	Advanced           *Advanced     `yaml:"advanced,omitempty" description:"Options for advanced users, rarely needed."`
 }

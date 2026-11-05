@@ -198,7 +198,7 @@ resource "estuary_materialization_snowflake" "streaming" {
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `host` | String | Yes | Snowflake account URL, without the protocol and ending in `.snowflakecomputing.com` (e.g., `orgname-accountname.snowflakecomputing.com`). The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `host` | String | Yes | Snowflake account URL, without the protocol and ending in `.snowflakecomputing.com` (e.g., `orgname-accountname.snowflakecomputing.com`). The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `database` | String | Yes | Snowflake database to materialize into. |
 | `schema` | String | Yes | Schema of the bound tables, unless a binding sets its own, and of the materialization metadata tables. |
 | `warehouse` | String | No | Snowflake virtual warehouse that runs the queries. Defaults to the user's default warehouse. |
@@ -246,7 +246,7 @@ resource "estuary_materialization_snowflake" "streaming" {
 | `account_id` | String | Yes | ID of the dbt account. |
 | `api_key` | String | Yes | dbt API key used to trigger the job. Write-only, see the note above. |
 | `api_key_hash` | String | Read-only | Salted hash of `api_key`, used to detect when it changes. |
-| `access_url` | String | No | Access URL of the dbt account, found in its Account Settings (e.g., `https://cloud.getdbt.com`). It must start with `https://`. The job is only triggered when it's set. The plan rejects credentials in it, such as `user:password@` or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
+| `access_url` | String | No | Access URL of the dbt account, found in its Account Settings (e.g., `https://cloud.getdbt.com`). It must start with `https://`. The job is only triggered when it's set. The plan rejects credentials in it, such as `user:password@` or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as `***`. |
 | `cause` | String | No | Message shown as the cause of each triggered run. Defaults to `Estuary`. |
 | `mode` | String | No | What happens when the job is already running: `skip` doesn't trigger it (default), `replace` cancels the running job and triggers a new one, and `ignore` triggers a new one anyway. |
 | `interval` | String | No | Minimum time between two triggers, which only happen after new data is materialized. Defaults to `30m`. |

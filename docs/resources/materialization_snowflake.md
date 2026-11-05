@@ -220,7 +220,7 @@ Required:
 
 - `credentials` (Attributes) How the connector authenticates with Snowflake. (see [below for nested schema](#nestedatt--config--credentials))
 - `database` (String) Snowflake database to materialize into.
-- `host` (String) Snowflake account URL, without the protocol and ending in .snowflakecomputing.com (e.g., 'orgname-accountname.snowflakecomputing.com'). The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `host` (String) Snowflake account URL, without the protocol and ending in .snowflakecomputing.com (e.g., 'orgname-accountname.snowflakecomputing.com'). The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `schema` (String) Schema of the bound tables, unless a binding sets its own, and of the materialization metadata tables.
 - `timestamp_type` (String) How timestamp columns are stored: 'TIMESTAMP_LTZ', 'TIMESTAMP_TZ', 'TIMESTAMP_NTZ (discard TZ)' or 'TIMESTAMP_NTZ (normalize to UTC)'. See https://docs.estuary.dev/reference/Connectors/materialization-connectors/Snowflake/#timestamp-data-type-mapping.
 
@@ -274,7 +274,7 @@ Required:
 
 Optional:
 
-- `access_url` (String) Access URL of the dbt account, found in its Account Settings (e.g., https://cloud.getdbt.com). It must start with https://. The job is only triggered when it's set. The plan rejects credentials in it, such as user:password@ or a password or token option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
+- `access_url` (String) Access URL of the dbt account, found in its Account Settings (e.g., https://cloud.getdbt.com). It must start with https://. The job is only triggered when it's set. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***.
 - `cause` (String) Message shown as the cause of each triggered run. Defaults to 'Estuary'.
 - `interval` (String) Minimum time between two triggers, which only happen after new data is materialized. Defaults to '30m'.
 - `mode` (String) What happens when the job is already running: 'skip' doesn't trigger it (default), 'replace' cancels the running job and triggers a new one, and 'ignore' triggers a new one anyway.

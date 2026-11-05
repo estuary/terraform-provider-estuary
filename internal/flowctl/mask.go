@@ -42,7 +42,7 @@ func secretPatterns(secrets []string) []*regexp.Regexp {
 	}
 
 	slices.SortFunc(parts, func(left string, right string) int {
-		return cmp.Compare(len(right), len(left))
+		return cmp.Or(cmp.Compare(len(right), len(left)), strings.Compare(left, right))
 	})
 
 	var patterns []*regexp.Regexp
@@ -91,17 +91,17 @@ func characterPattern(character rune) string {
 	return "(?:" + strings.Join(alternatives, "|") + ")"
 }
 
-// maskStrings replaces every secret in text, in any encoding, see secretPatterns.
-func maskStrings(text string, secrets []string) string {
-	for _, pattern := range secretPatterns(secrets) {
+// maskStrings replaces every match of the secret patterns in text, see secretPatterns.
+func maskStrings(text string, patterns []*regexp.Regexp) string {
+	for _, pattern := range patterns {
 		text = pattern.ReplaceAllLiteralString(text, mask)
 	}
 
 	return text
 }
 
-// maskDocument returns a copy of a YAML document with sensitive key values and embedded secrets masked, for logs.
-func maskDocument(value any, secrets []string) any {
+// maskDocument returns a copy of a YAML document with sensitive key values and secret pattern matches masked, for logs.
+func maskDocument(value any, patterns []*regexp.Regexp) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		var masked map[string]any = make(map[string]any, len(typed))
@@ -110,7 +110,7 @@ func maskDocument(value any, secrets []string) any {
 			if _, isString := nested.(string); isString && catalog.IsSensitiveKey(key) {
 				masked[key] = mask
 			} else {
-				masked[key] = maskDocument(nested, secrets)
+				masked[key] = maskDocument(nested, patterns)
 			}
 		}
 
@@ -119,26 +119,26 @@ func maskDocument(value any, secrets []string) any {
 		var masked []any = make([]any, len(typed))
 
 		for index, item := range typed {
-			masked[index] = maskDocument(item, secrets)
+			masked[index] = maskDocument(item, patterns)
 		}
 
 		return masked
 	case string:
-		return maskStrings(typed, secrets)
+		return maskStrings(typed, patterns)
 	}
 
 	return value
 }
 
 // maskedSpec returns the spec file content masked for logs, see maskDocument, empty when it doesn't parse.
-func maskedSpec(content []byte, secrets []string) string {
+func maskedSpec(content []byte, patterns []*regexp.Regexp) string {
 	var document any
 
 	if err := yaml.Unmarshal(content, &document); err != nil {
 		return "<unparsable spec>"
 	}
 
-	masked, err := yaml.Marshal(maskDocument(document, secrets))
+	masked, err := yaml.Marshal(maskDocument(document, patterns))
 
 	if err != nil {
 		return "<unparsable spec>"

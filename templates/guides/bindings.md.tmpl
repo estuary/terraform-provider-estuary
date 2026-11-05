@@ -6,7 +6,7 @@ description: |-
 
 # Bindings
 
-A binding links one resource, such as a MongoDB collection or a PostgreSQL table, to one Estuary collection: the `target` of a capture binding, or the `source` of a materialization binding. The collection identifies the binding, and the read-only `name` shows it in plans. Changing a binding's collection removes the binding and adds a new one.
+A binding links one resource, such as a MongoDB collection or a PostgreSQL table, to one Estuary collection: the `target` of a capture binding, or the `source` of a materialization binding. The collection identifies the binding, and the read-only `name` shows it in plans. Several bindings can share a collection, such as a materialization writing one collection to two tables: as in the dashboard, each is then told apart by its resource, the table of a materialization or the resource path of a capture. Changing a binding's collection removes the binding and adds a new one. Terraform only updates the live binding with the same collection and resource as a declared one, or the one it published that binding as, never another binding of its collection, such as one added from the dashboard. A binding whose resource is changed outside Terraform is no longer the one Terraform manages: the next plan adds the declared binding back and keeps the changed one.
 
 **Bindings you don't declare.** Estuary adds bindings through discovery (`auto_discover`) on a capture and `source.capture` on a materialization, and the dashboard can add them too. `keep_unmanaged_bindings` decides what Terraform does with them:
 

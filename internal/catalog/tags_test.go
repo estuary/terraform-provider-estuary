@@ -25,6 +25,7 @@ type taggedSpec struct {
 	Mode        string            `yaml:"mode,omitempty" backfill:"mode" description:"Backfill mode."`
 	Counter     int               `yaml:"counter" backfill:"mode"`
 	Delta       bool              `yaml:"delta_updates,omitempty" x-delta-updates:"true"`
+	TokenURL    string            `yaml:"tokenUrl" secret:"false"`
 	Merge       bool              `yaml:"merge,omitempty"`
 	Append      string            `yaml:"append" x-delta-updates:"true"`
 	Inlined     struct{}          `yaml:",inline"`
@@ -96,6 +97,7 @@ func TestSecretField(test *testing.T) {
 		"Credentials": false,
 		"Disabled":    false,
 		"Keys":        false,
+		"TokenURL":    false,
 	}
 
 	for name, want := range expectations {

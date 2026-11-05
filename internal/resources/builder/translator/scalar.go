@@ -200,6 +200,13 @@ func RedactCredentials(value string, credentials catalog.Credentials) string {
 	return safe
 }
 
+// HoldsCredentials reports whether a connection URI holds the credentials its field forbids, as the plan validator does.
+func HoldsCredentials(value string, credentials catalog.Credentials) bool {
+	_, holds := redactCredentials(value, credentials)
+
+	return holds
+}
+
 // redactCredentials returns RedactCredentials of value, and whether value holds credentials, *** placeholders
 // included, so a redacted value is never accepted as configuration.
 func redactCredentials(value string, credentials catalog.Credentials) (string, bool) {

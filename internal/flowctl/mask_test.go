@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -18,7 +19,7 @@ import (
 var secretSamples = []string{privateKey, "it's: secret", "tab\there", `pa"ss\word`, "<api-token>"}
 
 func TestMaskStrings(test *testing.T) {
-	var masked string = maskStrings("auth failed for hunter2 at host", []string{"hunter2", ""})
+	var masked string = maskStrings("auth failed for hunter2 at host", secretPatterns([]string{"hunter2", ""}))
 
 	if masked != "auth failed for *** at host" {
 		test.Errorf("masked = %q", masked)
@@ -40,7 +41,7 @@ func TestMaskStringsMasksEncodedSecrets(test *testing.T) {
 		}
 
 		for _, text := range []string{string(content), string(encoded)} {
-			var masked string = maskStrings(text, []string{secret})
+			var masked string = maskStrings(text, secretPatterns([]string{secret}))
 
 			if leaked := leakedPart(masked, secret); leaked != "" {
 				test.Errorf("masked %q still holds %q", masked, leaked)
@@ -92,7 +93,7 @@ func TestMaskStringsMasksURLAndJSONEncodedSecrets(test *testing.T) {
 		for name, encoded := range secretEncodings(secret) {
 			var text string = "auth failed for [" + encoded + "] at host"
 
-			if masked := maskStrings(text, []string{secret}); masked != "auth failed for [***] at host" {
+			if masked := maskStrings(text, secretPatterns([]string{secret})); masked != "auth failed for [***] at host" {
 				test.Errorf("%s of %q: masked = %q, want only the secret masked", name, secret, masked)
 			}
 		}
@@ -101,7 +102,7 @@ func TestMaskStringsMasksURLAndJSONEncodedSecrets(test *testing.T) {
 
 func TestMaskStringsMasksLongerSecretsFirst(test *testing.T) {
 	for _, secrets := range [][]string{{"abc", "abcdef"}, {"abcdef", "abc"}} {
-		if masked := maskStrings("token abcdef leaked, abc too", secrets); masked != "token *** leaked, *** too" {
+		if masked := maskStrings("token abcdef leaked, abc too", secretPatterns(secrets)); masked != "token *** leaked, *** too" {
 			test.Errorf("secrets %q: masked = %q, want no part of the longer one left", secrets, masked)
 		}
 	}
@@ -110,16 +111,24 @@ func TestMaskStringsMasksLongerSecretsFirst(test *testing.T) {
 func TestMaskStringsKeepsOtherText(test *testing.T) {
 	var text string = "ABC abd %61%62 a+b a\\u0062 hunter"
 
-	if masked := maskStrings(text, []string{"abc", "hunter2"}); masked != text {
+	if masked := maskStrings(text, secretPatterns([]string{"abc", "hunter2"})); masked != text {
 		test.Errorf("masked = %q, want text without the secrets kept", masked)
 	}
 }
 
 func TestMaskStringsKeepsShortLines(test *testing.T) {
-	var masked string = maskStrings("a key, b value", []string{"a\nb\nlonger line"})
+	var masked string = maskStrings("a key, b value", secretPatterns([]string{"a\nb\nlonger line"}))
 
 	if masked != "a key, b value" {
 		test.Errorf("masked = %q, want the short lines of the secret kept", masked)
+	}
+}
+
+func TestSecretPatternsCompileEachPartOnce(test *testing.T) {
+	var patterns []*regexp.Regexp = secretPatterns([]string{"abcd", "wxyz", "abcd", "id\nabcd\n"})
+
+	if len(patterns) != 3 {
+		test.Errorf("patterns = %v, want one per distinct secret or line: the multiline secret, abcd and wxyz", patterns)
 	}
 }
 
@@ -153,7 +162,7 @@ func TestMaskDocument(test *testing.T) {
 		},
 	}
 
-	if masked := maskDocument(document, []string{"hunter2"}); !reflect.DeepEqual(masked, want) {
+	if masked := maskDocument(document, secretPatterns([]string{"hunter2"})); !reflect.DeepEqual(masked, want) {
 		test.Errorf("masked = %v, want %v", masked, want)
 	}
 

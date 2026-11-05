@@ -47,6 +47,11 @@ func (spec Spec[E, R]) ResourcePaths() []string {
 
 // ResourcePath returns the resource path key of a resource document, ignoring unmodeled fields.
 func (Spec[E, R]) ResourcePath(document map[string]any) (string, error) {
+	return ResourcePath[R](document)
+}
+
+// ResourcePath returns the resource path key of a document of resource R, empty when R has no resource path.
+func ResourcePath[R any](document map[string]any) (string, error) {
 	resource, err := utils.ConvertYAML[R](document, false)
 
 	if err != nil {

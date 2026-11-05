@@ -408,17 +408,17 @@ func TestResourceUpdateMaterializationBackfillTrigger(test *testing.T) {
 		test.Errorf("published %v, want the backfill block left out of the spec", backend.published)
 	}
 
-	warnings := entry.warnEntryBackfill(planValue, priorValue, entry.newPublicationReader(planValue, priorValue, entry.newLiveReader(ctx, priorValue)))
+	warnings := entry.warnEntryBackfill(planValue, priorValue, entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))))
 
 	if len(warnings) != 1 || !strings.HasPrefix(warnings[0].Summary(), "Backfill of every binding in acmeCo/warehouse") || !strings.Contains(warnings[0].Detail(), "- acmeCo/orders\n\n") {
 		test.Errorf("warnings = %v, want a backfill warning listing orders only", warnings)
 	}
 
-	if warnings := entry.warnEntryBackfill(priorValue, priorValue, entry.newPublicationReader(priorValue, priorValue, entry.newLiveReader(ctx, priorValue))); len(warnings) != 0 {
+	if warnings := entry.warnEntryBackfill(priorValue, priorValue, entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, priorValue, priorValue, entry.newLiveReader(ctx, priorValue)))); len(warnings) != 0 {
 		test.Errorf("warnings = %v, want none without a raise", warnings)
 	}
 
-	diagnostics := validateBackfillTriggers(loweredValue, priorValue, entry.catalogType)
+	diagnostics := validateBackfillTriggers(testPairing(test, entry.catalogType.resourcePath, loweredValue, priorValue, nil), entry.catalogType)
 
 	if len(diagnostics) != 1 || diagnostics[0].Summary() != "Backfill trigger lowered" || !strings.Contains(diagnostics[0].Detail(), "the materialization") {
 		test.Errorf("diagnostics = %v, want the lowered trigger of the materialization rejected", diagnostics)
@@ -485,13 +485,13 @@ func TestMaterializationWarnsAboutSourceCaptureBindings(test *testing.T) {
 		test.Errorf("warnings = %v, want none without a source capture", warnings)
 	}
 
-	warnings := entry.warnRemovedBindings(linkedRemoved, linked)
+	warnings := entry.warnRemovedBindings(testPairing(test, entry.catalogType.resourcePath, linkedRemoved, linked, nil))
 
 	if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), "- acmeCo/users\n") || !strings.Contains(warnings[0].Detail(), "To stop materializing one") {
 		test.Errorf("warnings = %v, want a removed binding warning listing users", warnings)
 	}
 
-	if warnings := entry.warnRemovedBindings(unlinkedRemoved, unlinked); len(warnings) != 0 {
+	if warnings := entry.warnRemovedBindings(testPairing(test, entry.catalogType.resourcePath, unlinkedRemoved, unlinked, nil)); len(warnings) != 0 {
 		test.Errorf("warnings = %v, want none without a source capture", warnings)
 	}
 }
@@ -589,7 +589,7 @@ func TestPlanBindingFieldsOmitted(test *testing.T) {
 	var live tftypes.Value = value(binding("orders", unlimited), binding("users", unlimited), binding("events", depthOne))
 	var config tftypes.Value = value(binding("orders", nil), binding("users", depthOne), binding("events", nil), binding("sessions", nil))
 
-	planned, err := planBindingFields(config, config, state, func() (tftypes.Value, bool) { return live, true })
+	planned, err := planBindingFields(config, config, testPairing(test, entry.catalogType.resourcePath, config, state, func() (tftypes.Value, bool) { return live, true }))
 
 	if err != nil {
 		test.Fatal(err)
@@ -599,7 +599,7 @@ func TestPlanBindingFieldsOmitted(test *testing.T) {
 		test.Errorf("planned = %v, want the stored selection for orders, the configured one for users, the live one for the taken over events and Estuary's default for sessions", planned)
 	}
 
-	unread, err := planBindingFields(config, config, state, func() (tftypes.Value, bool) { return tftypes.Value{}, false })
+	unread, err := planBindingFields(config, config, testPairing(test, entry.catalogType.resourcePath, config, state, func() (tftypes.Value, bool) { return tftypes.Value{}, false }))
 
 	if err != nil {
 		test.Fatal(err)
@@ -609,7 +609,7 @@ func TestPlanBindingFieldsOmitted(test *testing.T) {
 		test.Errorf("planned with an unreadable live spec = %v, want no selection for the bindings state doesn't hold", unread)
 	}
 
-	created, err := planBindingFields(config, config, tftypes.NewValue(config.Type(), nil), func() (tftypes.Value, bool) { return tftypes.Value{}, false })
+	created, err := planBindingFields(config, config, testPairing(test, entry.catalogType.resourcePath, config, tftypes.NewValue(config.Type(), nil), func() (tftypes.Value, bool) { return tftypes.Value{}, false }))
 
 	if err != nil {
 		test.Fatal(err)
@@ -627,7 +627,7 @@ func TestPlanBindingFieldsOmitted(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	unknownCollection, err := planBindingFields(unknownConfig, unknownConfig, tftypes.NewValue(config.Type(), nil), func() (tftypes.Value, bool) { return tftypes.Value{}, false })
+	unknownCollection, err := planBindingFields(unknownConfig, unknownConfig, testPairing(test, entry.catalogType.resourcePath, unknownConfig, tftypes.NewValue(config.Type(), nil), func() (tftypes.Value, bool) { return tftypes.Value{}, false }))
 
 	if err != nil {
 		test.Fatal(err)
@@ -641,6 +641,48 @@ func TestPlanBindingFieldsOmitted(test *testing.T) {
 
 	if !unknownCollection.Equal(wantUnknown) {
 		test.Errorf("planned for a new binding of a collection unknown until apply = %v, want Estuary's default", unknownCollection)
+	}
+}
+
+func TestPlanBindingFieldsNeverAdoptsUnmanagedBindings(test *testing.T) {
+	var unlimited *materialization.BindingFields = &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited}
+	var depthOne *materialization.BindingFields = &materialization.BindingFields{Recommended: "1"}
+
+	entry := NewMaterialization[testWarehouseConfig, testWarehouseResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testWarehouseResource], MaterializationSpec[testWarehouseConfig, testWarehouseResource]])
+
+	binding := func(table string, fields *materialization.BindingFields) materialization.Binding[testWarehouseResource] {
+		return materialization.Binding[testWarehouseResource]{
+			Resource: testWarehouseResource{Table: table, Schema: "public"},
+			Source:   materialization.BindingSource{Name: "acmeCo/orders"},
+			Fields:   fields,
+		}
+	}
+
+	value := func(bindings ...materialization.Binding[testWarehouseResource]) tftypes.Value {
+		converted, err := entry.codec.Value("warehouse", MaterializationSpec[testWarehouseConfig, testWarehouseResource]{
+			Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com", DefaultSchema: "public"}}},
+			Bindings: bindings,
+		})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	var state tftypes.Value = value(binding("orders", unlimited))
+	var live tftypes.Value = value(binding("orders", unlimited), binding("orders_dashboard", depthOne))
+	var config tftypes.Value = value(binding("orders", nil), binding("orders_new", nil))
+
+	planned, err := planBindingFields(config, config, testPairing(test, entry.catalogType.resourcePath, config, state, func() (tftypes.Value, bool) { return live, true }))
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if want := value(binding("orders", unlimited), binding("orders_new", unlimited)); !planned.Equal(want) {
+		test.Errorf("planned = %v, want Estuary's default for orders_new, not the selection of the unmanaged orders_dashboard binding", planned)
 	}
 }
 
@@ -730,7 +772,7 @@ func TestMaterializationTakeoverWarningKeepsEstuaryFields(test *testing.T) {
 
 		var readLive liveReader = func() (tftypes.Value, bool) { return live, true }
 
-		warnings := entry.warnTakenOverBindings(plan, state, readLive)
+		warnings := entry.warnTakenOverBindings(testPairing(test, entry.catalogType.resourcePath, plan, state, readLive))
 
 		if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), expected.want) || strings.Contains(warnings[0].Detail(), "bindings[0].fields") {
 			test.Errorf("%s: warnings = %v, want %q without fields", name, warnings, expected.want)
@@ -779,7 +821,7 @@ func TestPlanBindingSchemasOmitted(test *testing.T) {
 	var live tftypes.Value = value(binding("orders", "legacy"), binding("users", ""), binding("events", "dashboard"))
 	var config tftypes.Value = value(binding("orders", ""), binding("users", ""), binding("events", ""), binding("sessions", ""), binding("carts", "custom"))
 
-	planned, err := entry.catalogType.planBindings(config, config, state, func() (tftypes.Value, bool) { return live, true })
+	planned, err := entry.catalogType.planBindings(config, config, testPairing(test, entry.catalogType.resourcePath, config, state, func() (tftypes.Value, bool) { return live, true }))
 
 	if err != nil {
 		test.Fatal(err)
@@ -789,7 +831,7 @@ func TestPlanBindingSchemasOmitted(test *testing.T) {
 		test.Errorf("planned = %v, want the stored schema for orders and users, the live one for the taken over events, target_naming for sessions and the configured one for carts", planned)
 	}
 
-	unread, err := entry.catalogType.planBindings(config, config, state, func() (tftypes.Value, bool) { return tftypes.Value{}, false })
+	unread, err := entry.catalogType.planBindings(config, config, testPairing(test, entry.catalogType.resourcePath, config, state, func() (tftypes.Value, bool) { return tftypes.Value{}, false }))
 
 	if err != nil {
 		test.Fatal(err)
@@ -812,7 +854,7 @@ func TestPlanBindingSchemasOmitted(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	unknownCollection, err := entry.catalogType.planBindings(unknownConfig, unknownConfig, state, func() (tftypes.Value, bool) { return live, true })
+	unknownCollection, err := entry.catalogType.planBindings(unknownConfig, unknownConfig, testPairing(test, entry.catalogType.resourcePath, unknownConfig, state, func() (tftypes.Value, bool) { return live, true }))
 
 	if err != nil {
 		test.Fatal(err)
@@ -904,19 +946,19 @@ func TestWarnMovedTables(test *testing.T) {
 		"acmeCo/sales/users: raw.users -> sales.users",
 	}
 
-	if moved := entry.catalogType.movedTables(plan, readLive); !reflect.DeepEqual(moved, want) {
+	if moved := entry.catalogType.movedTables(testPairing(test, entry.catalogType.resourcePath, plan, live, readLive)); !reflect.DeepEqual(moved, want) {
 		test.Errorf("moved = %q, want orders and users, without events, whose schema is the endpoint one, the unchanged refunds, carts, which only changes case, nor the new sessions", moved)
 	}
 
-	if diagnostics := entry.warnMovedTables(plan, readLive); len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Detail(), "- acmeCo/sales/users: raw.users -> sales.users") {
+	if diagnostics := entry.warnMovedTables(testPairing(test, entry.catalogType.resourcePath, plan, live, readLive)); len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Detail(), "- acmeCo/sales/users: raw.users -> sales.users") {
 		test.Errorf("diagnostics = %v, want one warning listing the moved bindings", diagnostics)
 	}
 
-	if diagnostics := entry.warnMovedTables(live, readLive); len(diagnostics) != 0 {
+	if diagnostics := entry.warnMovedTables(testPairing(test, entry.catalogType.resourcePath, live, live, readLive)); len(diagnostics) != 0 {
 		test.Errorf("diagnostics of an unchanged plan = %v, want none", diagnostics)
 	}
 
-	if diagnostics := entry.warnMovedTables(plan, func() (tftypes.Value, bool) { return tftypes.Value{}, false }); len(diagnostics) != 0 {
+	if diagnostics := entry.warnMovedTables(testPairing(test, entry.catalogType.resourcePath, plan, live, func() (tftypes.Value, bool) { return tftypes.Value{}, false })); len(diagnostics) != 0 {
 		test.Errorf("diagnostics with an unreadable live spec = %v, want none", diagnostics)
 	}
 }
@@ -947,7 +989,7 @@ func TestResourceUpdateRequiresBackfillsOfStandardSwitches(test *testing.T) {
 		"rejects a switch to standard updates without a raise":   {true, true, false, false, 1, nil, true, nil},
 		"rejects a switch from delta updates set outside":        {false, true, false, false, 1, nil, true, nil},
 		"backfills a switch to standard updates with a raise":    {true, true, false, false, 2, nil, false, 4},
-		"backfills a switch with the materialization trigger":    {true, true, false, false, 1, 1, false, 4},
+		"backfills a switch with the materialization trigger":    {true, true, false, false, 1, 2, false, 4},
 		"accepts a switch to delta updates without a raise":      {false, false, true, false, 1, nil, false, 3},
 		"accepts a switch of a disabled binding without a raise": {true, true, false, true, 1, nil, false, 3},
 	}
@@ -987,7 +1029,7 @@ func TestResourceUpdateRequiresBackfillsOfStandardSwitches(test *testing.T) {
 		}
 
 		if err == nil && expected.entry != nil {
-			priorValue, err = withValue(priorValue, testEntryBackfillPath, map[string]tftypes.Value{"trigger": tftypes.NewValue(tftypes.Number, nil)})
+			priorValue, err = withValue(priorValue, testEntryBackfillPath, map[string]tftypes.Value{"trigger": tftypes.NewValue(tftypes.Number, 1)})
 		}
 
 		if err != nil {
@@ -1008,7 +1050,7 @@ func TestResourceUpdateRequiresBackfillsOfStandardSwitches(test *testing.T) {
 			test.Fatal(err)
 		}
 
-		diagnostics := entry.validateMissingBackfills(planValue, entry.newPublicationReader(planValue, priorValue, entry.newLiveReader(ctx, priorValue)))
+		diagnostics := entry.validateMissingBackfills(entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))))
 
 		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), "resource.delta_updates of acmeCo/sales is true in Estuary")) {
 			test.Errorf("%s: plan diagnostics = %v, want rejected %v", name, diagnostics, expected.rejected)
@@ -1047,5 +1089,101 @@ func TestResourceUpdateRequiresBackfillsOfStandardSwitches(test *testing.T) {
 		if len(bindings) != 1 || bindings[0].(map[string]any)["backfill"] != expected.sales {
 			test.Errorf("%s: published bindings = %v, want the sales backfill counter %v", name, bindings, expected.sales)
 		}
+	}
+}
+
+func TestMaterializationBindingsPairBySchemaAndTable(test *testing.T) {
+	entry := NewMaterialization[testWarehouseConfig, testWarehouseResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testWarehouseResource], MaterializationSpec[testWarehouseConfig, testWarehouseResource]])
+
+	binding := func(collection string, schema string, table string) materialization.Binding[testWarehouseResource] {
+		return materialization.Binding[testWarehouseResource]{
+			Resource: testWarehouseResource{Table: table, Schema: schema},
+			Source:   materialization.BindingSource{Name: "acmeCo/" + collection},
+		}
+	}
+
+	value := func(bindings ...materialization.Binding[testWarehouseResource]) tftypes.Value {
+		converted, err := entry.codec.Value("warehouse", MaterializationSpec[testWarehouseConfig, testWarehouseResource]{
+			Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com", DefaultSchema: "public"}}},
+			Bindings: bindings,
+		})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	lives := func(plan tftypes.Value, state tftypes.Value, live tftypes.Value) []int {
+		paired, found := testPairing(test, entry.catalogType.resourcePath, plan, state, func() (tftypes.Value, bool) { return live, true }).readLive()
+
+		if !found {
+			test.Fatal("live bindings not read")
+		}
+
+		return paired.lives
+	}
+
+	var state tftypes.Value = value(binding("orders", "sales", "orders"), binding("orders", "archive", "orders"), binding("events", "", "events"))
+	var live tftypes.Value = value(binding("orders", "archive", "orders"), binding("orders", "SALES", "Orders"), binding("events", "public", "events"))
+
+	if got := lives(state, state, live); !reflect.DeepEqual(got, []int{1, 0, 2}) {
+		test.Errorf("lives = %v, want each orders binding paired with its schema's table, ignoring case and order, and events with the endpoint default schema", got)
+	}
+
+	unknownSchema, err := withValue(value(binding("events", "", "events")), bindingsPath.WithElementKeyInt(0).WithAttributeName(bindingResourceAttribute).WithAttributeName("schema"), tftypes.UnknownValue)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var empty tftypes.Value = value()
+
+	if got := lives(unknownSchema, empty, value(binding("events", "raw", "events"))); !reflect.DeepEqual(got, []int{0}) {
+		test.Errorf("lives of a new binding with an unknown schema = %v, want the only live binding of its table taken over", got)
+	}
+
+	if got := lives(unknownSchema, empty, value(binding("events", "raw", "events"), binding("events", "archive", "events"))); !reflect.DeepEqual(got, []int{-1}) {
+		test.Errorf("lives of a new binding with an unknown schema = %v, want none while its table is in several schemas", got)
+	}
+}
+
+func TestWarnTakenOverBindingsOfMovedBindings(test *testing.T) {
+	entry := NewMaterialization[testWarehouseConfig, testWarehouseResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testWarehouseResource], MaterializationSpec[testWarehouseConfig, testWarehouseResource]])
+
+	binding := func(table string, fields materialization.FieldDepth) materialization.Binding[testWarehouseResource] {
+		return materialization.Binding[testWarehouseResource]{
+			Resource: testWarehouseResource{Table: table, Schema: "public"},
+			Source:   materialization.BindingSource{Name: "acmeCo/orders"},
+			Fields:   &materialization.BindingFields{Recommended: fields},
+		}
+	}
+
+	value := func(bindings ...materialization.Binding[testWarehouseResource]) tftypes.Value {
+		converted, err := entry.codec.Value("warehouse", MaterializationSpec[testWarehouseConfig, testWarehouseResource]{
+			Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com", DefaultSchema: "public"}}},
+			Bindings: bindings,
+		})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	var state tftypes.Value = value(binding("orders", materialization.FieldDepthUnlimited))
+	var live tftypes.Value = value(binding("orders", materialization.FieldDepthUnlimited), binding("orders_dashboard", "1"))
+	var readLive liveReader = func() (tftypes.Value, bool) { return live, true }
+
+	moved := entry.warnTakenOverBindings(testPairing(test, entry.catalogType.resourcePath, value(binding("orders_dashboard", materialization.FieldDepthUnlimited)), state, readLive))
+
+	if len(moved) != 1 || !strings.Contains(moved[0].Detail(), "- acmeCo/orders (bindings[0]):") || !strings.Contains(moved[0].Detail(), "previous resource is removed") {
+		test.Errorf("warnings = %v, want the dashboard binding listed as taken over by the moved binding", moved)
+	}
+
+	if kept := entry.warnTakenOverBindings(testPairing(test, entry.catalogType.resourcePath, state, state, readLive)); len(kept) != 0 {
+		test.Errorf("warnings = %v, want none while the managed binding keeps its table", kept)
 	}
 }

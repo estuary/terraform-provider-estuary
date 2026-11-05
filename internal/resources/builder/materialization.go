@@ -83,9 +83,11 @@ const movedTableNote string = " Changing it on an existing binding moves it to a
 // materializationType returns the materialization catalog type of config C and binding resource R, whose x-schema-name
 // field, if any, plans like the dashboard names it, defaulting to the C field tagged x-default-namespace.
 func materializationType[C, R any]() catalogType {
+	var tableKey string = taggedKey[R](catalog.CollectionNameField)
 	var schemaName string = translator.AttributeName(taggedKey[R](catalog.SchemaNameField))
-	var tableName string = translator.AttributeName(taggedKey[R](catalog.CollectionNameField))
+	var tableName string = translator.AttributeName(tableKey)
 	var namespaceName string = translator.AttributeName(taggedKey[C](catalog.DefaultNamespaceField))
+	var resourcePath resourcePath = materializationResourcePath(schemaName, tableName, namespaceName)
 	var err error
 
 	if schemaName != "" && namespaceName == "" {
@@ -97,27 +99,55 @@ func materializationType[C, R any]() catalogType {
 		err:             err,
 		added:           materializationAddedBindings,
 		publish:         publishMaterialization,
+		resourcePath:    resourcePath,
 		deltaUpdatesKey: taggedKey[R](catalog.DeltaUpdatesField),
 		adjustAttributes: func(attributes map[string]schema.Attribute) {
 			adjustMaterializationAttributes(attributes, schemaName, tableName)
 		},
-		planBindings: func(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
-			planned, err := planBindingFields(plan, config, state, readLive)
+		planBindings: func(plan tftypes.Value, config tftypes.Value, pairing bindingPairing) (tftypes.Value, error) {
+			planned, err := planBindingFields(plan, config, pairing)
 
 			if err != nil || schemaName == "" {
 				return planned, err
 			}
 
-			return planBindingSchemas(schemaName, planned, config, state, readLive)
+			return planBindingSchemas(schemaName, planned, config, pairing)
 		},
-		movedTables: func(plan tftypes.Value, readLive liveReader) []string {
+		movedTables: func(pairing bindingPairing) []string {
 			if tableName == "" {
 				return nil
 			}
 
-			return movedTables(schemaName, tableName, namespaceName, plan, readLive)
+			return movedTables(schemaName, tableName, namespaceName, pairing)
 		},
 		omittedDefault: materializationOmittedDefault,
+	}
+}
+
+// materializationResourcePath identifies materialization bindings by their schema-qualified table, see bindingTable,
+// ignoring case. While the schema is unknown, as the plan fills in an omitted one, the table is the partial key.
+func materializationResourcePath(schemaName string, tableName string, namespaceName string) resourcePath {
+	if tableName == "" {
+		return resourcePath{}
+	}
+
+	return resourcePath{
+		key: func(entry tftypes.Value, binding tftypes.Value) (string, string) {
+			table, isKnown := known[string](resourceString(binding, tableName))
+
+			if !isKnown {
+				return "", ""
+			}
+
+			qualified, _ := bindingTable(schemaName, tableName, namespaceName, entry, binding)
+
+			return strings.ToLower(qualified), strings.ToLower(table)
+		},
+		label: func(entry tftypes.Value, binding tftypes.Value) string {
+			table, _ := bindingTable(schemaName, tableName, namespaceName, entry, binding)
+
+			return table
+		},
 	}
 }
 
@@ -165,28 +195,17 @@ type omittedAttribute struct {
 	fallback func(collection string, isRead bool, attributeType tftypes.Type) (tftypes.Value, error) // its value when neither state nor live holds it
 }
 
-// planOmitted plans the attribute of each binding configured without it as the one in state, else in the live spec for
-// bindings Terraform takes over, else as its fallback, told whether the live spec was read.
-func planOmitted(attribute omittedAttribute, plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+// planOmitted plans the attribute of each binding of plan configured without it as the one in state, else in the live
+// spec for bindings Terraform takes over, else as its fallback, told whether the live spec was read. Pairing pairs the
+// bindings of plan, in the same order.
+func planOmitted(attribute omittedAttribute, plan tftypes.Value, config tftypes.Value, pairing bindingPairing) (tftypes.Value, error) {
 	configured, _, err := bindings(config)
 
 	if err != nil {
 		return plan, err
 	}
 
-	planned, _, err := bindings(plan)
-
-	if err != nil {
-		return plan, err
-	}
-
-	stored, err := indexedBindings(state)
-
-	if err != nil {
-		return plan, err
-	}
-
-	var readLiveBindings func() (map[string]tftypes.Value, bool) = liveBindingsReader(readLive)
+	planned, stored := pairing.priorCounterparts()
 
 	return tftypes.Transform(plan, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
 		index, isAttribute := attribute.index(attributePath)
@@ -197,14 +216,14 @@ func planOmitted(attribute omittedAttribute, plan tftypes.Value, config tftypes.
 
 		var collection string = bindingCollectionValue(planned[index])
 
-		if kept, isStored := stored[collection]; isStored {
-			return attribute.value(kept, current.Type()), nil
+		if paired(stored[index]) {
+			return attribute.value(stored[index], current.Type()), nil
 		}
 
-		liveBindings, isRead := readLiveBindings()
+		_, liveBindings, isRead := pairing.liveCounterparts()
 
-		if kept, isLive := liveBindings[collection]; isLive && collection != "" {
-			return attribute.value(kept, current.Type()), nil
+		if isRead && paired(liveBindings[index]) {
+			return attribute.value(liveBindings[index], current.Type()), nil
 		}
 
 		return attribute.fallback(collection, isRead, current.Type())
@@ -213,7 +232,7 @@ func planOmitted(attribute omittedAttribute, plan tftypes.Value, config tftypes.
 
 // planBindingFields plans omitted binding fields, Estuary's default recommended = "unlimited" for new bindings. Bindings
 // of an existing entry whose live spec can't be read plan none, so an unread live selection is never replaced.
-func planBindingFields(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+func planBindingFields(plan tftypes.Value, config tftypes.Value, pairing bindingPairing) (tftypes.Value, error) {
 	return planOmitted(omittedAttribute{
 		index: func(path *tftypes.AttributePath) (int, bool) {
 			return bindingAttributeIndex(path, bindingFieldsAttribute)
@@ -222,19 +241,19 @@ func planBindingFields(plan tftypes.Value, config tftypes.Value, state tftypes.V
 			return blockAttribute(binding, bindingFieldsAttribute, attributeType)
 		},
 		fallback: func(_ string, isRead bool, attributeType tftypes.Type) (tftypes.Value, error) {
-			if exists(state) && !isRead {
+			if exists(pairing.state) && !isRead {
 				return tftypes.NewValue(attributeType, nil), nil
 			}
 
 			return defaultBindingFields(attributeType)
 		},
-	}, plan, config, state, readLive)
+	}, plan, config, pairing)
 }
 
 // planBindingSchemas plans omitted resource schemaName attributes as the dashboard names a new binding from
 // target_naming. They stay unknown while the collection or target_naming is, or while the live spec of an existing entry
 // can't be read, so an unread live schema is never replaced.
-func planBindingSchemas(schemaName string, plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error) {
+func planBindingSchemas(schemaName string, plan tftypes.Value, config tftypes.Value, pairing bindingPairing) (tftypes.Value, error) {
 	naming, isKnown := targetNaming(plan)
 
 	return planOmitted(omittedAttribute{
@@ -245,7 +264,7 @@ func planBindingSchemas(schemaName string, plan tftypes.Value, config tftypes.Va
 			return resourceString(binding, schemaName)
 		},
 		fallback: func(collection string, isRead bool, _ tftypes.Type) (tftypes.Value, error) {
-			if collection == "" || !isKnown || exists(state) && !isRead {
+			if collection == "" || !isKnown || exists(pairing.state) && !isRead {
 				return tftypes.NewValue(tftypes.String, tftypes.UnknownValue), nil
 			}
 
@@ -255,42 +274,30 @@ func planBindingSchemas(schemaName string, plan tftypes.Value, config tftypes.Va
 
 			return tftypes.NewValue(tftypes.String, nil), nil
 		},
-	}, plan, config, state, readLive)
+	}, plan, config, pairing)
 }
 
-// movedTables lists the planned bindings whose table differs from their live one, as "collection: old -> new" lines.
-// Names differing only in case are the same table.
-func movedTables(schemaName string, tableName string, namespaceName string, plan tftypes.Value, readLive liveReader) []string {
+// movedTables lists the planned bindings whose table differs from their live one, see bindingPairing, as
+// "collection: old -> new" lines. Names differing only in case are the same table.
+func movedTables(schemaName string, tableName string, namespaceName string, pairing bindingPairing) []string {
 	var moved []string
+	var plan tftypes.Value = pairing.plan
+	var planned []tftypes.Value = pairing.planned.values
 
-	planned, _, err := bindings(plan)
-
-	if err != nil {
-		return nil
-	}
-
-	live, found := readLive()
+	live, liveBindings, found := pairing.liveCounterparts()
 
 	if !found {
 		return nil
 	}
 
-	liveBindings, err := indexedBindings(live)
-
-	if err != nil {
-		return nil
-	}
-
-	for _, binding := range planned {
+	for index, binding := range planned {
 		var collection string = bindingCollectionValue(binding)
 
-		liveBinding, isLive := liveBindings[collection]
-
-		if collection == "" || !isLive {
+		if !paired(liveBindings[index]) {
 			continue
 		}
 
-		previous, isRead := bindingTable(schemaName, tableName, namespaceName, live, liveBinding)
+		previous, isRead := bindingTable(schemaName, tableName, namespaceName, live, liveBindings[index])
 		current, isKnown := bindingTable(schemaName, tableName, namespaceName, plan, binding)
 
 		if isRead && isKnown && !strings.EqualFold(previous, current) {

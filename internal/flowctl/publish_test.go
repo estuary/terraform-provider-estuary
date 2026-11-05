@@ -246,6 +246,169 @@ captures:
 	}
 }
 
+func TestWithDeclaredBindingsReplacesEachDiscoveredBindingOnce(test *testing.T) {
+	var name string = "acmeCo/http/source-http-ingest"
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml": `captures:
+  acmeCo/http/source-http-ingest:
+    bindings:
+      - resource: { path: /orders }
+        target: acmeCo/http/events
+      - resource: { path: /refunds }
+        target: acmeCo/http/events
+`,
+	})
+	var declared []any = []any{
+		map[string]any{"resource": map[string]any{"path": "/orders", "idFromHeader": "X-Id"}, "target": "acmeCo/http/events"},
+		map[string]any{"resource": map[string]any{"path": "/refunds", "idFromHeader": "X-Id"}, "target": "acmeCo/http/events"},
+	}
+
+	if err := withDeclaredBindings(tree, name, declared, nil); err != nil {
+		test.Fatalf("withDeclaredBindings: %v", err)
+	}
+
+	if bindings := catalog.Bindings(tree.capture(name)); !reflect.DeepEqual(bindings, declared) {
+		test.Errorf("bindings = %v, want each declared binding in place of one discovered binding of its collection", bindings)
+	}
+}
+
+func TestWithDeclaredBindingsMatchesSharedTargetsByResource(test *testing.T) {
+	var name string = "acmeCo/http/source-http-ingest"
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml": `captures:
+  acmeCo/http/source-http-ingest:
+    bindings:
+      - resource: { _meta: { path: [orders] }, path: /orders }
+        target: acmeCo/http/events
+      - resource: { _meta: { path: [refunds] }, path: /refunds }
+        target: acmeCo/http/events
+      - resource: { path: /users }
+        target: acmeCo/http/users
+`,
+	})
+	var declared []any = []any{
+		map[string]any{"resource": map[string]any{"path": "/refunds", "idFromHeader": "X-Id"}, "target": "acmeCo/http/events"},
+		map[string]any{"resource": map[string]any{"path": "/orders", "idFromHeader": "X-Id"}, "target": "acmeCo/http/events"},
+		map[string]any{"resource": map[string]any{"path": "/members"}, "target": "acmeCo/http/users"},
+	}
+
+	if err := withDeclaredBindings(tree, name, declared, nil); err != nil {
+		test.Fatalf("withDeclaredBindings: %v", err)
+	}
+
+	var bindings []any = catalog.Bindings(tree.capture(name))
+
+	if len(bindings) != 3 {
+		test.Fatalf("bindings = %v, want each declared binding in place of one discovered binding", bindings)
+	}
+
+	for position, path := range []string{"/orders", "/refunds", "/members"} {
+		if resource := catalog.BindingResource(bindings[position]); resource["path"] != path {
+			test.Errorf("bindings[%d] = %v, want %s in its discovered place", position, resource, path)
+		}
+	}
+
+	if meta := utils.Lookup(catalog.BindingResource(bindings[1]), "_meta"); !reflect.DeepEqual(meta["path"], []any{"refunds"}) {
+		test.Errorf("refunds metadata = %v, want its own discovered metadata, not the orders one", meta)
+	}
+}
+
+func TestWithDeclaredBindingsKeepsCollectionsOtherBindingsTarget(test *testing.T) {
+	var name string = "acmeCo/http/source-http-ingest"
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml": `captures:
+  acmeCo/http/source-http-ingest:
+    bindings:
+      - resource: { path: /orders }
+        target: acmeCo/http/events
+      - resource: { path: /refunds }
+        target: acmeCo/http/events
+collections:
+  acmeCo/http/events: { key: [/_meta/webhookId], writeSchema: events.write.schema.yaml }
+`,
+	})
+	var declared []any = []any{
+		map[string]any{"resource": map[string]any{"path": "/orders"}, "target": "acmeCo/http/orders"},
+		map[string]any{"resource": map[string]any{"path": "/refunds"}, "target": "acmeCo/http/events"},
+	}
+
+	if err := withDeclaredBindings(tree, name, declared, nil); err != nil {
+		test.Fatalf("withDeclaredBindings: %v", err)
+	}
+
+	var collections map[string]any = tree.files["flow.yaml"]["collections"].(map[string]any)
+	orders, renamed := collections["acmeCo/http/orders"].(map[string]any)
+	events, kept := collections["acmeCo/http/events"].(map[string]any)
+
+	if !renamed || !kept || orders["writeSchema"] != "events.write.schema.yaml" || events["writeSchema"] != "events.write.schema.yaml" {
+		test.Errorf("collections = %v, want orders defined from events, and events kept for the refunds binding", collections)
+	}
+
+	orders["reset"] = true
+
+	if events["reset"] != nil {
+		test.Errorf("events = %v, want it unchanged by a change to orders", events)
+	}
+}
+
+func TestWithDeclaredBindingsDefinesSharedTargetsInDeclarationOrder(test *testing.T) {
+	var identifier mongodb.Spec
+	var name string = "acmeCo/mongodb/source-mongodb"
+	var declared []any = []any{
+		map[string]any{"resource": map[string]any{"database": "shop", "collection": "users"}, "target": "acmeCo/merged"},
+		map[string]any{"resource": map[string]any{"database": "shop", "collection": "orders"}, "target": "acmeCo/merged"},
+	}
+
+	for range 20 {
+		var tree *catalogTree = writeTree(test, map[string]string{
+			"flow.yaml": `captures:
+  acmeCo/mongodb/source-mongodb:
+    bindings:
+      - resource: { database: shop, collection: users }
+        target: acmeCo/mongodb/shop/users
+      - resource: { database: shop, collection: orders }
+        target: acmeCo/mongodb/shop/orders
+collections:
+  acmeCo/mongodb/shop/users: { key: [/_id], writeSchema: users.write.schema.yaml }
+  acmeCo/mongodb/shop/orders: { key: [/_id], writeSchema: orders.write.schema.yaml }
+`,
+		})
+
+		if err := withDeclaredBindings(tree, name, declared, identifier); err != nil {
+			test.Fatalf("withDeclaredBindings: %v", err)
+		}
+
+		var collections map[string]any = tree.files["flow.yaml"]["collections"].(map[string]any)
+		merged, _ := collections["acmeCo/merged"].(map[string]any)
+
+		if len(collections) != 1 || merged["writeSchema"] != "users.write.schema.yaml" {
+			test.Fatalf("collections = %v, want only acmeCo/merged, defined from the first declared binding's users collection", collections)
+		}
+	}
+}
+
+func TestWithDeclaredBindingsRejectsAmbiguousBindings(test *testing.T) {
+	var name string = "acmeCo/http/source-http-ingest"
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml": `captures:
+  acmeCo/http/source-http-ingest:
+    bindings:
+      - resource: { path: /a, stream: x }
+        target: acmeCo/http/events
+      - resource: { path: /b }
+        target: acmeCo/http/events
+`,
+	})
+	var declared []any = []any{
+		map[string]any{"resource": map[string]any{"path": "/a2"}, "target": "acmeCo/http/events"},
+		map[string]any{"resource": map[string]any{"path": "/b2"}, "target": "acmeCo/http/events"},
+	}
+
+	if err := withDeclaredBindings(tree, name, declared, nil); err == nil || !strings.Contains(err.Error(), "2 declared bindings of acmeCo/http/events") {
+		test.Errorf("withDeclaredBindings error = %v, want the ambiguous bindings of acmeCo/http/events rejected", err)
+	}
+}
+
 func TestPublicationErrorMarksConflicts(test *testing.T) {
 	expectations := map[string]struct {
 		err      error

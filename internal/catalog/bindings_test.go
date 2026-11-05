@@ -23,14 +23,12 @@ func TestBindingCollection(test *testing.T) {
 	}
 }
 
-func TestBindingsByCollection(test *testing.T) {
+func TestBindings(test *testing.T) {
 	var orders map[string]any = map[string]any{"target": "acmeCo/orders"}
 	var users map[string]any = map[string]any{"source": "acmeCo/users"}
 
-	var indexed map[string]map[string]any = BindingsByCollection(Bindings(map[string]any{BindingsKey: []any{orders, users}}))
-
-	if len(indexed) != 2 || indexed["acmeCo/orders"]["target"] != "acmeCo/orders" || indexed["acmeCo/users"]["source"] != "acmeCo/users" {
-		test.Errorf("BindingsByCollection = %v, want orders and users by collection", indexed)
+	if bindings := Bindings(map[string]any{BindingsKey: []any{orders, users}}); len(bindings) != 2 || bindings[0].(map[string]any)["target"] != "acmeCo/orders" {
+		test.Errorf("Bindings = %v, want orders and users in order", bindings)
 	}
 
 	if Bindings(map[string]any{}) != nil {

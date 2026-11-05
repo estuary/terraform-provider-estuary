@@ -2,6 +2,8 @@ package builder
 
 import (
 	"context"
+	"reflect"
+	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/capture"
@@ -11,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 // CaptureSpec is the catalog spec of a connector capture with config C and binding resource R.
@@ -51,10 +54,14 @@ var captureAddedBindings addedBindings = addedBindings{
 func captureType[R any]() catalogType {
 	var key string = taggedKey[R](catalog.BackfillModeField)
 
+	resourcePath, err := captureResourcePath[R]()
+
 	return catalogType{
 		name:             "capture",
+		err:              err,
 		added:            captureAddedBindings,
 		publish:          publishCapture,
+		resourcePath:     resourcePath,
 		backfillModeKey:  key,
 		adjustAttributes: adjustCaptureAttributes[R],
 		toSpecShape: func(document map[string]any) {
@@ -68,6 +75,46 @@ func captureType[R any]() catalogType {
 			}
 		},
 	}
+}
+
+// captureResourcePath returns the resourcePath of capture resource R, see capture.ResourcePath, the zero one when R has
+// no resource path.
+func captureResourcePath[R any]() (resourcePath, error) {
+	if _, isPather := any(*new(R)).(capture.ResourcePather); !isPather {
+		return resourcePath{}, nil
+	}
+
+	object, err := translator.NewObject(reflect.TypeFor[R]())
+
+	if err != nil {
+		return resourcePath{}, err
+	}
+
+	var key func(resource map[string]any) string = func(resource map[string]any) string {
+		path, _ := capture.ResourcePath[R](resource)
+
+		return path
+	}
+
+	var bindingKey func(entry tftypes.Value, binding tftypes.Value) (string, string) = func(_ tftypes.Value, binding tftypes.Value) (string, string) {
+		resource, err := object.SpecValue(blockAttribute(binding, bindingResourceAttribute, tftypes.DynamicPseudoType))
+		document, isDocument := resource.(map[string]any)
+
+		if err != nil || !isDocument {
+			return "", ""
+		}
+
+		return key(document), ""
+	}
+
+	return resourcePath{
+		key: bindingKey,
+		label: func(entry tftypes.Value, binding tftypes.Value) string {
+			path, _ := bindingKey(entry, binding)
+
+			return strings.ReplaceAll(path, "\x00", ".")
+		},
+	}, nil
 }
 
 // NewCapture returns the resource factory of a connector capture.

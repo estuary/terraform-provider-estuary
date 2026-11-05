@@ -3,8 +3,11 @@ package flowctl
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
@@ -14,11 +17,18 @@ import (
 
 const dekafConfigFile string = "dekaf.config.yaml"
 
-// withDeclaredBindings replaces discovered bindings with declared ones of the same resource, keeping discovered
-// metadata. A declared binding naming another target renames the discovered collection.
+// collectionRename is a discovered collection a declared binding targets under another name.
+type collectionRename struct {
+	previous string
+	target   string
+}
+
+// withDeclaredBindings replaces discovered bindings with declared ones of the same resource, see declaredPositions,
+// keeping discovered metadata. A declared binding naming another target renames the discovered collection, see
+// renameCollections.
 func withDeclaredBindings(tree *catalogTree, name string, declared []any, identifier catalog.BindingsIdentifier) error {
-	var positions map[string]int = map[string]int{}
 	var capture map[string]any = tree.capture(name)
+	var renames []collectionRename
 
 	if capture == nil {
 		return fmt.Errorf("discovered spec has no capture %s", name)
@@ -26,22 +36,16 @@ func withDeclaredBindings(tree *catalogTree, name string, declared []any, identi
 
 	var discovered []any = catalog.Bindings(capture)
 
-	for position, binding := range discovered {
-		if key, err := bindingKey(binding, identifier); err == nil {
-			positions[key] = position
-		}
+	positions, err := declaredPositions(discovered, declared, identifier)
+
+	if err != nil {
+		return err
 	}
 
-	for _, binding := range declared {
-		key, err := bindingKey(binding, identifier)
+	for index, binding := range declared {
+		var position int = positions[index]
 
-		if err != nil {
-			return err
-		}
-
-		position, found := positions[key]
-
-		if !found {
+		if position == -1 {
 			discovered = append(discovered, binding)
 
 			continue
@@ -52,12 +56,8 @@ func withDeclaredBindings(tree *catalogTree, name string, declared []any, identi
 
 		catalog.KeepResourceMeta(discovered[position], binding)
 
-		if collections := tree.collections(previous); collections != nil && target != previous {
-			if tree.collections(target) == nil {
-				collections[target] = collections[previous]
-			}
-
-			delete(collections, previous)
+		if target != previous {
+			renames = append(renames, collectionRename{previous: previous, target: target})
 		}
 
 		discovered[position] = binding
@@ -65,20 +65,151 @@ func withDeclaredBindings(tree *catalogTree, name string, declared []any, identi
 
 	capture[catalog.BindingsKey] = discovered
 
+	renameCollections(tree, renames, discovered)
+
 	return nil
 }
 
-// bindingKey identifies a binding by its resource path, else by its target.
-func bindingKey(binding any, identifier catalog.BindingsIdentifier) (string, error) {
-	if identifier != nil {
-		path, err := identifier.ResourcePath(catalog.BindingResource(binding))
+// renameCollections defines each renamed collection under its new target, where undefined, in the file defining it, in
+// declaration order, so a target several collections are renamed to is defined by the first. It then removes each old
+// name no binding targets, as other bindings may still share it.
+func renameCollections(tree *catalogTree, renames []collectionRename, bindings []any) {
+	for _, rename := range renames {
+		var collections map[string]any = tree.collections(rename.previous)
 
-		if err != nil || path != "" {
-			return "path:" + path, err
+		if collections == nil || tree.collections(rename.target) != nil {
+			continue
+		}
+
+		var collection any = collections[rename.previous]
+
+		if object, isObject := collection.(map[string]any); isObject {
+			collection = maps.Clone(object)
+		}
+
+		collections[rename.target] = collection
+	}
+
+	for _, rename := range renames {
+		var collections map[string]any = tree.collections(rename.previous)
+
+		if collections != nil && !slices.ContainsFunc(bindings, func(binding any) bool { return catalog.BindingCollection(binding) == rename.previous }) {
+			delete(collections, rename.previous)
+		}
+	}
+}
+
+// declaredPositions returns the discovered binding each declared one replaces, each at most once, -1 when none: the
+// one with its resource path. A declared binding without one replaces the first discovered binding left without one
+// whose resource it extends, else the only one left of its target while it is the only one left of that target too,
+// so bindings sharing a target never swap their metadata. Several left on both sides of a target fail, as which
+// replaces which is ambiguous.
+func declaredPositions(discovered []any, declared []any, identifier catalog.BindingsIdentifier) ([]int, error) {
+	var positions []int = make([]int, len(declared))
+	var declaredPaths []string = make([]string, len(declared))
+	var discoveredPaths []string = make([]string, len(discovered))
+	var byPath map[string][]int = map[string][]int{}
+	var taken map[int]bool = map[int]bool{}
+
+	for position, binding := range discovered {
+		discoveredPaths[position], _ = bindingPath(binding, identifier)
+
+		if discoveredPaths[position] != "" {
+			byPath[discoveredPaths[position]] = append(byPath[discoveredPaths[position]], position)
 		}
 	}
 
-	return "target:" + catalog.BindingCollection(binding), nil
+	for index, binding := range declared {
+		path, err := bindingPath(binding, identifier)
+
+		if err != nil {
+			return nil, err
+		}
+
+		declaredPaths[index] = path
+		positions[index] = -1
+
+		if queue := byPath[path]; path != "" && len(queue) > 0 {
+			positions[index] = queue[0]
+			byPath[path] = queue[1:]
+			taken[queue[0]] = true
+		}
+	}
+
+	for index, binding := range declared {
+		if declaredPaths[index] != "" {
+			continue
+		}
+
+		for position, candidate := range discovered {
+			if !taken[position] && discoveredPaths[position] == "" && extendsResource(binding, candidate) {
+				positions[index] = position
+				taken[position] = true
+
+				break
+			}
+		}
+	}
+
+	var waiting map[string][]int = map[string][]int{}
+	var left map[string][]int = map[string][]int{}
+
+	for index, binding := range declared {
+		if declaredPaths[index] == "" && positions[index] == -1 {
+			waiting[catalog.BindingCollection(binding)] = append(waiting[catalog.BindingCollection(binding)], index)
+		}
+	}
+
+	for position, binding := range discovered {
+		if discoveredPaths[position] == "" && !taken[position] {
+			left[catalog.BindingCollection(binding)] = append(left[catalog.BindingCollection(binding)], position)
+		}
+	}
+
+	for _, target := range slices.Sorted(maps.Keys(waiting)) {
+		var indexes []int = waiting[target]
+		var candidates []int = left[target]
+
+		if len(indexes) == 1 && len(candidates) == 1 {
+			positions[indexes[0]] = candidates[0]
+		} else if len(candidates) > 0 {
+			return nil, fmt.Errorf("%d declared bindings of %s don't extend any of the %d discovered resources left for it, so which "+
+				"discovered binding each replaces is ambiguous: declare each with every field of the discovered resource it replaces",
+				len(indexes), target, len(candidates))
+		}
+	}
+
+	return positions, nil
+}
+
+// bindingPath returns the resource path key of a binding, empty when the resource has none.
+func bindingPath(binding any, identifier catalog.BindingsIdentifier) (string, error) {
+	if identifier == nil {
+		return "", nil
+	}
+
+	return identifier.ResourcePath(catalog.BindingResource(binding))
+}
+
+// extendsResource reports whether the resource of binding sets every field of the resource of discovered, resource
+// metadata aside, to the same value. An empty discovered resource is extended by none.
+func extendsResource(binding any, discovered any) bool {
+	var resource map[string]any = catalog.BindingResource(binding)
+	var compared int
+
+	for key, value := range catalog.BindingResource(discovered) {
+		if key == catalog.ResourceMetaKey {
+			continue
+		}
+
+		if !reflect.DeepEqual(resource[key], value) {
+			return false
+		}
+
+		compared++
+	}
+
+	return compared > 0
 }
 
 // resetsDirectory is the workspace directory the collections to reset are pulled into, imported from the spec file.

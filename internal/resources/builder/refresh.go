@@ -11,11 +11,12 @@ import (
 )
 
 // Refresh returns state refreshed from live, so plans show changes made outside Terraform. Only attributes set in
-// state refresh; bindings pair by collection. AppendUnheld appends live bindings state doesn't hold.
+// state refresh; bindings pair by collection and resource path, as Estuary does, so a binding whose resource changed
+// outside Terraform is no longer the one state holds. AppendUnheld appends live bindings state doesn't hold.
 func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appendUnheld bool) (tftypes.Value, error) {
 	var refreshed []tftypes.Value = []tftypes.Value{}
-	var held map[string]bool = map[string]bool{}
 	var path *tftypes.AttributePath = bindingsPath
+	var resourcePath resourcePath = codec.catalogType.resourcePath
 
 	state, err := codec.refreshManaged(tftypes.NewAttributePath(), state, live)
 
@@ -23,32 +24,27 @@ func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appen
 		return state, err
 	}
 
-	stateBindings, bindingsType, err := bindings(state)
+	stateBindings, err := resourcePath.entryBindings(state)
 
-	if err != nil || bindingsType == nil {
+	if err != nil || stateBindings.listType == nil {
 		return state, err
 	}
 
-	liveBindings, _, err := bindings(live)
+	liveBindings, err := resourcePath.entryBindings(live)
 
 	if err != nil {
 		return state, err
 	}
 
-	var liveByCollection map[string]tftypes.Value = byCollection(liveBindings)
+	var pairs []int = resourcePath.pairSame(stateBindings.keys, liveBindings.keys)
+	var held []int = inversePairs(pairs, len(liveBindings.values))
 
-	for index, binding := range stateBindings {
-		var collection string = bindingCollectionValue(binding)
-
-		liveBinding, found := liveByCollection[collection]
-
-		if !found {
+	for index, binding := range stateBindings.values {
+		if pairs[index] == -1 {
 			continue
 		}
 
-		held[collection] = true
-
-		refreshedBinding, err := codec.refreshManaged(path.WithElementKeyInt(index), binding, liveBinding)
+		refreshedBinding, err := codec.refreshManaged(path.WithElementKeyInt(index), binding, liveBindings.values[pairs[index]])
 
 		if err != nil {
 			return state, err
@@ -57,14 +53,14 @@ func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appen
 		refreshed = append(refreshed, refreshedBinding)
 	}
 
-	for _, binding := range liveBindings {
-		if appendUnheld && !held[bindingCollectionValue(binding)] {
+	for index, binding := range liveBindings.values {
+		if appendUnheld && held[index] == -1 {
 			refreshed = append(refreshed, binding)
 		}
 	}
 
 	return withAttribute(state, path, func(tftypes.Value) tftypes.Value {
-		return tftypes.NewValue(bindingsType, refreshed)
+		return tftypes.NewValue(stateBindings.listType, refreshed)
 	})
 }
 

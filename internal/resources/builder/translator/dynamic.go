@@ -108,7 +108,7 @@ func (node dynamicNode) terraformValue(value any, _ tftypes.Type) (tftypes.Value
 	case bool:
 		return tftypes.NewValue(tftypes.Bool, typed), nil
 	case int:
-		return tftypes.NewValue(tftypes.Number, big.NewFloat(float64(typed))), nil
+		return tftypes.NewValue(tftypes.Number, new(big.Float).SetInt64(int64(typed))), nil
 	case int64:
 		return tftypes.NewValue(tftypes.Number, new(big.Float).SetInt64(typed)), nil
 	case uint64:

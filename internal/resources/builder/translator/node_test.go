@@ -1,6 +1,7 @@
 package translator
 
 import (
+	"math/big"
 	"reflect"
 	"testing"
 )
@@ -26,5 +27,25 @@ func TestNewNodeRejectsUnsupportedTypes(test *testing.T) {
 		if _, err := newNode(kind); err == nil {
 			test.Errorf("%s: newNode accepted %s", name, kind)
 		}
+	}
+}
+
+func TestDynamicNodeKeepsLargeIntegers(test *testing.T) {
+	var large int = 1<<53 + 1
+
+	value, err := dynamicNode{}.terraformValue(large, nil)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var number big.Float
+
+	if err := value.As(&number); err != nil {
+		test.Fatal(err)
+	}
+
+	if converted, accuracy := number.Int64(); converted != int64(large) || accuracy != big.Exact {
+		test.Errorf("converted = %d (%v), want %d exactly", converted, accuracy, large)
 	}
 }

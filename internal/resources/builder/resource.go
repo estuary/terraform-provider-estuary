@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"reflect"
+	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/utils"
@@ -28,11 +29,11 @@ type publication struct {
 // publisher publishes a catalog entry as its YAML document.
 type publisher func(ctx context.Context, backend catalog.Backend, name string, document map[string]any, publication publication) error
 
-// bindingsPlanner returns plan with the binding attributes the configuration omits planned.
-type bindingsPlanner func(plan tftypes.Value, config tftypes.Value, state tftypes.Value, readLive liveReader) (tftypes.Value, error)
+// bindingsPlanner returns plan with the binding attributes the configuration omits planned, its bindings paired by pairing.
+type bindingsPlanner func(plan tftypes.Value, config tftypes.Value, pairing bindingPairing) (tftypes.Value, error)
 
 // tablesMover returns the planned bindings whose table differs from the live one, as "collection: old -> new" lines.
-type tablesMover func(plan tftypes.Value, readLive liveReader) []string
+type tablesMover func(pairing bindingPairing) []string
 
 // entryResource is the Terraform resource of a catalog entry, a capture or a materialization.
 type entryResource[D Document[D, S], S any] struct {
@@ -74,6 +75,7 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 	var planName types.String
 	var readLive liveReader = entryResource.newLiveReader(ctx, modifyPlanReq.State.Raw)
 	var readPublication publicationReader
+	var pairing bindingPairing
 
 	if modifyPlanReq.Plan.Raw.IsNull() {
 		return
@@ -97,15 +99,24 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 		planned, err = planShards(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)
 	}
 
+	if err == nil {
+		pairing, err = entryResource.catalogType.resourcePath.newPairing(planned, modifyPlanReq.State.Raw, readLive)
+	}
+
 	if err == nil && entryResource.catalogType.planBindings != nil {
-		planned, err = entryResource.catalogType.planBindings(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
+		planned, err = entryResource.catalogType.planBindings(planned, modifyPlanReq.Config.Raw, pairing)
+	}
+
+	if err == nil && entryResource.catalogType.planBindings != nil {
+		pairing, err = pairing.withPlan(planned)
 	}
 
 	if err != nil {
 		modifyPlanResp.Diagnostics.AddError("Planning "+entryResource.catalogType.name+" bindings", err.Error())
+		return
 	}
 
-	modifyPlanResp.Diagnostics.Append(validateBackfillTriggers(planned, modifyPlanReq.State.Raw, entryResource.catalogType)...)
+	modifyPlanResp.Diagnostics.Append(validateBackfillTriggers(pairing, entryResource.catalogType)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.validateKeepUnmanagedBindings(planned)...)
 
 	modifyPlanResp.Plan.Raw = planned
@@ -131,16 +142,16 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 		return
 	}
 
-	readPublication = entryResource.newPublicationReader(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readLive)
+	readPublication = entryResource.newPublicationReader(pairing)
 
-	modifyPlanResp.Diagnostics.Append(entryResource.warnTakenOverBindings(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readLive)...)
-	modifyPlanResp.Diagnostics.Append(entryResource.warnMovedTables(modifyPlanResp.Plan.Raw, readLive)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnTakenOverBindings(pairing)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnMovedTables(pairing)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnNamingChange(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw)...)
-	modifyPlanResp.Diagnostics.Append(entryResource.warnRemovedBindings(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw)...)
-	modifyPlanResp.Diagnostics.Append(entryResource.warnUnmanagedBindingsRemoval(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readLive)...)
-	modifyPlanResp.Diagnostics.Append(entryResource.warnDataflowResets(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readPublication)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnRemovedBindings(pairing)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnUnmanagedBindingsRemoval(pairing)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnDataflowResets(pairing, readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnEntryBackfill(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readPublication)...)
-	modifyPlanResp.Diagnostics.Append(entryResource.validateMissingBackfills(modifyPlanResp.Plan.Raw, readPublication)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.validateMissingBackfills(readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnDisabledLive(modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)...)
 }
 
@@ -349,6 +360,13 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 		return "", diagnostics
 	}
 
+	if paths := entryResource.codec.secrets.credentialPaths(planned); len(paths) > 0 {
+		diagnostics.AddError("Credentials in connection string",
+			strings.Join(paths, ", ")+" of the "+entryResource.catalogType.name+" holds credentials, such as user:password@ or a password or token option, "+
+				"which the catalog entry and state would store in plain text. Set them in the connector's write-only attributes instead.")
+		return "", diagnostics
+	}
+
 	name, spec, err := entryResource.codec.Spec(planned)
 
 	if err != nil {
@@ -387,7 +405,7 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 		document[catalog.ExpectPubIDKey] = catalog.NewEntryPubID
 		conflictHint = "\n\n" + catalogName + " already exists in Estuary: import it with terraform import instead of creating it."
 	} else {
-		publication.resets, live, err = entryResource.mergeLive(ctx, catalogName, document, keepsUnmanagedBindings(plan.Raw), plan.Raw, prior.Raw)
+		publication.resets, live, err = entryResource.mergeLive(ctx, name, catalogName, document, keepsUnmanagedBindings(plan.Raw), plan.Raw, prior.Raw)
 
 		if err != nil {
 			diagnostics.AddError("Merging "+entryResource.catalogType.name+" "+catalogName+" with its live spec", err.Error())

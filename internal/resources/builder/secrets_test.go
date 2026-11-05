@@ -76,6 +76,34 @@ func TestSecretsHash(test *testing.T) {
 	}
 }
 
+func TestVerifySecretDerivesOnce(test *testing.T) {
+	hash, err := hashSecret("secret")
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if !verifySecret("secret", hash) || verifySecret("rotated", hash) {
+		test.Fatal("verifySecret matched the wrong secret")
+	}
+
+	var start time.Time = time.Now()
+
+	for range 100 {
+		if !verifySecret("secret", hash) {
+			test.Fatal("verifySecret stopped matching the secret once cached")
+		}
+	}
+
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		test.Errorf("100 verifications took %s, want the matching secret derived once", elapsed)
+	}
+
+	if verifySecret("rotated", hash) {
+		test.Error("verifySecret matched another secret against a cached hash")
+	}
+}
+
 func TestCodecSecrets(test *testing.T) {
 	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
 

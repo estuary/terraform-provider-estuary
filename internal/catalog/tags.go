@@ -79,9 +79,14 @@ func yamlOption(field reflect.StructField, option string) bool {
 	return slices.Contains(strings.Split(field.Tag.Get("yaml"), ",")[1:], option)
 }
 
-// SecretField reports whether a string field is secret, by its secret tag or its key.
+// SecretField reports whether a string field is secret, by its secret tag, else by its key. secret:"false" keeps a
+// field whose key looks sensitive, such as tokenUrl, readable.
 func SecretField(field reflect.StructField) bool {
-	return stringField(field) && (field.Tag.Get("secret") == "true" || IsSensitiveKey(FieldKey(field)))
+	if secret, tagged := field.Tag.Lookup("secret"); tagged && stringField(field) {
+		return secret == "true"
+	}
+
+	return stringField(field) && IsSensitiveKey(FieldKey(field))
 }
 
 // EnumValues returns the comma-separated values of a field's enum tag, reporting false without one.

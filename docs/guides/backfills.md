@@ -23,7 +23,7 @@ A backfill reads a binding's data again: a capture binding captures its whole re
 >
 > - Each raise is one backfill, even by more than one (2 → 5).
 > - Start at 1. It only goes up, and must be known at plan time: `timestamp()` would backfill on every apply.
-> - Setting it on an existing binding that didn't have it backfills once. A new binding only records it.
+> - Setting it where it wasn't set, on a new or existing binding, or after an import, only records its starting value: raise it later to backfill.
 > - Removing it does nothing. Keep it, with the reason in a comment, so the Git history tells why each backfill happened.
 
 The top-level `backfill.trigger` of a capture or materialization backfills **every enabled** binding, including those Terraform doesn't manage. The plan warns with the list.

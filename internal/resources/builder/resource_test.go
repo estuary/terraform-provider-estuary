@@ -599,8 +599,12 @@ func TestResourceAddressesTheStoredCatalogName(test *testing.T) {
 		test.Fatalf("read: %v, delete: %v", readResp.Diagnostics, deleteResp.Diagnostics)
 	}
 
-	if !reflect.DeepEqual(backend.reads, []string{"oldCo/movies/source-test"}) || !reflect.DeepEqual(backend.deletes, []string{"oldCo/movies/source-test"}) {
-		test.Errorf("read %v and deleted %v, want the stored catalog name, not the acmeCo/ tenant one", backend.reads, backend.deletes)
+	if _, found := entry.newLiveReader(ctx, stateValue)(); !found {
+		test.Fatal("plan-time live read failed")
+	}
+
+	if !reflect.DeepEqual(backend.reads, []string{"oldCo/movies/source-test", "oldCo/movies/source-test"}) || !reflect.DeepEqual(backend.deletes, []string{"oldCo/movies/source-test"}) {
+		test.Errorf("read %v and deleted %v, want the stored catalog name for refreshes, plan-time reads and deletes, not the acmeCo/ tenant one", backend.reads, backend.deletes)
 	}
 }
 
@@ -749,6 +753,33 @@ func TestResourceImportStateRejectsMissingEntry(test *testing.T) {
 
 	if !importResp.Diagnostics.HasError() {
 		test.Error("ImportState accepted a catalog entry that doesn't exist")
+	}
+}
+
+func TestResourceImportStateAddsTheTenantAndConnectorName(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	for _, id := range []string{"movies", "acmeCo/movies"} {
+		var backend *testBackend = &testBackend{live: liveCapture()}
+
+		entry := newTestCaptureEntry(backend)
+
+		var importResp resource.ImportStateResponse = resource.ImportStateResponse{
+			State: tfsdk.State{
+				Schema: entry.codec.Schema(),
+				Raw:    tftypes.NewValue(entry.codec.Schema().Type().TerraformType(ctx), nil),
+			},
+		}
+
+		entry.ImportState(ctx, resource.ImportStateRequest{ID: id}, &importResp)
+
+		if importResp.Diagnostics.HasError() {
+			test.Fatalf("%s: import: %v", id, importResp.Diagnostics)
+		}
+
+		if !reflect.DeepEqual(backend.reads, []string{"acmeCo/movies/source-test"}) {
+			test.Errorf("%s: read specs of %v, want the documented shorthand resolved to acmeCo/movies/source-test", id, backend.reads)
+		}
 	}
 }
 
@@ -1053,13 +1084,114 @@ func TestKeepUnmanagedBindings(test *testing.T) {
 
 	readLive = entry.newLiveReader(ctx, kept)
 
-	warnings := entry.warnUnmanagedBindingsRemoval(managed, kept, readLive)
+	warnings := entry.warnUnmanagedBindingsRemoval(testPairing(test, entry.catalogType.resourcePath, managed, kept, readLive))
 
 	if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), "- acmeCo/events\n") || strings.Contains(warnings[0].Detail(), "acmeCo/orders") {
 		test.Errorf("warnings = %v, want only the undeclared events binding listed", warnings)
 	}
 
-	if warnings := entry.warnUnmanagedBindingsRemoval(managed, managed, readLive); len(warnings) != 0 {
+	if warnings := entry.warnUnmanagedBindingsRemoval(testPairing(test, entry.catalogType.resourcePath, managed, managed, readLive)); len(warnings) != 0 {
 		test.Errorf("warnings = %v, want none once state already manages every binding", warnings)
+	}
+}
+
+func TestResourceApplyRejectsCredentialsUnknownAtPlan(test *testing.T) {
+	type credentialsConfig struct {
+		Address     string `yaml:"address" credentials:"forbidden"`
+		SSHEndpoint string `yaml:"sshEndpoint,omitempty" credentials:"password"`
+	}
+
+	var ctx context.Context = context.Background()
+	var configureResp resource.ConfigureResponse
+
+	expectations := map[string]struct {
+		config credentialsConfig
+		paths  []string
+	}{
+		"forbidden user info":    {credentialsConfig{Address: "mongodb://flow_capture:secret@123.4.567.89:27017"}, []string{"config.address"}},
+		"forbidden token option": {credentialsConfig{Address: "mongodb://123.4.567.89:27017?password=secret"}, []string{"config.address"}},
+		"password in ssh":        {credentialsConfig{Address: "123.4.567.89:27017", SSHEndpoint: "ssh://ec2-user:secret@123.4.567.90:22"}, []string{"config.ssh_endpoint"}},
+		"user without password":  {credentialsConfig{Address: "123.4.567.89:27017", SSHEndpoint: "ssh://ec2-user@123.4.567.90:22"}, nil},
+		"host and options only":  {credentialsConfig{Address: "mongodb+srv://cluster0.123456789.mongodb.net?authSource=admin"}, nil},
+	}
+
+	for name, expected := range expectations {
+		var backend *testBackend = &testBackend{}
+		var spec CaptureSpec[credentialsConfig, testResource] = CaptureSpec[credentialsConfig, testResource]{
+			Endpoint: endpoint.ConnectorSpec[credentialsConfig]{
+				Connector: endpoint.Connector[credentialsConfig]{Image: testNamedConnector.Image, Config: expected.config},
+			},
+			Bindings: []capture.Binding[testResource]{{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"}},
+		}
+
+		entry := NewCapture[credentialsConfig, testResource](testNamedConnector)().(*entryResource[captureDocument[credentialsConfig, testResource], CaptureSpec[credentialsConfig, testResource]])
+
+		entry.Configure(ctx, resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: backend, Tenant: "acmeCo/"}}, &configureResp)
+
+		value, err := entry.codec.Value("movies", spec)
+
+		if err == nil {
+			value, err = withValue(value, keepUnmanagedBindingsPath, false)
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var createResp resource.CreateResponse = resource.CreateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+		entry.Create(ctx, resource.CreateRequest{Plan: tfsdk.Plan{Schema: entry.codec.Schema(), Raw: value}}, &createResp)
+
+		if expected.paths == nil {
+			if createResp.Diagnostics.HasError() || backend.published == nil {
+				test.Errorf("%s: published %v with %v, want the spec published", name, backend.published, createResp.Diagnostics)
+			}
+
+			continue
+		}
+
+		if !createResp.Diagnostics.HasError() || backend.published != nil || !createResp.State.Raw.IsNull() {
+			test.Errorf("%s: published %v and stored %v, want the apply to fail first", name, backend.published, createResp.State.Raw)
+
+			continue
+		}
+
+		for _, path := range expected.paths {
+			if detail := createResp.Diagnostics.Errors()[0].Detail(); !strings.Contains(detail, path) || strings.Contains(detail, "secret") {
+				test.Errorf("%s: error = %q, want it to name %s without the credentials", name, detail, path)
+			}
+		}
+	}
+}
+
+func TestRemovedBindingsNameEachResource(test *testing.T) {
+	var entry *testCaptureEntry = newTestCaptureEntry(&testBackend{})
+	var planned CaptureSpec[testConfig, testResource] = testCaptureSpec
+	var prior CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+	planned.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "users"}, Target: "acmeCo/users"}}
+	prior.Bindings = []capture.Binding[testResource]{
+		{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"},
+		{Resource: testResource{Table: "orders_archive"}, Target: "acmeCo/orders"},
+		{Resource: testResource{Table: "users"}, Target: "acmeCo/users"},
+		{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"},
+	}
+
+	plan, err := entry.codec.Value("movies", planned)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	state, err := entry.codec.Value("movies", prior)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	removed, isKnown := testPairing(test, entry.catalogType.resourcePath, plan, state, nil).removedBindings()
+
+	if want := []string{"acmeCo/orders (orders)", "acmeCo/orders (orders_archive)"}; !isKnown || !reflect.DeepEqual(removed, want) {
+		test.Errorf("removed = %q (%v), want each removed resource of acmeCo/orders listed once", removed, isKnown)
 	}
 }

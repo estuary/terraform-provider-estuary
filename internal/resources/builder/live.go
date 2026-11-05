@@ -13,7 +13,8 @@ import (
 // liveReader returns the live value of the entry, read once, reporting false when it can't be read.
 type liveReader func() (tftypes.Value, bool)
 
-// newLiveReader returns the liveReader of the entry in state, skipping entries not created yet.
+// newLiveReader returns the liveReader of the entry in state, at its stored catalog name, skipping entries not created
+// yet.
 func (entryResource *entryResource[D, S]) newLiveReader(ctx context.Context, state tftypes.Value) liveReader {
 	return sync.OnceValues(func() (tftypes.Value, bool) {
 		name, isKnown := known[string](blockAttribute(state, nameAttribute, tftypes.String))
@@ -22,7 +23,7 @@ func (entryResource *entryResource[D, S]) newLiveReader(ctx context.Context, sta
 			return tftypes.Value{}, false
 		}
 
-		live, err := entryResource.readLiveValue(ctx, name)
+		live, err := entryResource.readLiveValue(ctx, name, entryResource.storedCatalogName(state, name))
 
 		return live, err == nil
 	})

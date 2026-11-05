@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -50,8 +51,8 @@ func inWorkspace(files map[string][]byte, use func(directory string) error) erro
 	return use(directory)
 }
 
-// maskedContext returns ctx masking the token and ctx secrets in logs, along with those values.
-func (client *Client) maskedContext(ctx context.Context) (context.Context, []string) {
+// maskedContext returns ctx masking the token and ctx secrets in logs, along with their patterns, compiled once.
+func (client *Client) maskedContext(ctx context.Context) (context.Context, []*regexp.Regexp) {
 	var secrets []string = catalog.Secrets(ctx)
 
 	if client.apiToken != "" {
@@ -59,10 +60,12 @@ func (client *Client) maskedContext(ctx context.Context) (context.Context, []str
 	}
 
 	if len(secrets) == 0 {
-		return ctx, secrets
+		return ctx, nil
 	}
 
-	return tflog.MaskLogRegexes(ctx, secretPatterns(secrets)...), secrets
+	var patterns []*regexp.Regexp = secretPatterns(secrets)
+
+	return tflog.MaskLogRegexes(ctx, patterns...), patterns
 }
 
 // execCommand runs flowctl, masking the token and ctx secrets in logs and errors.
@@ -70,7 +73,7 @@ func (client *Client) execCommand(ctx context.Context, arguments ...string) ([]b
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	ctx, secrets := client.maskedContext(ctx)
+	ctx, patterns := client.maskedContext(ctx)
 
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
@@ -94,7 +97,7 @@ func (client *Client) execCommand(ctx context.Context, arguments ...string) ([]b
 	})
 
 	if err := command.Run(); err != nil {
-		var output string = maskStrings(stderr.String(), secrets)
+		var output string = maskStrings(stderr.String(), patterns)
 		return nil, fmt.Errorf("flowctl %s: %w\nstderr: %s", strings.Join(arguments, " "), err, output)
 	}
 
@@ -132,9 +135,9 @@ func rewriteSpec(directory string, rewrite func(content []byte) ([]byte, error))
 func (client *Client) connectorContext(ctx context.Context, message string, files map[string][]byte) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(ctx, connectorTimeout)
 
-	logContext, secrets := client.maskedContext(ctx)
+	logContext, patterns := client.maskedContext(ctx)
 
-	tflog.Debug(logContext, message, map[string]any{"spec": maskedSpec(files[specFile], secrets)})
+	tflog.Debug(logContext, message, map[string]any{"spec": maskedSpec(files[specFile], patterns)})
 
 	return ctx, cancel
 }

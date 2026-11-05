@@ -78,6 +78,17 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 			[]any{events, map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"}},
 			[]capture.Binding[testResource]{orders},
 		},
+		"refreshes each binding of a shared collection from its own resource": {
+			plain, []capture.Binding[testResource]{orders, {Resource: testResource{Table: "orders_archive"}, Target: "acmeCo/orders"}},
+			[]any{
+				map[string]any{"resource": map[string]any{"table": "orders_archive", "priority": 4}, "target": "acmeCo/orders"},
+				map[string]any{"resource": map[string]any{"table": "orders", "priority": 1}, "target": "acmeCo/orders"},
+			},
+			[]capture.Binding[testResource]{
+				{Resource: testResource{Table: "orders", Priority: 1}, Target: "acmeCo/orders"},
+				{Resource: testResource{Table: "orders_archive", Priority: 4}, Target: "acmeCo/orders"},
+			},
+		},
 	}
 
 	for name, expected := range expectations {

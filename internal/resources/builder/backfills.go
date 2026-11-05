@@ -50,72 +50,73 @@ type MaterializationBackfill struct {
 	Trigger int `yaml:"trigger,omitempty" description:"Raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter. Starts at 1 and only goes up."`
 }
 
-// backfillRequests returns the sorted collections to backfill and to reset, from raised binding triggers and, for
-// every entryWide collection, a raised entry trigger. Each binding uses its own strategy, else the entry one.
-func backfillRequests(plan tftypes.Value, prior tftypes.Value, wide []string) ([]string, []string, error) {
-	var backfills []string
+// backfillRequests returns the published bindings to backfill, by index, and the sorted collections to reset: those
+// of the planned bindings raising their trigger and, when the entry trigger is raised, of every wide binding. Each
+// binding uses its own strategy, else the entry one. A reset backfills every binding of its collection, so those
+// aren't backfilled again.
+func (pairing bindingPairing) backfillRequests(published []publishedBinding, wide []int) ([]int, []string) {
+	var backfills []int
 	var resets []string
-	var requested map[string]bool = map[string]bool{}
+	var requested []int
 
-	plannedBindings, _, err := bindings(plan)
+	plannedBindings, priorBindings := pairing.priorCounterparts()
 
-	if err != nil {
-		return nil, nil, err
-	}
-
-	previous, err := indexedBindings(prior)
-
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var planned map[string]tftypes.Value = byCollection(plannedBindings)
-
-	for collection, binding := range planned {
-		priorBinding, managed := previous[collection]
-
-		if collection != "" && (managed || slices.Contains(wide, collection)) && raisesTrigger(binding, priorBinding) {
-			requested[collection] = true
+	for index, binding := range published {
+		if raisesTrigger(binding.plannedValue(plannedBindings), binding.plannedValue(priorBindings)) {
+			requested = append(requested, index)
 		}
 	}
 
-	if exists(prior) && raisesTrigger(plan, prior) {
-		for _, collection := range wide {
-			requested[collection] = true
-		}
+	if raisesTrigger(pairing.plan, pairing.state) {
+		requested = append(requested, wide...)
 	}
 
-	for collection := range requested {
-		if bindingStrategy(plan, planned[collection]) == dataflowResetStrategy {
-			resets = append(resets, collection)
+	slices.Sort(requested)
+
+	for _, index := range slices.Compact(requested) {
+		if bindingStrategy(pairing.plan, published[index].plannedValue(plannedBindings)) == dataflowResetStrategy {
+			resets = append(resets, catalog.BindingCollection(published[index].document))
 		} else {
-			backfills = append(backfills, collection)
+			backfills = append(backfills, index)
 		}
 	}
 
-	slices.Sort(backfills)
 	slices.Sort(resets)
 
-	return backfills, resets, nil
+	resets = slices.Compact(resets)
+
+	backfills = slices.DeleteFunc(backfills, func(index int) bool {
+		return slices.Contains(resets, catalog.BindingCollection(published[index].document))
+	})
+
+	return backfills, resets
 }
 
-// entryWide returns the collections of the published bindings a raised entry trigger backfills: those bound live.
+// entryWide returns the indexes of the published bindings a raised entry trigger backfills: those bound live.
 // Disabled bindings are left out, as the dashboard does.
-func entryWide(published []any, live []any) []string {
-	var collections []string
-	var bound map[string]map[string]any = catalog.BindingsByCollection(live)
+func entryWide(published []publishedBinding) []int {
+	var wide []int
 
-	for _, binding := range published {
-		if catalog.BindingDisabled(binding) {
-			continue
-		}
-
-		if collection := catalog.BindingCollection(binding); collection != "" && bound[collection] != nil {
-			collections = append(collections, collection)
+	for index, binding := range published {
+		if binding.live != -1 && !catalog.BindingDisabled(binding.document) {
+			wide = append(wide, index)
 		}
 	}
 
-	return collections
+	return wide
+}
+
+// bindingCollections returns the sorted distinct collections of the published bindings at indexes.
+func bindingCollections(published []publishedBinding, indexes []int) []string {
+	var collections []string
+
+	for _, index := range indexes {
+		collections = append(collections, catalog.BindingCollection(published[index].document))
+	}
+
+	slices.Sort(collections)
+
+	return slices.Compact(collections)
 }
 
 // disabled reports whether a binding value sets disable.
@@ -155,20 +156,36 @@ func pendingResets(plan tftypes.Value) ([]string, error) {
 
 	slices.Sort(collections)
 
-	return collections, nil
+	return slices.Compact(collections), nil
 }
 
 // backfillChanged reports whether the plan changes the entry backfill block or that of a binding.
-func backfillChanged(plan tftypes.Value, prior tftypes.Value) bool {
-	planned, _ := indexedBindings(plan)
-	previous, _ := indexedBindings(prior)
-
-	if backfillDiffers(plan, prior) {
+func (pairing bindingPairing) backfillChanged() bool {
+	if backfillDiffers(pairing.plan, pairing.state) {
 		return true
 	}
 
-	for collection, binding := range planned {
-		if backfillDiffers(binding, previous[collection]) {
+	plannedBindings, priorBindings := pairing.priorCounterparts()
+
+	for index, binding := range plannedBindings {
+		if backfillDiffers(binding, priorBindings[index]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// raisesTriggers reports whether the plan raises the entry backfill trigger or that of a binding.
+func (pairing bindingPairing) raisesTriggers() bool {
+	if raisesTrigger(pairing.plan, pairing.state) {
+		return true
+	}
+
+	plannedBindings, priorBindings := pairing.priorCounterparts()
+
+	for index, binding := range plannedBindings {
+		if raisesTrigger(binding, priorBindings[index]) {
 			return true
 		}
 	}
@@ -188,53 +205,30 @@ func backfillDiffers(planned tftypes.Value, prior tftypes.Value) bool {
 	return !plannedBackfill.Equal(priorBackfill)
 }
 
-// raisesTrigger reports whether the planned backfill trigger is higher than the prior one, or newly set.
+// raisesTrigger reports whether the planned backfill trigger is higher than the prior one. A trigger the prior doesn't
+// set, as after a create, an import, a takeover or a new backfill block, is its starting value and backfills nothing.
 func raisesTrigger(planned tftypes.Value, prior tftypes.Value) bool {
 	trigger, set := integer(backfillSetting(planned, backfillTriggerAttribute))
 	previous, wasSet := integer(backfillSetting(prior, backfillTriggerAttribute))
 
-	return set && (!wasSet || trigger > previous)
-}
-
-// triggersUnmanaged reports whether the plan sets a backfill trigger on a binding missing from the prior state.
-func triggersUnmanaged(plan tftypes.Value, prior tftypes.Value) bool {
-	planned, _ := indexedBindings(plan)
-	previous, _ := indexedBindings(prior)
-
-	for collection, binding := range planned {
-		if _, managed := previous[collection]; !managed && raisesTrigger(binding, tftypes.Value{}) {
-			return true
-		}
-	}
-
-	return false
+	return set && wasSet && trigger > previous
 }
 
 // validateBackfillTriggers validates the entry and binding backfill triggers, see validateBackfillTrigger.
-func validateBackfillTriggers(plan tftypes.Value, state tftypes.Value, catalogType catalogType) diag.Diagnostics {
+func validateBackfillTriggers(pairing bindingPairing, catalogType catalogType) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
 
-	plannedBindings, _, err := bindings(plan)
+	plannedBindings, priorBindings := pairing.priorCounterparts()
 
-	if err != nil {
-		return diagnostics
-	}
-
-	previous, err := indexedBindings(state)
-
-	if err != nil {
-		return diagnostics
-	}
-
-	diagnostics.Append(validateBackfillTrigger(path.Root(backfillAttribute).AtName(backfillTriggerAttribute), "the "+catalogType.name, plan, state)...)
+	diagnostics.Append(validateBackfillTrigger(path.Root(backfillAttribute).AtName(backfillTriggerAttribute), "the "+catalogType.name, pairing.plan, pairing.state)...)
 
 	for index, binding := range plannedBindings {
 		var collection string = bindingCollectionValue(binding)
 		var attributePath path.Path = path.Root(bindingsAttribute).AtListIndex(index).AtName(backfillAttribute).AtName(backfillTriggerAttribute)
 
-		diagnostics.Append(validateBackfillTrigger(attributePath, collection, binding, previous[collection])...)
+		diagnostics.Append(validateBackfillTrigger(attributePath, collection, binding, priorBindings[index])...)
 
-		if disabled(binding) && raisesTrigger(binding, previous[collection]) {
+		if disabled(binding) && raisesTrigger(binding, priorBindings[index]) {
 			diagnostics.AddAttributeError(attributePath, "Backfill trigger raised on a disabled binding",
 				fmt.Sprintf("backfill.trigger of %s is raised, but the binding is disabled, so there is nothing to backfill. "+
 					"To enable and backfill it, set disable = false or remove disable in the same change. Otherwise, keep the trigger at its current value.", collection))
@@ -284,25 +278,23 @@ func validateBackfillTrigger(attributePath path.Path, owner string, planned tfty
 	return diagnostics
 }
 
-// modeBackfills returns the planned bindings whose backfill mode, under key, differs from the live one, mapped to
-// "live -> planned". The connector requires a backfill with each change.
-func modeBackfills(planned []any, live []any, key string) map[string]string {
-	var changes map[string]string = map[string]string{}
-	var liveBindings map[string]map[string]any = catalog.BindingsByCollection(live)
+// modeBackfills returns the planned published bindings, by index, whose backfill mode, under key, differs from the
+// live one, mapped to "live -> planned". The connector requires a backfill with each change.
+func modeBackfills(published []publishedBinding, live []any, key string) map[int]string {
+	var changes map[int]string = map[int]string{}
 
 	if key == "" {
 		return changes
 	}
 
-	for _, binding := range planned {
-		var collection string = catalog.BindingCollection(binding)
+	for index, binding := range published {
+		var liveBinding map[string]any = binding.liveBinding(live)
 
-		liveBinding, isLive := liveBindings[collection]
-		mode, _ := catalog.BindingResource(binding)[key].(string)
+		mode, _ := catalog.BindingResource(binding.document)[key].(string)
 		liveMode, _ := catalog.BindingResource(liveBinding)[key].(string)
 
-		if isLive && mode != liveMode {
-			changes[collection] = fmt.Sprintf("%q -> %q", liveMode, mode)
+		if binding.planned != -1 && liveBinding != nil && mode != liveMode {
+			changes[index] = fmt.Sprintf("%q -> %q", liveMode, mode)
 		}
 	}
 
@@ -311,26 +303,28 @@ func modeBackfills(planned []any, live []any, key string) map[string]string {
 
 // missingBackfill is a binding change the connector only accepts along with a backfill, which the plan doesn't raise.
 type missingBackfill struct {
-	collection string
-	attribute  []string // attribute names from the binding to the changed one
-	summary    string
-	detail     string
+	binding   int      // index of the planned binding
+	attribute []string // attribute names from the binding to the changed one
+	summary   string
+	detail    string
 }
 
 // missingModeBackfills returns the mode changes, see modeBackfills, whose binding is neither backfilled nor reset.
-func missingModeBackfills(changes map[string]string, backfills []string, resets []string) []missingBackfill {
+func missingModeBackfills(published []publishedBinding, changes map[int]string, backfills []int, resets []string) []missingBackfill {
 	var missing []missingBackfill
 
-	for _, collection := range slices.Sorted(maps.Keys(changes)) {
-		if slices.Contains(backfills, collection) || slices.Contains(resets, collection) {
+	for _, index := range slices.Sorted(maps.Keys(changes)) {
+		var collection string = catalog.BindingCollection(published[index].document)
+
+		if slices.Contains(backfills, index) || slices.Contains(resets, collection) {
 			continue
 		}
 
 		missing = append(missing, missingBackfill{
-			collection: collection,
-			attribute:  []string{backfillAttribute, backfillModeAttribute},
-			summary:    "Backfill mode changed without a backfill",
-			detail: "backfill.mode of " + collection + " changes " + changes[collection] + ". The connector requires the binding " +
+			binding:   published[index].planned,
+			attribute: []string{backfillAttribute, backfillModeAttribute},
+			summary:   "Backfill mode changed without a backfill",
+			detail: "backfill.mode of " + collection + " changes " + changes[index] + ". The connector requires the binding " +
 				"to be backfilled when its mode changes: raise its backfill.trigger, or the capture's, in the same change.",
 		})
 	}
@@ -340,9 +334,8 @@ func missingModeBackfills(changes map[string]string, backfills []string, resets 
 
 // missingStandardUpdatesBackfills returns the enabled planned bindings switching from live delta updates, under key, to
 // standard updates without a backfill, which the connector rejects as it can't merge the rows a key already has.
-func missingStandardUpdatesBackfills(planned []any, live []any, key string, backfills []string) []missingBackfill {
+func missingStandardUpdatesBackfills(published []publishedBinding, live []any, key string, backfills []int) []missingBackfill {
 	var missing []missingBackfill
-	var liveBindings map[string]map[string]any = catalog.BindingsByCollection(live)
 
 	if key == "" {
 		return missing
@@ -350,21 +343,21 @@ func missingStandardUpdatesBackfills(planned []any, live []any, key string, back
 
 	var attribute string = translator.AttributeName(key)
 
-	for _, binding := range planned {
-		var collection string = catalog.BindingCollection(binding)
+	for index, binding := range published {
+		var liveBinding map[string]any = binding.liveBinding(live)
+		var collection string = catalog.BindingCollection(binding.document)
 
-		liveBinding, isLive := liveBindings[collection]
-		delta, _ := catalog.BindingResource(binding)[key].(bool)
+		delta, _ := catalog.BindingResource(binding.document)[key].(bool)
 		liveDelta, _ := catalog.BindingResource(liveBinding)[key].(bool)
 
-		if !isLive || !liveDelta || delta || catalog.BindingDisabled(binding) || catalog.BindingDisabled(liveBinding) || slices.Contains(backfills, collection) {
+		if binding.planned == -1 || !liveDelta || delta || catalog.BindingDisabled(binding.document) || catalog.BindingDisabled(liveBinding) || slices.Contains(backfills, index) {
 			continue
 		}
 
 		missing = append(missing, missingBackfill{
-			collection: collection,
-			attribute:  []string{bindingResourceAttribute, attribute},
-			summary:    "Delta updates disabled without a backfill",
+			binding:   binding.planned,
+			attribute: []string{bindingResourceAttribute, attribute},
+			summary:   "Delta updates disabled without a backfill",
 			detail: "resource." + attribute + " of " + collection + " is true in Estuary and false in the plan. The connector " +
 				"requires the binding to be backfilled when it switches from delta to standard updates, as the table holds several " +
 				"rows per key that standard updates can't merge: raise its backfill.trigger, or the materialization's, in the same change.",
@@ -385,23 +378,19 @@ func missingBackfillsError(missing []missingBackfill) error {
 	return errors.Join(errs...)
 }
 
-// keepBackfills copies the live backfill counter onto each planned binding, plus one for backfills, so publishing
-// never lowers it.
-func keepBackfills(planned []any, live []any, backfills []string) {
-	var liveBindings map[string]map[string]any = catalog.BindingsByCollection(live)
-
-	for _, binding := range planned {
-		object, _ := binding.(map[string]any)
+// keepBackfills copies the live backfill counter onto each published binding, plus one for backfills, by index, so
+// publishing never lowers it.
+func keepBackfills(published []publishedBinding, live []any, backfills []int) {
+	for index, binding := range published {
+		object, _ := binding.document.(map[string]any)
 
 		if object == nil {
 			continue
 		}
 
-		var collection string = catalog.BindingCollection(binding)
+		counter, _ := binding.liveBinding(live)[catalog.BackfillKey].(int)
 
-		counter, _ := liveBindings[collection][catalog.BackfillKey].(int)
-
-		if slices.Contains(backfills, collection) {
+		if slices.Contains(backfills, index) {
 			counter++
 		}
 

@@ -18,6 +18,7 @@ type catalogType struct {
 	err              error                                                       // why the connector's spec types can't build this catalog type
 	added            addedBindings                                               // bindings Estuary adds without Terraform
 	publish          publisher                                                   // publishes the entry
+	resourcePath     resourcePath                                                // identifies bindings sharing a collection
 	backfillModeKey  string                                                      // binding resource key of the backfill mode, empty without one
 	deltaUpdatesKey  string                                                      // binding resource key of delta updates, empty without one
 	adjustAttributes func(attributes map[string]schema.Attribute)                // changes the inferred attributes
@@ -97,10 +98,8 @@ func (entry *entry[D, S]) readSealed(ctx context.Context, catalogName string) (m
 	return backend.ReadSpec(ctx, catalogName)
 }
 
-// readLiveValue reads the live value of the named entry, failing when no entry has its catalog name.
-func (entry *entry[D, S]) readLiveValue(ctx context.Context, name string) (tftypes.Value, error) {
-	var catalogName string = entry.catalogName(name)
-
+// readLiveValue reads the live value of the entry named name at catalogName, failing when no entry has it.
+func (entry *entry[D, S]) readLiveValue(ctx context.Context, name string, catalogName string) (tftypes.Value, error) {
 	sealed, err := entry.readSealed(ctx, catalogName)
 
 	if err != nil {

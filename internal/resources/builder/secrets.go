@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/builder/translator"
@@ -24,6 +25,9 @@ const secretsHashSaltSize int = 16
 
 // secretsHashIterations follows OWASP: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html.
 const secretsHashIterations int = 600000
+
+// verifiedSecrets holds, for this provider process only, each stored hash with the SHA-256 of a secret verified to match.
+var verifiedSecrets sync.Map
 
 // secrets handles a schema's write-only attributes and the salted hash beside each.
 type secrets struct {
@@ -95,10 +99,28 @@ func hashSecret(secret string) (string, error) {
 	return secretHash(secret, salt, secretsHashIterations)
 }
 
-// verifySecret reports whether secret matches the stored hash. State is untrusted input, so a hash with parameters
-// hashSecret never writes, such as more iterations, doesn't match rather than costing every plan its iterations; the
-// plan then shows the secret as changed and the apply hashes it again.
+// verifySecret reports whether secret matches the stored hash, deriving it once per provider process.
 func verifySecret(secret string, stored string) bool {
+	var digest [sha256.Size]byte = sha256.Sum256([]byte(secret))
+	var key string = stored + "$" + base64.RawStdEncoding.EncodeToString(digest[:])
+
+	if _, verified := verifiedSecrets.Load(key); verified {
+		return true
+	}
+
+	if !deriveMatches(secret, stored) {
+		return false
+	}
+
+	verifiedSecrets.Store(key, true)
+
+	return true
+}
+
+// deriveMatches reports whether deriving secret with the parameters of the stored hash gives that hash. State is
+// untrusted input, so a hash with parameters hashSecret never writes, such as more iterations, doesn't match rather
+// than costing every plan its iterations; the plan then shows the secret as changed and the apply hashes it again.
+func deriveMatches(secret string, stored string) bool {
 	var parts []string = strings.Split(stored, "$")
 
 	if len(parts) != 4 || parts[0] != secretsHashAlgorithm {
@@ -149,21 +171,9 @@ func (secrets secrets) withoutLiveSecrets(value tftypes.Value) (tftypes.Value, [
 	}
 
 	value, err = tftypes.Transform(value, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		var text string
+		text, credentials, restricted := secrets.restricted(path, current)
 
-		if !current.Type().Is(tftypes.String) || !current.IsKnown() || current.IsNull() || current.As(&text) != nil {
-			return current, nil
-		}
-
-		attribute, err := secrets.schema.AttributeAtTerraformPath(context.Background(), path)
-
-		if err != nil {
-			return current, nil
-		}
-
-		var credentials catalog.Credentials = translator.AttributeCredentials(attribute)
-
-		if credentials == catalog.CredentialsAllowed {
+		if !restricted {
 			return current, nil
 		}
 
@@ -177,6 +187,42 @@ func (secrets secrets) withoutLiveSecrets(value tftypes.Value) (tftypes.Value, [
 	})
 
 	return value, redactedPaths, err
+}
+
+// credentialPaths returns the paths of the attributes holding the credentials their field forbids. Plan validators skip
+// values unknown at plan time, such as an address built from another resource, so the apply checks them again.
+func (secrets secrets) credentialPaths(value tftypes.Value) []string {
+	var paths []string
+
+	tftypes.Walk(value, func(valuePath *tftypes.AttributePath, current tftypes.Value) (bool, error) {
+		if text, credentials, restricted := secrets.restricted(valuePath, current); restricted && translator.HoldsCredentials(text, credentials) {
+			paths = append(paths, attributePath(valuePath).String())
+		}
+
+		return true, nil
+	})
+
+	return paths
+}
+
+// restricted returns the text of a known string attribute at path whose field forbids credentials, and its rule,
+// reporting false for other attributes.
+func (secrets secrets) restricted(path *tftypes.AttributePath, value tftypes.Value) (string, catalog.Credentials, bool) {
+	var text string
+
+	if !value.Type().Is(tftypes.String) || !value.IsKnown() || value.IsNull() || value.As(&text) != nil {
+		return "", catalog.CredentialsAllowed, false
+	}
+
+	attribute, err := secrets.schema.AttributeAtTerraformPath(context.Background(), path)
+
+	if err != nil {
+		return "", catalog.CredentialsAllowed, false
+	}
+
+	var credentials catalog.Credentials = translator.AttributeCredentials(attribute)
+
+	return text, credentials, credentials != catalog.CredentialsAllowed
 }
 
 // nullHashes nulls the hashes, plan ones being unknown until apply.

@@ -77,7 +77,7 @@ func (entryDataSource *entryDataSource[D, S]) Read(ctx context.Context, readReq 
 
 	var catalogName string = entryDataSource.catalogName(name.ValueString())
 
-	live, err := entryDataSource.readLiveValue(ctx, name.ValueString())
+	live, err := entryDataSource.readLiveValue(ctx, name.ValueString(), catalogName)
 
 	if err != nil {
 		readResp.Diagnostics.AddError("Reading "+entryDataSource.catalogType.name+" "+catalogName, err.Error())

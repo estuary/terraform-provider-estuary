@@ -68,19 +68,6 @@ func BindingResource(binding any) map[string]any {
 	return utils.Lookup(binding, ResourceKey)
 }
 
-// BindingsByCollection indexes binding documents by collection.
-func BindingsByCollection(bindings []any) map[string]map[string]any {
-	var indexed map[string]map[string]any = map[string]map[string]any{}
-
-	for _, binding := range bindings {
-		object, _ := binding.(map[string]any)
-
-		indexed[BindingCollection(binding)] = object
-	}
-
-	return indexed
-}
-
 // KeepResourceMeta copies the resource metadata of the from binding document into the to one, unless it has its own.
 func KeepResourceMeta(from any, to any) {
 	var resource map[string]any = BindingResource(to)

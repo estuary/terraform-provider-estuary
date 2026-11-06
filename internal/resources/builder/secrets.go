@@ -317,6 +317,31 @@ func (secrets secrets) planHashes(plan tftypes.Value, config tftypes.Value, stat
 	return planned, changed, err
 }
 
+// removed returns the paths of the secrets state holds a hash for and config leaves out, which the apply deletes.
+func (secrets secrets) removed(config tftypes.Value, state tftypes.Value) []*tftypes.AttributePath {
+	var removed []*tftypes.AttributePath
+
+	if state.Type() == nil || state.IsNull() {
+		return nil
+	}
+
+	tftypes.Walk(state, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
+		secretPath, isHash := secrets.secretPath(path)
+
+		if !isHash || current.IsNull() {
+			return true, nil
+		}
+
+		if secret, err := attributeValue(config, secretPath); err != nil || secret.IsNull() {
+			removed = append(removed, secretPath)
+		}
+
+		return true, nil
+	})
+
+	return removed
+}
+
 // stateHashes computes each unknown hash from the planned secret beside it, with a new salt.
 func (secrets secrets) stateHashes(plan tftypes.Value, planned tftypes.Value) (tftypes.Value, error) {
 	return tftypes.Transform(plan, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {

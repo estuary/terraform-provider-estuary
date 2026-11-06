@@ -142,6 +142,48 @@ func TestCodecSecrets(test *testing.T) {
 	}
 }
 
+func TestCodecSecretsRemoved(test *testing.T) {
+	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	spec.Endpoint.Connector.Config.Password = "secret"
+
+	config, err := codec.Value("movies", spec)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	state, err := codec.secrets.stateHashes(config, config)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	unset, err := codec.secrets.nullSecrets(config)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if removed := codec.secrets.removed(unset, state); len(removed) != 1 || !removed[0].Equal(testPasswordPath) {
+		test.Errorf("unset password: removed = %v, want the password", removed)
+	}
+
+	if removed := codec.secrets.removed(config, state); len(removed) != 0 {
+		test.Errorf("set password: removed = %v, want none", removed)
+	}
+
+	if removed := codec.secrets.removed(unset, tftypes.NewValue(state.Type(), nil)); len(removed) != 0 {
+		test.Errorf("create: removed = %v, want none", removed)
+	}
+}
+
 func TestCodecSecretPath(test *testing.T) {
 	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
 

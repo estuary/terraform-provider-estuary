@@ -290,12 +290,12 @@ func TestResourceModifyPlanSecretsHash(test *testing.T) {
 		want     any
 		warn     bool
 	}{
-		"keeps the hash of an unchanged secret":   {password: "secret", stored: true, want: stored},
-		"plans and warns about a changed secret":  {password: "rotated", stored: true, want: tftypes.UnknownValue, warn: true},
-		"plans a secret without a hash":           {password: "secret", want: tftypes.UnknownValue},
-		"plans the secret of a created entry":     {password: "secret", create: true, want: tftypes.UnknownValue},
-		"plans a secret not known yet":            {unknown: true, stored: true, want: tftypes.UnknownValue},
-		"plans the null hash of a removed secret": {stored: true},
+		"keeps the hash of an unchanged secret":  {password: "secret", stored: true, want: stored},
+		"plans and warns about a changed secret": {password: "rotated", stored: true, want: tftypes.UnknownValue, warn: true},
+		"plans a secret without a hash":          {password: "secret", want: tftypes.UnknownValue},
+		"plans the secret of a created entry":    {password: "secret", create: true, want: tftypes.UnknownValue},
+		"plans a secret not known yet":           {unknown: true, stored: true, want: tftypes.UnknownValue},
+		"plans and warns about a removed secret": {stored: true, warn: true},
 	}
 
 	for name, expected := range expectations {

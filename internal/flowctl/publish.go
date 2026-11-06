@@ -297,6 +297,8 @@ func materializationFiles(name string, spec catalog.MaterializationSpec) (map[st
 }
 
 // publish publishes files after the optional prepare step completes them, the data plane applying only to new entries.
+// A refused publication ID fails as a conflict, see publicationError, whether the publication or the prepare step,
+// such as the discovery of a new capture, is refused.
 func (client *Client) publish(ctx context.Context, files map[string][]byte, prepare func(ctx context.Context, directory string) error) error {
 	ctx, cancel := client.connectorContext(ctx, "Publishing spec", files)
 
@@ -305,7 +307,7 @@ func (client *Client) publish(ctx context.Context, files map[string][]byte, prep
 	return inWorkspace(files, func(directory string) error {
 		if prepare != nil {
 			if err := prepare(ctx, directory); err != nil {
-				return err
+				return publicationError(err)
 			}
 		}
 

@@ -13,6 +13,24 @@ import (
 // last published or imported them, see catalog.SecretsFingerprint.
 const secretsFingerprintKey string = "secrets_fingerprint"
 
+// importedKey is the private state key marking an entry imported and not applied since, whose backfill triggers record
+// their starting value, as on a create.
+const importedKey string = "imported"
+
+// importedMark is the importedKey value of an imported entry.
+var importedMark []byte = []byte("true")
+
+// imported reports whether data marks the entry imported and not applied since.
+func imported(ctx context.Context, data privateData) bool {
+	if data == nil {
+		return false
+	}
+
+	content, diagnostics := data.GetKey(ctx, importedKey)
+
+	return !diagnostics.HasError() && string(content) == string(importedMark)
+}
+
 // privateData is the provider-private state of a resource, which Terraform keeps beside state without showing it.
 type privateData interface {
 	GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics)

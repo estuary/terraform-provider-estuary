@@ -3,6 +3,7 @@ package builder
 import (
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
@@ -11,18 +12,23 @@ import (
 
 // resourcePath returns the resource path key of a binding of an entry value, empty while unknown, and the part of it
 // known before the rest, such as the table of a binding whose schema the plan fills in. Label names the resource in
-// warnings. Its zero value is for resources without a resource path, whose bindings Estuary tells apart by collection.
+// warnings. Declared returns the resource path a capture resource declares, as Estuary computes it, reporting false
+// while unknown. Its zero value is for resources without a resource path, whose bindings Estuary tells apart by
+// collection.
 type resourcePath struct {
-	key   func(entry tftypes.Value, binding tftypes.Value) (string, string)
-	label func(entry tftypes.Value, binding tftypes.Value) string
+	key      func(entry tftypes.Value, binding tftypes.Value) (string, string)
+	label    func(entry tftypes.Value, binding tftypes.Value) string
+	declared func(binding tftypes.Value) ([]string, bool)
 }
 
-// bindingKey identifies a binding, as Estuary does, by its collection and resource path key. Partial is the part of
-// the resource path known before the rest, see resourcePath.
+// bindingKey identifies a binding. Exact is the resource path Estuary gives it, see resource_path, which alone
+// identifies it, as in Estuary. Bindings without one, until validated or refreshed, fall back to their collection and
+// the resource path key computed from their resource, partial being the part of it known before the rest.
 type bindingKey struct {
 	collection string
 	path       string
 	partial    string
+	exact      string
 }
 
 // bindingIdentity is the collection and resource path of a binding.
@@ -39,16 +45,18 @@ type entryBindings struct {
 }
 
 // bindingPairing pairs the planned bindings with the state ones, which Terraform manages, and with the live ones,
-// keying each binding once.
+// keying each binding once. RecordsTriggers makes every backfill trigger record its starting value, as on the first
+// apply after an import.
 type bindingPairing struct {
-	resourcePath resourcePath
-	plan         tftypes.Value
-	state        tftypes.Value
-	planned      entryBindings
-	prior        entryBindings
-	priors       []int // state binding of each planned one, -1 when none
-	readLive     func() (livePairing, bool)
-	liveBindings func() (livePairing, bool) // the live value and its bindings, read and keyed once, unpaired
+	resourcePath    resourcePath
+	recordsTriggers bool
+	plan            tftypes.Value
+	state           tftypes.Value
+	planned         entryBindings
+	prior           entryBindings
+	priors          []int // state binding of each planned one, -1 when none
+	readLive        func() (livePairing, bool)
+	liveBindings    func() (livePairing, bool) // the live value and its bindings, read and keyed once, unpaired
 }
 
 // livePairing is the live value, its bindings, the live binding of each planned one and the state binding of each live
@@ -81,24 +89,46 @@ func (resourcePath resourcePath) pairSame(from []bindingKey, to []bindingKey) []
 	return resourcePath.pairPartial(from, to, resourcePath.pairExact(from, to), nil)
 }
 
-// pairExact returns, for each binding of from, the index of the binding of to with the same identity, in order among
-// equal ones, -1 when none. It is how Estuary matches bindings across publications.
+// pairExact returns, for each binding of from, the index of the binding of to with the same resource path, as Estuary
+// matches bindings across publications, -1 when none. A binding without one, see bindingKey, pairs with a binding
+// with the same computed identity, never one of two bindings both holding a resource path, in order among equal ones.
 func (resourcePath resourcePath) pairExact(from []bindingKey, to []bindingKey) []int {
 	var pairs []int = slices.Repeat([]int{-1}, len(from))
-	var candidates map[bindingIdentity][]int = map[bindingIdentity][]int{}
+	var taken []bool = make([]bool, len(to))
+	var exact map[string]int = map[string]int{}
+	var computed map[bindingIdentity][]int = map[bindingIdentity][]int{}
 
 	for index, key := range to {
+		if _, found := exact[key.exact]; key.exact != "" && !found {
+			exact[key.exact] = index
+		}
+
 		if identity, identifies := resourcePath.identity(key); identifies {
-			candidates[identity] = append(candidates[identity], index)
+			computed[identity] = append(computed[identity], index)
+		}
+	}
+
+	for index, key := range from {
+		if match, found := exact[key.exact]; key.exact != "" && found && !taken[match] {
+			pairs[index] = match
+			taken[match] = true
 		}
 	}
 
 	for index, key := range from {
 		identity, identifies := resourcePath.identity(key)
 
-		if queue := candidates[identity]; identifies && len(queue) > 0 {
-			pairs[index] = queue[0]
-			candidates[identity] = queue[1:]
+		if pairs[index] != -1 || !identifies {
+			continue
+		}
+
+		for _, candidate := range computed[identity] {
+			if !taken[candidate] && (key.exact == "" || to[candidate].exact == "") {
+				pairs[index] = candidate
+				taken[candidate] = true
+
+				break
+			}
 		}
 	}
 
@@ -114,7 +144,7 @@ func (resourcePath resourcePath) pairPartial(from []bindingKey, to []bindingKey,
 	var taken []int = inversePairs(pairs, len(to))
 
 	for index, key := range from {
-		if pairs[index] == -1 && (owned == nil || owned[index] == -1) && key.collection != "" && key.path == "" && key.partial != "" {
+		if pairs[index] == -1 && (owned == nil || owned[index] == -1) && key.exact == "" && key.collection != "" && key.path == "" && key.partial != "" {
 			waiting[bindingIdentity{key.collection, key.partial}] = append(waiting[bindingIdentity{key.collection, key.partial}], index)
 		}
 	}
@@ -218,6 +248,9 @@ func (resourcePath resourcePath) entryBindings(value tftypes.Value) (entryBindin
 	var keys []bindingKey = make([]bindingKey, len(items))
 
 	for index, binding := range items {
+		path, _ := bindingResourcePath(binding)
+
+		keys[index].exact = resourcePathKey(path)
 		keys[index].collection = bindingCollectionValue(binding)
 
 		if resourcePath.key != nil {
@@ -368,6 +401,10 @@ func (pairing bindingPairing) knownCollections() bool {
 // bindingLabel names a binding of entry in warnings: its collection and resource, else its collection alone.
 func (resourcePath resourcePath) bindingLabel(entry tftypes.Value, binding tftypes.Value) string {
 	var collection string = bindingCollectionValue(binding)
+
+	if path, isKnown := bindingResourcePath(binding); isKnown {
+		return collection + " (" + strings.Join(path, ".") + ")"
+	}
 
 	if resourcePath.label == nil {
 		return collection

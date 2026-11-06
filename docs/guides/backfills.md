@@ -8,7 +8,7 @@ description: |-
 
 ## Backfill Control
 
-A backfill reads a binding's data again: a capture binding captures its whole resource again, and a materialization binding materializes its whole collection again. Each binding has a `backfill` block, and raising its `trigger` backfills the binding:
+A backfill reads a binding's data again: a capture binding captures its whole resource again, and a materialization binding materializes its whole collection again. Each binding has a `backfill` block, and setting or raising its `trigger` backfills the binding:
 
 ```hcl
 {
@@ -19,20 +19,23 @@ A backfill reads a binding's data again: a capture binding captures its whole re
 }
 ```
 
-> **Important:** `backfill.trigger` isn't Estuary's backfill counter: each raise adds one to the live counter. The two never need to match.
+> **Important:** `backfill.trigger` isn't Estuary's backfill counter: each set or raise adds one to the live counter. The two never need to match.
 >
-> - Each raise is one backfill, even by more than one (2 → 5).
-> - Start at 1. It only goes up, and must be known at plan time: `timestamp()` would backfill on every apply.
-> - Setting it where it wasn't set, on a new or existing binding, or after an import, only records its starting value: raise it later to backfill.
-> - Removing it does nothing. Keep it, with the reason in a comment, so the Git history tells why each backfill happened.
+> - Set it, or raise it, to backfill a binding Terraform already manages. Each set or raise is one backfill, even by more than one (2 → 5).
+> - Setting it in the change that adds a binding to your configuration, or that creates the capture or materialization, only records its starting value, even when Estuary already has the binding.
+> - The first apply after an import only records the triggers in your configuration as starting values, as triggers aren't imported. Raise them afterwards to backfill. A change that requires a backfill can't be part of that first apply.
+> - It's at least 1, can't be lowered, and must be known at plan time: `timestamp()` would backfill on every apply.
+> - Removing it does nothing, and setting it again later backfills. Keep it, with the reason in a comment, so the Git history tells why each backfill happened.
+>
+> The plan warns with the list of bindings each apply backfills.
 
-The top-level `backfill.trigger` of a capture or materialization backfills **every enabled** binding, including those Terraform doesn't manage. The plan warns with the list.
+Setting or raising the top-level `backfill.trigger` of a capture or materialization backfills **every enabled** binding, including those Terraform doesn't manage. The plan warns with the list.
 
 ## Capture Strategy
 
-A capture's `backfill.strategy` sets what a raised trigger does, and a binding's `backfill.strategy` overrides it:
+A capture's `backfill.strategy` sets what setting or raising a trigger does, and a binding's `backfill.strategy` overrides it:
 
-| `strategy` | What a raised trigger does |
+| `strategy` | What a set or raised trigger does |
 |---|---|
 | `incremental` (default) | Captures the resource again into the existing collection. Destination tables are kept. |
 | `dataflowReset` | Resets the collection: its data is replaced by a fresh backfill from the source, its inferred schema is cleared, and every materialization of it is backfilled, truncating its destination tables. See [Dataflow reset](https://docs.estuary.dev/reference/backfilling-data/#dataflow-reset). The plan warns about every collection it resets. |
@@ -57,7 +60,7 @@ resource "estuary_source_aurora_postgres" "sales" {
 
 ## Changes That Require a Backfill
 
-The plan fails unless the binding's trigger, or the capture's or materialization's, is raised in the same change:
+The plan fails unless the binding's trigger, or the capture's or materialization's, is set or raised in the same change. The capture's or materialization's backfills every enabled binding:
 
 - On SQL captures (PostgreSQL, MySQL), changing a binding's `backfill.mode`: `Normal`, `Precise`, `Only Changes`, `Without Primary Key`, or unset for the connector's choice. See [Backfill Modes](https://docs.estuary.dev/reference/backfilling-data/#resource-configuration-backfill-modes).
 - On materializations, switching a binding's `resource.delta_updates` from `true` to `false`, including when delta updates were turned on outside Terraform. A delta updates table holds several rows per key, which standard updates can't merge. Switching from `false` to `true` needs no backfill.

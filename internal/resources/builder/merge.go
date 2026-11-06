@@ -15,7 +15,7 @@ import (
 // resource metadata, backfill counters and the encrypted endpoint when unchanged. The live publication ID goes with
 // it, so the control plane rejects the publication when another one changed the entry since this read. It returns the
 // resets and a copy of the live spec, nil when the entry doesn't exist.
-func (entryResource *entryResource[D, S]) mergeLive(ctx context.Context, name string, catalogName string, document map[string]any, keepUnmanaged bool, plan tftypes.Value, prior tftypes.Value) ([]string, map[string]any, error) {
+func (entryResource *entryResource[D, S]) mergeLive(ctx context.Context, name string, catalogName string, document map[string]any, keepUnmanaged bool, recordsTriggers bool, plan tftypes.Value, prior tftypes.Value) ([]string, map[string]any, error) {
 	live, err := entryResource.readSealed(ctx, catalogName)
 
 	if err != nil || live == nil {
@@ -40,7 +40,7 @@ func (entryResource *entryResource[D, S]) mergeLive(ctx context.Context, name st
 
 	keepUnmanagedKeys(document, priorDocument, live)
 
-	resets, err := entryResource.mergeLiveBindings(name, document, live, keepUnmanaged, plan, prior)
+	resets, err := entryResource.mergeLiveBindings(name, document, live, keepUnmanaged, recordsTriggers, plan, prior)
 
 	if err == nil {
 		err = entryResource.keepSealedEndpoint(ctx, catalogName, document, priorDocument, live, plan, prior)
@@ -63,10 +63,10 @@ func keepUnmanagedKeys(document map[string]any, priorDocument map[string]any, li
 }
 
 // mergeLiveBindings sets the published bindings, see newPlannedPublication, with the live resource metadata and
-// backfill counters, plus one for each backfill. Bindings pair as in the plan, through the Terraform value of the live
-// spec. It returns the resets, failing on backfill mode changes and switches from delta to standard updates without a
-// backfill.
-func (entryResource *entryResource[D, S]) mergeLiveBindings(name string, document map[string]any, live map[string]any, keepUnmanaged bool, plan tftypes.Value, prior tftypes.Value) ([]string, error) {
+// backfill counters, plus one for each backfill, none while recordsTriggers. Bindings pair as in the plan, through the
+// Terraform value of the live spec. It returns the resets, failing on backfill mode changes and switches from delta to
+// standard updates without a backfill.
+func (entryResource *entryResource[D, S]) mergeLiveBindings(name string, document map[string]any, live map[string]any, keepUnmanaged bool, recordsTriggers bool, plan tftypes.Value, prior tftypes.Value) ([]string, error) {
 	var current []any = catalog.Bindings(live)
 
 	liveValue, _, err := entryResource.codec.liveValue(name, live)
@@ -80,6 +80,8 @@ func (entryResource *entryResource[D, S]) mergeLiveBindings(name string, documen
 	if err != nil {
 		return nil, err
 	}
+
+	pairing.recordsTriggers = recordsTriggers
 
 	publication, err := newPlannedPublication(catalog.Bindings(document), current, keepUnmanaged, pairing, entryResource.catalogType)
 

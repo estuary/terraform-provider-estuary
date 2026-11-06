@@ -191,7 +191,7 @@ resource "estuary_materialization_rds_postgres" "private" {
 Required:
 
 - `resource` (Attributes) Destination resource the collection is materialized into, such as a table. (see [below for nested schema](#nestedatt--bindings--resource))
-- `source` (String) Estuary collection the binding materializes. The provider tenant is not added to it. Changing it replaces the binding.
+- `source` (String) Estuary collection the binding materializes. The provider tenant is not added to it. Changing it keeps the binding, which Estuary identifies by its resource path.
 
 Optional:
 
@@ -206,6 +206,7 @@ Optional:
 Read-Only:
 
 - `name` (String) Collection of the binding, its target in captures and its source in materializations. Plans always show it, identifying the changed binding.
+- `resource_path` (List of String) Resource path Estuary identifies the binding by, such as its schema and table, as in the dashboard. A binding is the live one with its resource path, never another binding of its collection. Known at plan time when the plan validates the bindings it changes, else after the apply.
 
 <a id="nestedatt--bindings--resource"></a>
 ### Nested Schema for `bindings.resource`
@@ -217,7 +218,7 @@ Required:
 Optional:
 
 - `additional_table_create_sql` (String) SQL statements run in the same transaction that creates the table, such as a CREATE INDEX. They only run when the connector creates the table: a backfill truncates an existing table without running them, so run them yourself on it. Don't re-create the table in them.
-- `delta_updates` (Boolean) Appends the changes of each transaction instead of merging them into one row per key. Defaults to false. Switching it from true to false requires a backfill: raise backfill.trigger, or the materialization's, in the same change, or the plan fails.
+- `delta_updates` (Boolean) Appends the changes of each transaction instead of merging them into one row per key. Defaults to false. Switching it from true to false requires a backfill: in the same change, set or raise backfill.trigger, or set or raise the materialization's, which backfills every enabled binding, or the plan fails.
 - `schema` (String) Schema of the table, overriding config.schema. Omitted, it keeps the live one, and a new binding gets the one target_naming names, as in the dashboard, or the endpoint default without target_naming. Changing it on an existing binding moves it to a new table, which the connector backfills from the start of the collection, leaving the old table in place.
 
 
@@ -226,7 +227,7 @@ Optional:
 
 Optional:
 
-- `trigger` (Number) Raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter. Starts at 1 and only goes up.
+- `trigger` (Number) Set or raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter. Setting it when the binding or the materialization is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding.
 
 
 <a id="nestedatt--bindings--fields"></a>
@@ -347,7 +348,7 @@ Read-Only:
 
 Optional:
 
-- `trigger` (Number) Raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter. Starts at 1 and only goes up.
+- `trigger` (Number) Set or raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter. Setting it when the binding or the materialization is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding.
 
 
 <a id="nestedatt--source"></a>

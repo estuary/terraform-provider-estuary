@@ -18,7 +18,8 @@ type Session struct {
 	Tenant  string
 }
 
-// Backend publishes, reads, deletes and discovers catalog entries by full catalog name.
+// Backend publishes, reads, deletes and discovers catalog entries by full catalog name. ResourcePaths validates a
+// materialization without publishing it and returns the resource path Estuary gives each binding, in order.
 type Backend interface {
 	PublishCapture(ctx context.Context, name string, spec CaptureSpec, resets []string) error
 	PublishDiscoveredCapture(ctx context.Context, name string, spec CaptureSpec, identifier BindingsIdentifier) error
@@ -26,6 +27,7 @@ type Backend interface {
 	ReadSpec(ctx context.Context, name string) (map[string]any, error)
 	DeleteCatalogEntry(ctx context.Context, name string) error
 	DiscoverCapture(ctx context.Context, name string, spec CaptureSpec) (map[string]map[string]any, error)
+	ResourcePaths(ctx context.Context, name string, spec MaterializationSpec) ([][]string, error)
 }
 
 // WithSecrets returns ctx carrying the secret values backends must mask.

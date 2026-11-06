@@ -25,7 +25,11 @@ const (
 	bindingSourceAttribute   string = "source"
 	bindingNameAttribute     string = "name"
 	bindingFieldsAttribute   string = "fields"
+	resourcePathAttribute    string = "resource_path"
 )
+
+// resourcePathType is the type of a binding resource_path.
+var resourcePathType tftypes.List = tftypes.List{ElementType: tftypes.String}
 
 // Binding fields attributes.
 const (

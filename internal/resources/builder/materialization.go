@@ -33,7 +33,7 @@ type materializationDocument[C, R any] struct {
 // filters. Exported for documents of non-connector endpoints.
 type MaterializationBinding[R any] struct {
 	Resource                   R                                          `yaml:"resource" description:"Destination resource the collection is materialized into, such as a table."`
-	Source                     string                                     `yaml:"source" description:"Estuary collection the binding materializes. The provider tenant is not added to it. Changing it replaces the binding."`
+	Source                     string                                     `yaml:"source" description:"Estuary collection the binding materializes. The provider tenant is not added to it. Changing it keeps the binding, which Estuary identifies by its resource path."`
 	NotBefore                  string                                     `yaml:"notBefore,omitempty" description:"Materializes only the documents published at or after this RFC 3339 time. It only filters: changing it does not reprocess documents already read."`
 	NotAfter                   string                                     `yaml:"notAfter,omitempty" description:"Materializes only the documents published before this RFC 3339 time. It only filters, like not_before."`
 	Disable                    bool                                       `yaml:"disable,omitempty" description:"Stops materializing the collection while keeping the binding. Defaults to false."`

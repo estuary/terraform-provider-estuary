@@ -178,6 +178,7 @@ Optional:
 Read-Only:
 
 - `name` (String) Collection of the binding, its target in captures and its source in materializations. Plans always show it, identifying the changed binding.
+- `resource_path` (List of String) Resource path Estuary identifies the binding by, such as its schema and table, as in the dashboard. A binding is the live one with its resource path, never another binding of its collection. Known at plan time when the plan validates the bindings it changes, else after the apply.
 
 <a id="nestedatt--bindings--resource"></a>
 ### Nested Schema for `bindings.resource`
@@ -207,9 +208,9 @@ Optional:
 
 Optional:
 
-- `mode` (String) How the table contents are backfilled. Leave it unset to let the connector choose: 'Normal' emits every change right away, 'Precise' holds back changes to rows the backfill hasn't reached yet, 'Only Changes' skips the backfill and only captures new changes, and 'Without Primary Key' backfills tables without a primary key. Changing it requires a backfill: raise trigger, or the capture's, in the same change, or the plan fails.
+- `mode` (String) How the table contents are backfilled. Leave it unset to let the connector choose: 'Normal' emits every change right away, 'Precise' holds back changes to rows the backfill hasn't reached yet, 'Only Changes' skips the backfill and only captures new changes, and 'Without Primary Key' backfills tables without a primary key. Changing it requires a backfill: in the same change, set or raise trigger, or set or raise the capture's, which backfills every enabled binding, or the plan fails.
 - `strategy` (String) Overrides the backfill.strategy of the capture for this binding: 'incremental' or 'dataflowReset'. Changing it alone publishes nothing.
-- `trigger` (Number) Raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter, or resets the collection with 'dataflowReset', leaving the counter as is. Starts at 1 and only goes up, and can't be raised on a disabled binding.
+- `trigger` (Number) Set or raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter, or resets the collection with 'dataflowReset', leaving the counter as is. Setting it when the binding or the capture is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding.
 
 
 
@@ -333,4 +334,4 @@ Optional:
 Optional:
 
 - `strategy` (String) Default backfill strategy of the bindings: 'incremental' (default) captures again into the existing collection, 'dataflowReset' resets the collection, backfilling its materializations and truncating their tables. Changing it alone publishes nothing.
-- `trigger` (Number) Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. A provider control Estuary never sees, not its backfill counter: each raise adds one to each binding's live counter, or resets its collection with 'dataflowReset', leaving its counter as is. Starts at 1 and only goes up.
+- `trigger` (Number) Set or raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to each binding's live counter, or resets its collection with 'dataflowReset', leaving its counter as is. Setting it when the capture is created, or in the first apply after its import, backfills nothing. At least 1, and can't be lowered.

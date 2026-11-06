@@ -17,13 +17,17 @@ func TestPairSame(test *testing.T) {
 		to           []bindingKey
 		want         []int
 	}{
-		"pairs by collection and resource path":       {withPath, []bindingKey{{"acmeCo/orders", "b", ""}, {"acmeCo/orders", "a", ""}}, []bindingKey{{"acmeCo/orders", "a", ""}, {"acmeCo/orders", "b", ""}}, []int{1, 0}},
-		"never pairs another resource":                {withPath, []bindingKey{{"acmeCo/orders", "c", ""}}, []bindingKey{{"acmeCo/orders", "a", ""}}, []int{-1}},
-		"never pairs unknown resource paths":          {withPath, []bindingKey{{"acmeCo/orders", "", ""}}, []bindingKey{{"acmeCo/orders", "a", ""}}, []int{-1}},
-		"pairs equal keys in order":                   {withPath, []bindingKey{{"acmeCo/orders", "a", ""}, {"acmeCo/orders", "a", ""}}, []bindingKey{{"acmeCo/orders", "a", ""}, {"acmeCo/orders", "a", ""}}, []int{0, 1}},
-		"pairs by collection without resource paths":  {resourcePath{}, []bindingKey{{"acmeCo/orders", "", ""}}, []bindingKey{{"acmeCo/users", "", ""}, {"acmeCo/orders", "", ""}}, []int{1}},
-		"never pairs bindings of unknown collections": {resourcePath{}, []bindingKey{{"", "", ""}}, []bindingKey{{"", "", ""}}, []int{-1}},
+		"pairs by collection and resource path":       {withPath, []bindingKey{{"acmeCo/orders", "b", "", ""}, {"acmeCo/orders", "a", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", ""}, {"acmeCo/orders", "b", "", ""}}, []int{1, 0}},
+		"never pairs another resource":                {withPath, []bindingKey{{"acmeCo/orders", "c", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", ""}}, []int{-1}},
+		"never pairs unknown resource paths":          {withPath, []bindingKey{{"acmeCo/orders", "", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", ""}}, []int{-1}},
+		"pairs equal keys in order":                   {withPath, []bindingKey{{"acmeCo/orders", "a", "", ""}, {"acmeCo/orders", "a", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", ""}, {"acmeCo/orders", "a", "", ""}}, []int{0, 1}},
+		"pairs by collection without resource paths":  {resourcePath{}, []bindingKey{{"acmeCo/orders", "", "", ""}}, []bindingKey{{"acmeCo/users", "", "", ""}, {"acmeCo/orders", "", "", ""}}, []int{1}},
+		"never pairs bindings of unknown collections": {resourcePath{}, []bindingKey{{"", "", "", ""}}, []bindingKey{{"", "", "", ""}}, []int{-1}},
 		"nothing to pair":                             {withPath, nil, nil, []int{}},
+		"pairs by resource path alone":                {withPath, []bindingKey{{"acmeCo/orders", "a", "", "public\x00orders"}}, []bindingKey{{"acmeCo/orders_v2", "b", "", "public\x00orders"}}, []int{0}},
+		"never pairs another resource path":           {withPath, []bindingKey{{"acmeCo/orders", "a", "", "public\x00orders"}}, []bindingKey{{"acmeCo/orders", "a", "", "public\x00orders_v2"}}, []int{-1}},
+		"pairs without resource path by computed key": {withPath, []bindingKey{{"acmeCo/orders", "a", "", ""}}, []bindingKey{{"acmeCo/orders", "b", "", "public\x00b"}, {"acmeCo/orders", "a", "", "public\x00a"}}, []int{1}},
+		"prefers the resource path to a computed key": {withPath, []bindingKey{{"acmeCo/orders", "a", "", "public\x00b"}, {"acmeCo/orders", "a", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", "public\x00a"}, {"acmeCo/orders", "b", "", "public\x00b"}}, []int{1, 0}},
 	}
 
 	for name, expected := range expectations {
@@ -41,11 +45,11 @@ func TestPairManaged(test *testing.T) {
 		to   []bindingKey
 		want []int
 	}{
-		"pairs a shared collection by resource path": {[]bindingKey{{"acmeCo/orders", "b", ""}, {"acmeCo/orders", "a", ""}}, []bindingKey{{"acmeCo/orders", "a", ""}, {"acmeCo/orders", "b", ""}}, []int{1, 0}},
-		"pairs a moved binding with the one left":    {[]bindingKey{{"acmeCo/orders", "a", ""}, {"acmeCo/orders", "c", ""}}, []bindingKey{{"acmeCo/orders", "b", ""}, {"acmeCo/orders", "a", ""}}, []int{1, 0}},
-		"pairs unknown resource paths in order":      {[]bindingKey{{"acmeCo/orders", "", ""}, {"acmeCo/orders", "", ""}}, []bindingKey{{"acmeCo/orders", "a", ""}, {"acmeCo/orders", "b", ""}}, []int{0, 1}},
-		"leaves extra bindings unpaired":             {[]bindingKey{{"acmeCo/orders", "a", ""}, {"acmeCo/orders", "b", ""}}, []bindingKey{{"acmeCo/orders", "a", ""}}, []int{0, -1}},
-		"never pairs another collection":             {[]bindingKey{{"acmeCo/orders", "a", ""}}, []bindingKey{{"acmeCo/users", "a", ""}}, []int{-1}},
+		"pairs a shared collection by resource path": {[]bindingKey{{"acmeCo/orders", "b", "", ""}, {"acmeCo/orders", "a", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", ""}, {"acmeCo/orders", "b", "", ""}}, []int{1, 0}},
+		"pairs a moved binding with the one left":    {[]bindingKey{{"acmeCo/orders", "a", "", ""}, {"acmeCo/orders", "c", "", ""}}, []bindingKey{{"acmeCo/orders", "b", "", ""}, {"acmeCo/orders", "a", "", ""}}, []int{1, 0}},
+		"pairs unknown resource paths in order":      {[]bindingKey{{"acmeCo/orders", "", "", ""}, {"acmeCo/orders", "", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", ""}, {"acmeCo/orders", "b", "", ""}}, []int{0, 1}},
+		"leaves extra bindings unpaired":             {[]bindingKey{{"acmeCo/orders", "a", "", ""}, {"acmeCo/orders", "b", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", ""}}, []int{0, -1}},
+		"never pairs another collection":             {[]bindingKey{{"acmeCo/orders", "a", "", ""}}, []bindingKey{{"acmeCo/users", "a", "", ""}}, []int{-1}},
 	}
 
 	for name, expected := range expectations {
@@ -64,12 +68,12 @@ func TestPairLive(test *testing.T) {
 		live    []bindingKey
 		want    []int
 	}{
-		"pairs the same resource":                    {[]bindingKey{{"acmeCo/orders", "a", ""}}, nil, []bindingKey{{"acmeCo/orders", "a", ""}}, []int{0}},
-		"pairs a moved binding with its live one":    {[]bindingKey{{"acmeCo/orders", "z", ""}}, []bindingKey{{"acmeCo/orders", "x", ""}}, []bindingKey{{"acmeCo/orders", "y", ""}, {"acmeCo/orders", "x", ""}}, []int{1}},
-		"never pairs an unmanaged binding":           {[]bindingKey{{"acmeCo/orders", "a", ""}, {"acmeCo/orders", "n", ""}}, []bindingKey{{"acmeCo/orders", "a", ""}}, []bindingKey{{"acmeCo/orders", "a", ""}, {"acmeCo/orders", "u", ""}}, []int{0, -1}},
-		"never pairs a binding changed outside":      {[]bindingKey{{"acmeCo/orders", "x", ""}}, []bindingKey{{"acmeCo/orders", "x", ""}}, []bindingKey{{"acmeCo/orders", "y", ""}}, []int{-1}},
-		"prefers the same resource to a moved one":   {[]bindingKey{{"acmeCo/orders", "y", ""}}, []bindingKey{{"acmeCo/orders", "x", ""}}, []bindingKey{{"acmeCo/orders", "x", ""}, {"acmeCo/orders", "y", ""}}, []int{1}},
-		"pairs unknown resource paths through state": {[]bindingKey{{"acmeCo/orders", "", ""}}, []bindingKey{{"acmeCo/orders", "x", ""}}, []bindingKey{{"acmeCo/orders", "u", ""}, {"acmeCo/orders", "x", ""}}, []int{1}},
+		"pairs the same resource":                    {[]bindingKey{{"acmeCo/orders", "a", "", ""}}, nil, []bindingKey{{"acmeCo/orders", "a", "", ""}}, []int{0}},
+		"pairs a moved binding with its live one":    {[]bindingKey{{"acmeCo/orders", "z", "", ""}}, []bindingKey{{"acmeCo/orders", "x", "", ""}}, []bindingKey{{"acmeCo/orders", "y", "", ""}, {"acmeCo/orders", "x", "", ""}}, []int{1}},
+		"never pairs an unmanaged binding":           {[]bindingKey{{"acmeCo/orders", "a", "", ""}, {"acmeCo/orders", "n", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", ""}}, []bindingKey{{"acmeCo/orders", "a", "", ""}, {"acmeCo/orders", "u", "", ""}}, []int{0, -1}},
+		"never pairs a binding changed outside":      {[]bindingKey{{"acmeCo/orders", "x", "", ""}}, []bindingKey{{"acmeCo/orders", "x", "", ""}}, []bindingKey{{"acmeCo/orders", "y", "", ""}}, []int{-1}},
+		"prefers the same resource to a moved one":   {[]bindingKey{{"acmeCo/orders", "y", "", ""}}, []bindingKey{{"acmeCo/orders", "x", "", ""}}, []bindingKey{{"acmeCo/orders", "x", "", ""}, {"acmeCo/orders", "y", "", ""}}, []int{1}},
+		"pairs unknown resource paths through state": {[]bindingKey{{"acmeCo/orders", "", "", ""}}, []bindingKey{{"acmeCo/orders", "x", "", ""}}, []bindingKey{{"acmeCo/orders", "u", "", ""}, {"acmeCo/orders", "x", "", ""}}, []int{1}},
 	}
 
 	for name, expected := range expectations {

@@ -197,7 +197,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped. Starts at 1 and only goes up. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
+| `trigger` | Number | No | Set or raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. Disabled bindings are skipped. Setting it when the capture is created, or in the first apply after its import, backfills nothing. At least 1, and can't be lowered. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 | `strategy` | String | No | Default strategy of the bindings, which a binding's `backfill.strategy` overrides: `incremental` (default) captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 
 ### `config`
@@ -290,6 +290,7 @@ Backfill control of the whole capture, as the dashboard's **Backfill** button an
 | `disable` | Bool | No | Stops capturing the table while keeping the binding in the capture. |
 | `backfill` | Object | No | Backfill control of the binding. See [`bindings.backfill`](#bindingsbackfill). |
 | `name` | String | Read-only | Collection of the binding, shown in every plan so you can tell which binding changes. |
+| `resource_path` | List of String | Read-only | Resource path Estuary identifies the binding by, such as its schema and table, as in the dashboard. See [Bindings](../../../docs/guides/bindings.md). |
 
 ### `bindings.backfill`
 
@@ -297,9 +298,9 @@ Backfill control of the binding. See [Backfill Control](../../../docs/guides/bac
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: capture the whole table again from the start. Starts at 1 and only goes up. Can't be raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
+| `trigger` | Number | No | Set or raise it to backfill the binding: capture the whole table again from the start. Setting it when the binding is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 | `strategy` | String | No | Overrides the capture's `backfill.strategy` for this binding: `incremental` captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
-| `mode` | String | No | How the table is backfilled: `Normal` emits every change right away, `Precise` holds back changes to rows the backfill hasn't reached yet, `Only Changes` skips the backfill, and `Without Primary Key` backfills tables without a primary key. Unset lets the connector choose. Changing it requires raising `trigger`, or the capture's, in the same change. See [Backfill Modes](https://docs.estuary.dev/reference/backfilling-data/#resource-configuration-backfill-modes). |
+| `mode` | String | No | How the table is backfilled: `Normal` emits every change right away, `Precise` holds back changes to rows the backfill hasn't reached yet, `Only Changes` skips the backfill, and `Without Primary Key` backfills tables without a primary key. Unset lets the connector choose. Changing it requires a backfill: in the same change, set or raise `trigger`, or set or raise the capture's, which backfills every enabled binding. See [Backfill Modes](https://docs.estuary.dev/reference/backfilling-data/#resource-configuration-backfill-modes). |
 
 ### `bindings.resource`
 

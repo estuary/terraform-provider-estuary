@@ -114,6 +114,15 @@ func captureResourcePath[R any]() (resourcePath, error) {
 
 			return strings.ReplaceAll(path, "\x00", ".")
 		},
+		declared: func(binding tftypes.Value) ([]string, bool) {
+			if !blockAttribute(binding, bindingResourceAttribute, tftypes.DynamicPseudoType).IsFullyKnown() {
+				return nil, false
+			}
+
+			path, _ := bindingKey(tftypes.Value{}, binding)
+
+			return strings.Split(path, "\x00"), path != ""
+		},
 	}, nil
 }
 

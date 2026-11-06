@@ -408,13 +408,15 @@ func TestResourceUpdateMaterializationBackfillTrigger(test *testing.T) {
 		test.Errorf("published %v, want the backfill block left out of the spec", backend.published)
 	}
 
-	warnings := entry.warnEntryBackfill(planValue, priorValue, entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))))
+	pairing := testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))
+
+	warnings := entry.warnEntryBackfill(pairing, entry.newPublicationReader(pairing))
 
 	if len(warnings) != 1 || !strings.HasPrefix(warnings[0].Summary(), "Backfill of every binding in acmeCo/warehouse") || !strings.Contains(warnings[0].Detail(), "- acmeCo/orders\n\n") {
 		test.Errorf("warnings = %v, want a backfill warning listing orders only", warnings)
 	}
 
-	if warnings := entry.warnEntryBackfill(priorValue, priorValue, entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, priorValue, priorValue, entry.newLiveReader(ctx, priorValue)))); len(warnings) != 0 {
+	if warnings := entry.warnEntryBackfill(testPairing(test, entry.catalogType.resourcePath, priorValue, priorValue, entry.newLiveReader(ctx, priorValue)), entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, priorValue, priorValue, entry.newLiveReader(ctx, priorValue)))); len(warnings) != 0 {
 		test.Errorf("warnings = %v, want none without a raise", warnings)
 	}
 
@@ -756,8 +758,8 @@ func TestMaterializationTakeoverWarningKeepsEstuaryFields(test *testing.T) {
 		trigger any
 		want    string
 	}{
-		"lists the raised trigger":          {1, "- acmeCo/users (bindings[0]):\n    bindings[0].backfill: (unset) -> (changed)\n"},
-		"lists no change without a trigger": {nil, "- acmeCo/users (bindings[0]): no field changes\n"},
+		"lists no change for a recorded trigger": {1, "- acmeCo/users (bindings[0]): no field changes\n"},
+		"lists no change without a trigger":      {nil, "- acmeCo/users (bindings[0]): no field changes\n"},
 	} {
 		plan, err := withValue(live, bindingsPath.WithElementKeyInt(0).WithAttributeName(backfillAttribute),
 			map[string]tftypes.Value{backfillTriggerAttribute: tftypes.NewValue(tftypes.Number, expected.trigger)})

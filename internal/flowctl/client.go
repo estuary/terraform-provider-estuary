@@ -70,6 +70,11 @@ func (client *Client) maskedContext(ctx context.Context) (context.Context, []*re
 
 // execCommand runs flowctl, masking the token and ctx secrets in logs and errors.
 func (client *Client) execCommand(ctx context.Context, arguments ...string) ([]byte, error) {
+	return client.execCommandIn(ctx, nil, arguments...)
+}
+
+// execCommandIn runs flowctl as execCommand does, with environment overriding the inherited variables.
+func (client *Client) execCommandIn(ctx context.Context, environment []string, arguments ...string) ([]byte, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -85,7 +90,7 @@ func (client *Client) execCommand(ctx context.Context, arguments ...string) ([]b
 
 	var command *exec.Cmd = exec.CommandContext(ctx, client.binaryPath, arguments...)
 
-	command.Env = append(os.Environ(), "FLOW_AUTH_TOKEN="+client.apiToken)
+	command.Env = append(append(os.Environ(), "FLOW_AUTH_TOKEN="+client.apiToken), environment...)
 
 	command.Stdout = &stdout
 

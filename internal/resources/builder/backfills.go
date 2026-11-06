@@ -21,14 +21,14 @@ type backfillStrategy string
 
 // captureBackfill is the capture backfill block: raising its trigger backfills every enabled binding. Not in the catalog spec.
 type captureBackfill struct {
-	Trigger  int              `yaml:"trigger,omitempty" description:"Raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. A provider control Estuary never sees, not its backfill counter: each raise adds one to each binding's live counter, or resets its collection with 'dataflowReset', leaving its counter as is. Starts at 1 and only goes up."`
+	Trigger  int              `yaml:"trigger,omitempty" description:"Set or raise it to backfill every enabled binding of the capture, including those Terraform doesn't manage. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to each binding's live counter, or resets its collection with 'dataflowReset', leaving its counter as is. Setting it when the capture is created, or in the first apply after its import, backfills nothing. At least 1, and can't be lowered."`
 	Strategy backfillStrategy `yaml:"strategy,omitempty" enum:"incremental,dataflowReset" description:"Default backfill strategy of the bindings: 'incremental' (default) captures again into the existing collection, 'dataflowReset' resets the collection, backfilling its materializations and truncating their tables. Changing it alone publishes nothing."`
 }
 
 // captureBindingBackfill is the capture binding backfill block: raising its trigger backfills the binding.
 // Mode mirrors the resource's backfill mode, the field tagged backfill:"mode".
 type captureBindingBackfill struct {
-	Trigger  int              `yaml:"trigger,omitempty" description:"Raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter, or resets the collection with 'dataflowReset', leaving the counter as is. Starts at 1 and only goes up, and can't be raised on a disabled binding."`
+	Trigger  int              `yaml:"trigger,omitempty" description:"Set or raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter, or resets the collection with 'dataflowReset', leaving the counter as is. Setting it when the binding or the capture is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding."`
 	Strategy backfillStrategy `yaml:"strategy,omitempty" enum:"incremental,dataflowReset" description:"Overrides the backfill.strategy of the capture for this binding: 'incremental' or 'dataflowReset'. Changing it alone publishes nothing."`
 	Mode     string           `yaml:"mode,omitempty"`
 }
@@ -47,13 +47,13 @@ var backfillStrategies []backfillStrategy = []backfillStrategy{
 // MaterializationBackfill is the materialization and binding backfill block: raising its trigger backfills the binding,
 // or every enabled binding of the materialization. Not in the catalog spec.
 type MaterializationBackfill struct {
-	Trigger int `yaml:"trigger,omitempty" description:"Raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each raise adds one to the live counter. Starts at 1 and only goes up."`
+	Trigger int `yaml:"trigger,omitempty" description:"Set or raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter. Setting it when the binding or the materialization is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding."`
 }
 
 // backfillRequests returns the published bindings to backfill, by index, and the sorted collections to reset: those
-// of the planned bindings raising their trigger and, when the entry trigger is raised, of every wide binding. Each
-// binding uses its own strategy, else the entry one. A reset backfills every binding of its collection, so those
-// aren't backfilled again.
+// of the live planned bindings setting or raising their trigger and, when the entry trigger is set or raised, of every
+// wide binding. Each binding uses its own strategy, else the entry one. A reset backfills every binding of its
+// collection, so those aren't backfilled again.
 func (pairing bindingPairing) backfillRequests(published []publishedBinding, wide []int) ([]int, []string) {
 	var backfills []int
 	var resets []string
@@ -62,12 +62,12 @@ func (pairing bindingPairing) backfillRequests(published []publishedBinding, wid
 	plannedBindings, priorBindings := pairing.priorCounterparts()
 
 	for index, binding := range published {
-		if raisesTrigger(binding.plannedValue(plannedBindings), binding.plannedValue(priorBindings)) {
+		if binding.live != -1 && pairing.raises(binding.plannedValue(plannedBindings), binding.plannedValue(priorBindings)) {
 			requested = append(requested, index)
 		}
 	}
 
-	if raisesTrigger(pairing.plan, pairing.state) {
+	if pairing.raises(pairing.plan, pairing.state) {
 		requested = append(requested, wide...)
 	}
 
@@ -176,16 +176,16 @@ func (pairing bindingPairing) backfillChanged() bool {
 	return false
 }
 
-// raisesTriggers reports whether the plan raises the entry backfill trigger or that of a binding.
+// raisesTriggers reports whether the plan sets or raises the entry backfill trigger or that of a binding.
 func (pairing bindingPairing) raisesTriggers() bool {
-	if raisesTrigger(pairing.plan, pairing.state) {
+	if pairing.raises(pairing.plan, pairing.state) {
 		return true
 	}
 
 	plannedBindings, priorBindings := pairing.priorCounterparts()
 
 	for index, binding := range plannedBindings {
-		if raisesTrigger(binding, priorBindings[index]) {
+		if pairing.raises(binding, priorBindings[index]) {
 			return true
 		}
 	}
@@ -205,13 +205,23 @@ func backfillDiffers(planned tftypes.Value, prior tftypes.Value) bool {
 	return !plannedBackfill.Equal(priorBackfill)
 }
 
-// raisesTrigger reports whether the planned backfill trigger is higher than the prior one. A trigger the prior doesn't
-// set, as after a create, an import, a takeover or a new backfill block, is its starting value and backfills nothing.
+// raises reports whether planned sets or raises the backfill trigger of prior, see raisesTrigger, never while the
+// pairing records triggers.
+func (pairing bindingPairing) raises(planned tftypes.Value, prior tftypes.Value) bool {
+	return !pairing.recordsTriggers && raisesTrigger(planned, prior)
+}
+
+// raisesTrigger reports whether the plan sets or raises the backfill trigger of an owner the prior holds. Without a
+// prior owner, as on a create or for a binding added to the plan, the trigger is its starting value.
 func raisesTrigger(planned tftypes.Value, prior tftypes.Value) bool {
+	if prior.Type() == nil || prior.IsNull() {
+		return false
+	}
+
 	trigger, set := integer(backfillSetting(planned, backfillTriggerAttribute))
 	previous, wasSet := integer(backfillSetting(prior, backfillTriggerAttribute))
 
-	return set && wasSet && trigger > previous
+	return set && (!wasSet || trigger > previous)
 }
 
 // validateBackfillTriggers validates the entry and binding backfill triggers, see validateBackfillTrigger.
@@ -228,10 +238,11 @@ func validateBackfillTriggers(pairing bindingPairing, catalogType catalogType) d
 
 		diagnostics.Append(validateBackfillTrigger(attributePath, collection, binding, priorBindings[index])...)
 
-		if disabled(binding) && raisesTrigger(binding, priorBindings[index]) {
-			diagnostics.AddAttributeError(attributePath, "Backfill trigger raised on a disabled binding",
-				fmt.Sprintf("backfill.trigger of %s is raised, but the binding is disabled, so there is nothing to backfill. "+
-					"To enable and backfill it, set disable = false or remove disable in the same change. Otherwise, keep the trigger at its current value.", collection))
+		if disabled(binding) && pairing.raises(binding, priorBindings[index]) {
+			diagnostics.AddAttributeError(attributePath, "Backfill trigger set or raised on a disabled binding",
+				fmt.Sprintf("backfill.trigger of %s is set or raised, which backfills the binding, but the binding is disabled, so there is "+
+					"nothing to backfill. To enable and backfill it, set disable = false or remove disable in the same change. Otherwise, "+
+					"leave the trigger as it was: unset, or at its current value.", collection))
 		}
 	}
 
@@ -325,7 +336,8 @@ func missingModeBackfills(published []publishedBinding, changes map[int]string, 
 			attribute: []string{backfillAttribute, backfillModeAttribute},
 			summary:   "Backfill mode changed without a backfill",
 			detail: "backfill.mode of " + collection + " changes " + changes[index] + ". The connector requires the binding " +
-				"to be backfilled when its mode changes: raise its backfill.trigger, or the capture's, in the same change.",
+				"to be backfilled when its mode changes: in the same change, set or raise its backfill.trigger, or set or raise " +
+				"the capture's, which backfills every enabled binding.",
 		})
 	}
 
@@ -360,7 +372,8 @@ func missingStandardUpdatesBackfills(published []publishedBinding, live []any, k
 			summary:   "Delta updates disabled without a backfill",
 			detail: "resource." + attribute + " of " + collection + " is true in Estuary and false in the plan. The connector " +
 				"requires the binding to be backfilled when it switches from delta to standard updates, as the table holds several " +
-				"rows per key that standard updates can't merge: raise its backfill.trigger, or the materialization's, in the same change.",
+				"rows per key that standard updates can't merge: in the same change, set or raise its backfill.trigger, or set or " +
+				"raise the materialization's, which backfills every enabled binding.",
 		})
 	}
 

@@ -144,6 +144,18 @@ func TestPublishDiscoveredCaptureDiscoversBeforePublishing(test *testing.T) {
 	}
 }
 
+func TestPublishDiscoveredCaptureMarksARefusedDiscoveryAsConflict(test *testing.T) {
+	var client *Client = fakeFlowctl(test, "#!/bin/sh\necho 'This spec was updated while you were editing (expected publication ID 0000000000000000, actual 16903f684180027b)' >&2\nexit 1\n")
+
+	spec := capture.Spec[endpoint.ConnectorSpec[map[string]any], map[string]any]{
+		AutoDiscover: &capture.AutoDiscover{AddNewBindings: true},
+	}
+
+	if err := client.PublishDiscoveredCapture(context.Background(), "acmeCo/mongodb/source-mongodb", spec, nil); !errors.Is(err, catalog.ErrPublicationConflict) {
+		test.Errorf("error = %v, want a publication conflict, as the discovery of an existing capture is refused", err)
+	}
+}
+
 func TestMarkResetsMarksTheCollectionsWhereFlowctlWroteThem(test *testing.T) {
 	var tree *catalogTree = writeTree(test, map[string]string{
 		"flow.yaml":                 "import: [acmeCo/mysql/flow.yaml, acmeCo/postgres/flow.yaml]\n",

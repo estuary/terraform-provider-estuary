@@ -301,13 +301,13 @@ Backfill control of the whole materialization, as the dashboard's **Backfill** b
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the materialization, those Estuary adds through `source.capture` included: each table is truncated and materialized again from its collection. Disabled bindings are skipped. Starts at 1 and only goes up. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
+| `trigger` | Number | No | Set or raise it to backfill every enabled binding of the materialization, those Estuary adds through `source.capture` included: each table is truncated and materialized again from its collection. Disabled bindings are skipped. Setting it when the materialization is created, or in the first apply after its import, backfills nothing. At least 1, and can't be lowered. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 
 ### `bindings`
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `source` | String | Yes | Estuary collection the binding materializes (e.g., `acmeCo/mongodb/shop/orders`). The provider `tenant` isn't added to it. Changing it replaces the binding, see [Bindings](../../../docs/guides/bindings.md). |
+| `source` | String | Yes | Estuary collection the binding materializes (e.g., `acmeCo/mongodb/shop/orders`). The provider `tenant` isn't added to it. Changing it keeps the binding, which Estuary identifies by its resource path, see [Bindings](../../../docs/guides/bindings.md). |
 | `not_before` | String | No | Materializes only the documents published at or after this RFC 3339 time (e.g., `2026-01-01T00:00:00Z`). It's only a filter: changing it doesn't reprocess the documents already read. See [Time Travel](https://docs.estuary.dev/reference/time-travel/). |
 | `not_after` | String | No | Materializes only the documents published before this RFC 3339 time. Like `not_before`, it's only a filter. |
 | `resource` | Object | Yes | Table the collection is materialized into. See [`bindings.resource`](#bindingsresource). |
@@ -317,6 +317,7 @@ Backfill control of the whole materialization, as the dashboard's **Backfill** b
 | `backfill` | Object | No | Backfill control of the binding. See [`bindings.backfill`](#bindingsbackfill). |
 | `on_incompatible_schema_change` | String | No | Overrides the materialization's `on_incompatible_schema_change` for this binding: `backfill`, `disableBinding`, `disableTask` or `abort`. |
 | `name` | String | Read-only | Collection of the binding, shown in every plan so you can tell which binding changes. |
+| `resource_path` | List of String | Read-only | Resource path Estuary identifies the binding by, such as its schema and table, as in the dashboard. See [Bindings](../../../docs/guides/bindings.md). |
 
 ### `bindings.backfill`
 
@@ -324,7 +325,7 @@ Backfill control of the binding. See [Backfill Control](../../../docs/guides/bac
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Raise it to backfill the binding: materialize the whole collection again. Starts at 1 and only goes up. Can't be raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
+| `trigger` | Number | No | Set or raise it to backfill the binding: materialize the whole collection again. Setting it when the binding is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 
 ### `bindings.resource`
 
@@ -332,11 +333,11 @@ Backfill control of the binding. See [Backfill Control](../../../docs/guides/bac
 |---|---|---|---|
 | `table` | String | Yes | Table to materialize into. The connector creates it, unless it created it before. Changing it on an existing binding moves it to a new table, which the connector backfills from the start of the collection, leaving the old table in place. |
 | `schema` | String | No | Schema of the table, overriding `config.schema`. Omitted, it keeps the live one, and a new binding gets the one `target_naming` names, as in the dashboard, or the endpoint default without `target_naming`. Changing it on an existing binding moves it to a new table, which the connector backfills from the start of the collection, leaving the old table in place. |
-| `delta_updates` | Bool | No | Appends the changes of each transaction instead of merging them into one row per key. Defaults to `false`, see [Delta Updates](https://docs.estuary.dev/concepts/materialization/#delta-updates). Switching it from `true` to `false` requires a backfill: raise `backfill.trigger`, or the materialization's, in the same change, or the plan fails. |
+| `delta_updates` | Bool | No | Appends the changes of each transaction instead of merging them into one row per key. Defaults to `false`, see [Delta Updates](https://docs.estuary.dev/concepts/materialization/#delta-updates). Switching it from `true` to `false` requires a backfill: in the same change, set or raise `backfill.trigger`, or set or raise the materialization's, which backfills every enabled binding, or the plan fails. |
 | `additional_table_create_sql` | String | No | SQL statements run in the same transaction that creates the table, such as a `CREATE INDEX`. They only run when the connector creates the table: a backfill truncates an existing table without running them, so run them yourself on it. Don't re-create the table in them. |
 
 > [!TIP]
-> Switching a binding from delta updates back to standard updates requires raising its `backfill.trigger`, or the materialization's, in the same change: the plan fails otherwise. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
+> Switching a binding from delta updates back to standard updates requires a backfill: in the same change, set or raise its `backfill.trigger`, or set or raise the materialization's, which backfills every enabled binding. The plan fails otherwise. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control).
 
 ### `bindings.fields`
 

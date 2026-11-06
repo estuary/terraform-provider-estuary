@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
@@ -62,6 +63,54 @@ func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appen
 	return withAttribute(state, path, func(tftypes.Value) tftypes.Value {
 		return tftypes.NewValue(stateBindings.listType, refreshed)
 	})
+}
+
+// missingBindings describes each state binding no live binding pairs with, see Refresh, as its label followed by the
+// labels of the live bindings of its collection Terraform doesn't manage, which the apply leaves beside it.
+func (codec *Codec[D, S]) missingBindings(state tftypes.Value, live tftypes.Value) ([]string, error) {
+	var missing []string
+	var resourcePath resourcePath = codec.catalogType.resourcePath
+
+	stateBindings, err := resourcePath.entryBindings(state)
+
+	if err != nil {
+		return nil, err
+	}
+
+	liveBindings, err := resourcePath.entryBindings(live)
+
+	if err != nil {
+		return nil, err
+	}
+
+	var pairs []int = resourcePath.pairSame(stateBindings.keys, liveBindings.keys)
+	var held []int = inversePairs(pairs, len(liveBindings.values))
+
+	for index, binding := range stateBindings.values {
+		var others []int
+		var collection string = bindingCollectionValue(binding)
+
+		if pairs[index] != -1 {
+			continue
+		}
+
+		for liveIndex, key := range liveBindings.keys {
+			if held[liveIndex] == -1 && key.collection == collection {
+				others = append(others, liveIndex)
+			}
+		}
+
+		var line string = "- " + resourcePath.bindingLabel(state, binding)
+
+		if len(others) > 0 {
+			line += "\n    Estuary has other bindings of " + collection + " that Terraform doesn't manage: " +
+				strings.Join(resourcePath.bindingLabels(live, liveBindings, others), ", ")
+		}
+
+		missing = append(missing, line)
+	}
+
+	return missing, nil
 }
 
 // refreshManaged returns the live value of every field except secrets, provider-only attributes and bindings.
@@ -184,7 +233,7 @@ func planShards(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (
 }
 
 // BindingChanges returns the "field: live -> planned" changes publishing the binding at path makes, sorted,
-// excluding secrets, hashes and provider-only attributes.
+// excluding secrets, hashes, provider-only attributes and the resource path, which identifies rather than configures.
 func (codec *Codec[D, S]) BindingChanges(path *tftypes.AttributePath, planned tftypes.Value, live tftypes.Value) ([]string, error) {
 	var changes []string
 
@@ -194,8 +243,18 @@ func (codec *Codec[D, S]) BindingChanges(path *tftypes.AttributePath, planned tf
 }
 
 func (codec *Codec[D, S]) bindingChanges(path *tftypes.AttributePath, planned tftypes.Value, live tftypes.Value, changes *[]string) error {
-	if codec.secrets.attribute(path) || providerOnly(path) {
+	if _, isPath := bindingAttributeIndex(path, resourcePathAttribute); isPath || codec.secrets.attribute(path) || providerOnly(path) {
 		return nil
+	}
+
+	if objectType, isObject := planned.Type().(tftypes.Object); isObject && planned.IsKnown() && !planned.IsNull() && live.IsNull() {
+		var nulls map[string]tftypes.Value = map[string]tftypes.Value{}
+
+		for attribute, attributeType := range objectType.AttributeTypes {
+			nulls[attribute] = tftypes.NewValue(attributeType, nil)
+		}
+
+		live = tftypes.NewValue(objectType, nulls)
 	}
 
 	if objectType, isObject := planned.Type().(tftypes.Object); isObject && planned.IsKnown() && !planned.IsNull() && !live.IsNull() {

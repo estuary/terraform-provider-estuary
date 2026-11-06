@@ -55,18 +55,35 @@ func withValue(value tftypes.Value, path *tftypes.AttributePath, raw any) (tftyp
 	})
 }
 
-// testBackend is an in-memory catalog.Backend recording read, deleted and published specs, failing publications with
-// publishErr.
+// testBackend is an in-memory catalog.Backend recording read, deleted, published and validated specs, failing
+// publications with publishErr and validations with validateErr. Validations give each binding its table as path.
 type testBackend struct {
-	live       map[string]any
-	reads      []string
-	deletes    []string
-	published  map[string]any
-	discovered map[string]map[string]any
-	discovers  []catalog.RawCapture
-	discover   bool
-	resets     []string
-	publishErr error
+	live        map[string]any
+	reads       []string
+	deletes     []string
+	published   map[string]any
+	validated   []catalog.RawMaterialization
+	discovered  map[string]map[string]any
+	discovers   []catalog.RawCapture
+	discover    bool
+	resets      []string
+	publishErr  error
+	validateErr error
+}
+
+func (backend *testBackend) ResourcePaths(_ context.Context, _ string, spec catalog.MaterializationSpec) ([][]string, error) {
+	var paths [][]string
+	var raw catalog.RawMaterialization = spec.(catalog.RawMaterialization)
+
+	backend.validated = append(backend.validated, raw)
+
+	for _, binding := range catalog.Bindings(raw) {
+		table, _ := catalog.BindingResource(binding)["table"].(string)
+
+		paths = append(paths, []string{table})
+	}
+
+	return paths, backend.validateErr
 }
 
 func (backend *testBackend) PublishCapture(_ context.Context, name string, spec catalog.CaptureSpec, resets []string) error {

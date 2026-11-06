@@ -83,6 +83,13 @@ func newPlannedPublication(planned []any, live []any, keepUnmanaged bool, pairin
 	publication.missing = append(missingModeBackfills(publication.published, changes, publication.backfills, publication.resets),
 		missingStandardUpdatesBackfills(publication.published, live, catalogType.deltaUpdatesKey, publication.backfills)...)
 
+	for index := range publication.missing {
+		if pairing.recordsTriggers {
+			publication.missing[index].detail += " On the first apply after an import, triggers only record their starting " +
+				"value: apply once without this change, then set or raise the trigger along with it."
+		}
+	}
+
 	for _, index := range slices.Sorted(maps.Keys(changes)) {
 		if !slices.Contains(publication.backfills, index) && !slices.Contains(publication.resets, catalog.BindingCollection(publication.published[index].document)) {
 			publication.backfills = append(publication.backfills, index)
@@ -182,7 +189,7 @@ func (entryResource *entryResource[D, S]) warnDataflowResets(pairing bindingPair
 	}
 
 	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Dataflow reset", plan),
-		entryResource.resetCause(plan, pairing.state)+"\n\n- "+strings.Join(resets, "\n- ")+"\n\n"+
+		entryResource.resetCause(pairing)+"\n\n- "+strings.Join(resets, "\n- ")+"\n\n"+
 			"Each collection's data is replaced by a fresh backfill from the source, and its inferred schema is cleared. Every "+
 			"materialization of these collections is backfilled too, which truncates its destination tables, and the apply fails "+
 			"if one has on_incompatible_schema_change = \"abort\". Derivations reading these collections are validated in the "+
@@ -193,23 +200,49 @@ func (entryResource *entryResource[D, S]) warnDataflowResets(pairing bindingPair
 
 // resetCause explains which backfill trigger resets the collections: the entry one covers every enabled binding,
 // binding ones only their own.
-func (entryResource *entryResource[D, S]) resetCause(plan tftypes.Value, state tftypes.Value) string {
-	if raisesTrigger(plan, state) {
-		return "Raising the backfill.trigger of the " + entryResource.catalogType.name + " backfills every enabled binding, " +
-			"including those Terraform doesn't manage. These bindings use backfill.strategy = \"dataflowReset\", so the " +
+func (entryResource *entryResource[D, S]) resetCause(pairing bindingPairing) string {
+	if pairing.raises(pairing.plan, pairing.state) {
+		return "Setting or raising the backfill.trigger of the " + entryResource.catalogType.name + " backfills every enabled " +
+			"binding, including those Terraform doesn't manage. These bindings use backfill.strategy = \"dataflowReset\", so the " +
 			"apply resets their collections:"
 	}
 
-	return "These bindings have a raised backfill.trigger and use backfill.strategy = \"dataflowReset\", so the apply resets " +
-		"their collections. The other bindings of the " + entryResource.catalogType.name + " aren't backfilled:"
+	return "These bindings have a set or raised backfill.trigger and use backfill.strategy = \"dataflowReset\", so the apply " +
+		"resets their collections. The other bindings of the " + entryResource.catalogType.name + " aren't backfilled:"
 }
 
-// warnEntryBackfill warns, when the plan raises the entry backfill trigger, about every binding it backfills without
-// resetting, as warnDataflowResets lists those. Failing to read the live bindings skips the warning.
-func (entryResource *entryResource[D, S]) warnEntryBackfill(plan tftypes.Value, state tftypes.Value, readPublication publicationReader) diag.Diagnostics {
+// warnBindingBackfills warns, when the plan sets or raises binding backfill triggers but not the entry one, about every
+// binding it backfills without resetting, as warnDataflowResets lists those. Failing to read the live bindings skips
+// the warning.
+func (entryResource *entryResource[D, S]) warnBindingBackfills(pairing bindingPairing, readPublication publicationReader) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
 
-	if !raisesTrigger(plan, state) {
+	if pairing.raises(pairing.plan, pairing.state) || !pairing.raisesTriggers() {
+		return diagnostics
+	}
+
+	publication, found := readPublication()
+
+	if !found || len(publication.backfills) == 0 {
+		return diagnostics
+	}
+
+	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Backfill of bindings", pairing.plan),
+		"These bindings have a set or raised backfill.trigger, so the apply backfills them:\n\n- "+
+			strings.Join(bindingCollections(publication.published, publication.backfills), "\n- ")+"\n\n"+
+			"The other bindings of the "+entryResource.catalogType.name+" aren't backfilled. A trigger set on a binding Terraform "+
+			"already manages backfills it: to keep a binding as it is, leave its trigger unset.")
+
+	return diagnostics
+}
+
+// warnEntryBackfill warns, when the plan sets or raises the entry backfill trigger, about every binding it backfills
+// without resetting, as warnDataflowResets lists those. Failing to read the live bindings skips the warning.
+func (entryResource *entryResource[D, S]) warnEntryBackfill(pairing bindingPairing, readPublication publicationReader) diag.Diagnostics {
+	var diagnostics diag.Diagnostics
+	var plan tftypes.Value = pairing.plan
+
+	if !pairing.raises(plan, pairing.state) {
 		return diagnostics
 	}
 
@@ -228,9 +261,9 @@ func (entryResource *entryResource[D, S]) warnEntryBackfill(plan tftypes.Value, 
 	}
 
 	diagnostics.AddAttributeWarning(path.Root(backfillAttribute).AtName(backfillTriggerAttribute), entryResource.warningSummary("Backfill of every binding", plan),
-		"Raising the backfill.trigger of the "+entryResource.catalogType.name+" backfills every enabled binding, including those "+
-			"Terraform doesn't manage:\n\n- "+strings.Join(collections, "\n- ")+"\n\n"+
-			"Disabled bindings are skipped. To backfill only some bindings, keep this trigger at its current value and raise "+
+		"Setting or raising the backfill.trigger of the "+entryResource.catalogType.name+" backfills every enabled binding, "+
+			"including those Terraform doesn't manage:\n\n- "+strings.Join(collections, "\n- ")+"\n\n"+
+			"Disabled bindings are skipped. To backfill only some bindings, leave this trigger as it was and set or raise "+
 			"their own backfill.trigger instead.")
 
 	return diagnostics
@@ -255,7 +288,7 @@ func (entryResource *entryResource[D, S]) warnPendingResets(pairing bindingPairi
 	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Bindings set to dataflow reset", plan),
 		"These bindings use backfill.strategy = \"dataflowReset\", set on them or on the "+entryResource.catalogType.name+":\n\n- "+
 			strings.Join(pending, "\n- ")+"\n\n"+
-			"This apply doesn't reset them. But the next time their backfill.trigger or the "+entryResource.catalogType.name+"'s is raised, "+
+			"This apply doesn't reset them. But the next time their backfill.trigger or the "+entryResource.catalogType.name+"'s is set or raised, "+
 			"their collections are replaced by a fresh backfill from the source, and every materialization of them truncates its "+
 			"destination tables. To backfill a binding without a reset, set backfill.strategy = \"incremental\" on it.")
 

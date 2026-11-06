@@ -29,9 +29,15 @@ func (entryResource *entryResource[D, S]) newLiveReader(ctx context.Context, sta
 	})
 }
 
-// liveValue returns the Terraform value of a sealed live spec without its secrets, see withoutLiveSecrets,
-// returning the paths whose credentials it redacted.
+// liveValue returns the Terraform value of a sealed live spec without its secrets, see withoutLiveSecrets, and with the
+// resource path Estuary recorded for each binding, returning the paths whose credentials it redacted.
 func (codec *Codec[D, S]) liveValue(name string, sealed map[string]any) (tftypes.Value, []*tftypes.AttributePath, error) {
+	var paths [][]string
+
+	for _, binding := range catalog.Bindings(sealed) {
+		paths = append(paths, catalog.BindingResourcePath(binding))
+	}
+
 	liveSpec, err := decode[S](liveDocument(sealed), false)
 
 	if err != nil {
@@ -39,6 +45,12 @@ func (codec *Codec[D, S]) liveValue(name string, sealed map[string]any) (tftypes
 	}
 
 	value, err := codec.Value(name, liveSpec)
+
+	if err == nil {
+		value, err = withResourcePaths(value, func(index int, _ tftypes.Value) tftypes.Value {
+			return resourcePathValue(paths[index])
+		})
+	}
 
 	if err != nil {
 		return tftypes.Value{}, nil, err

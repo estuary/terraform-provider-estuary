@@ -67,7 +67,7 @@ func (entryResource *entryResource[D, S]) Configure(_ context.Context, configure
 	entryResource.configure(configureReq.ProviderData, &configureResp.Diagnostics)
 }
 
-// ModifyPlan plans secret hashes, binding targets and names, and validates backfill triggers. It replaces the entry
+// ModifyPlan plans secret hashes, binding targets, names and resource paths, and validates backfill triggers. It replaces the entry
 // only when its catalog name changes, with or without tenant and connector name being the same entry, warning when
 // a provider tenant change is what moves it.
 func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modifyPlanReq resource.ModifyPlanRequest, modifyPlanResp *resource.ModifyPlanResponse) {
@@ -101,13 +101,18 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 
 	if err == nil {
 		pairing, err = entryResource.catalogType.resourcePath.newPairing(planned, modifyPlanReq.State.Raw, readLive)
+		pairing.recordsTriggers = imported(ctx, optionalPrivate(modifyPlanReq.Private))
 	}
 
 	if err == nil && entryResource.catalogType.planBindings != nil {
 		planned, err = entryResource.catalogType.planBindings(planned, modifyPlanReq.Config.Raw, pairing)
 	}
 
-	if err == nil && entryResource.catalogType.planBindings != nil {
+	if err == nil {
+		planned, err = entryResource.planResourcePaths(ctx, planned, modifyPlanReq.State.Raw)
+	}
+
+	if err == nil {
 		pairing, err = pairing.withPlan(planned)
 	}
 
@@ -150,13 +155,14 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 	modifyPlanResp.Diagnostics.Append(entryResource.warnRemovedBindings(pairing)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnUnmanagedBindingsRemoval(pairing)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnDataflowResets(pairing, readPublication)...)
-	modifyPlanResp.Diagnostics.Append(entryResource.warnEntryBackfill(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readPublication)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnEntryBackfill(pairing, readPublication)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnBindingBackfills(pairing, readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.validateMissingBackfills(readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnDisabledLive(modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)...)
 }
 
 func (entryResource *entryResource[D, S]) Create(ctx context.Context, createReq resource.CreateRequest, createResp *resource.CreateResponse) {
-	fingerprint, diagnostics := entryResource.apply(ctx, createReq.Plan, createReq.Config, nil, &createResp.State)
+	fingerprint, diagnostics := entryResource.apply(ctx, createReq.Plan, createReq.Config, nil, false, &createResp.State)
 
 	createResp.Diagnostics.Append(diagnostics...)
 
@@ -209,7 +215,7 @@ func (entryResource *entryResource[D, S]) readState(ctx context.Context, name st
 		return stored, diagnostics
 	}
 
-	refreshed, redactedPaths, err := entryResource.refreshedState(name, readReq.State.Raw, sealed)
+	refreshed, redactedPaths, missing, err := entryResource.refreshedState(name, readReq.State.Raw, sealed)
 
 	if err == nil {
 		refreshed, err = withCatalogName(refreshed, catalogName)
@@ -227,37 +233,66 @@ func (entryResource *entryResource[D, S]) readState(ctx context.Context, name st
 	diagnostics.Append(fingerprintDiagnostics...)
 
 	redactedCredentialsWarning(&diagnostics, catalogName, redactedPaths)
+	entryResource.missingBindingsWarning(&diagnostics, catalogName, missing)
 
 	readResp.State.Raw = refreshed
 
 	return fingerprint, diagnostics
 }
 
-// refreshedState returns state refreshed from the sealed live spec, and the paths whose credentials it redacted. Live
-// bindings state doesn't hold stay unmanaged, out of state, unless keep_unmanaged_bindings is false.
-func (entryResource *entryResource[D, S]) refreshedState(name string, state tftypes.Value, sealed map[string]any) (tftypes.Value, []*tftypes.AttributePath, error) {
+// refreshedState returns state refreshed from the sealed live spec, the paths whose credentials it redacted, and the
+// state bindings missing live, see missingBindings. Live bindings state doesn't hold stay unmanaged, out of state,
+// unless keep_unmanaged_bindings is false.
+func (entryResource *entryResource[D, S]) refreshedState(name string, state tftypes.Value, sealed map[string]any) (tftypes.Value, []*tftypes.AttributePath, []string, error) {
 	live, redactedPaths, err := entryResource.codec.liveValue(name, sealed)
 
 	if err != nil {
-		return state, nil, err
+		return state, nil, nil, err
+	}
+
+	missing, err := entryResource.codec.missingBindings(state, live)
+
+	if err != nil {
+		return state, nil, nil, err
 	}
 
 	refreshed, err := entryResource.codec.Refresh(state, live, !keepsUnmanagedBindings(state))
 
 	if err != nil {
-		return state, nil, err
+		return state, nil, nil, err
 	}
 
-	return refreshed, redactedPaths, nil
+	return refreshed, redactedPaths, missing, nil
+}
+
+// missingBindingsWarning explains the bindings missing live, which the next apply adds back.
+func (entryResource *entryResource[D, S]) missingBindingsWarning(diagnostics *diag.Diagnostics, catalogName string, missing []string) {
+	if len(missing) == 0 {
+		return
+	}
+
+	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), "Bindings missing in Estuary in "+catalogName,
+		"These bindings Terraform manages have no live binding with their resource path, such as after their table was "+
+			"renamed or the binding removed in the dashboard. Estuary identifies a binding by its resource path, so a binding "+
+			"whose resource changed is another binding: the next apply adds these back, each starting from scratch, and keeps "+
+			"the others listed, which Terraform doesn't manage:\n\n"+strings.Join(missing, "\n")+"\n\n"+
+			"To manage one of those instead, set the declared resource to its resource. To stop managing a missing binding, "+
+			"remove it from bindings.")
 }
 
 func (entryResource *entryResource[D, S]) Update(ctx context.Context, updateReq resource.UpdateRequest, updateResp *resource.UpdateResponse) {
-	fingerprint, diagnostics := entryResource.apply(ctx, updateReq.Plan, updateReq.Config, &updateReq.State, &updateResp.State)
+	var recordsTriggers bool = imported(ctx, optionalPrivate(updateReq.Private))
+
+	fingerprint, diagnostics := entryResource.apply(ctx, updateReq.Plan, updateReq.Config, &updateReq.State, recordsTriggers, &updateResp.State)
 
 	updateResp.Diagnostics.Append(diagnostics...)
 
 	if !updateResp.Diagnostics.HasError() {
 		updateResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(updateResp.Private), fingerprint)...)
+	}
+
+	if !updateResp.Diagnostics.HasError() && recordsTriggers && updateResp.Private != nil {
+		updateResp.Diagnostics.Append(updateResp.Private.SetKey(ctx, importedKey, nil)...)
 	}
 }
 
@@ -346,11 +381,16 @@ func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, impor
 	importResp.State.Raw = value
 
 	importResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(importResp.Private), catalog.SecretsFingerprint(sealed))...)
+
+	if importResp.Private != nil {
+		importResp.Diagnostics.Append(importResp.Private.SetKey(ctx, importedKey, importedMark)...)
+	}
 }
 
 // apply publishes the plan, with secrets from config, and stores it as state, returning the secrets fingerprint of the
 // published entry. Updates that leave the live spec unchanged, such as a trigger strategy change, publish nothing.
-func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.Plan, config tfsdk.Config, prior *tfsdk.State, state *tfsdk.State) (string, diag.Diagnostics) {
+// RecordsTriggers makes backfill triggers record their starting value, see bindingPairing.
+func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.Plan, config tfsdk.Config, prior *tfsdk.State, recordsTriggers bool, state *tfsdk.State) (string, diag.Diagnostics) {
 	var diagnostics diag.Diagnostics
 
 	planned, err := entryResource.codec.secrets.withConfigSecrets(plan.Raw, config.Raw)
@@ -405,7 +445,7 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 		document[catalog.ExpectPubIDKey] = catalog.NewEntryPubID
 		conflictHint = "\n\n" + catalogName + " already exists in Estuary: import it with terraform import instead of creating it."
 	} else {
-		publication.resets, live, err = entryResource.mergeLive(ctx, name, catalogName, document, keepsUnmanagedBindings(plan.Raw), plan.Raw, prior.Raw)
+		publication.resets, live, err = entryResource.mergeLive(ctx, name, catalogName, document, keepsUnmanagedBindings(plan.Raw), recordsTriggers, plan.Raw, prior.Raw)
 
 		if err != nil {
 			diagnostics.AddError("Merging "+entryResource.catalogType.name+" "+catalogName+" with its live spec", err.Error())
@@ -433,6 +473,10 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 
 	if planned := blockAttribute(stored, catalogNameAttribute, tftypes.String); err == nil && !planned.IsKnown() {
 		stored, err = withCatalogName(stored, catalogName)
+	}
+
+	if err == nil {
+		stored, err = entryResource.publishedResourcePaths(ctx, catalogName, stored)
 	}
 
 	if err != nil {

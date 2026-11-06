@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
@@ -125,6 +126,14 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 			Computed: true,
 		}
 
+		bindings.NestedObject.Attributes[resourcePathAttribute] = schema.ListAttribute{
+			Description: "Resource path Estuary identifies the binding by, such as its schema and table, as in the dashboard. " +
+				"A binding is the live one with its resource path, never another binding of its collection. Known at plan time " +
+				"when the plan validates the bindings it changes, else after the apply.",
+			ElementType: types.StringType,
+			Computed:    true,
+		}
+
 		attributes[bindingsAttribute] = bindings
 
 		attributes[keepUnmanagedBindingsAttribute] = schema.BoolAttribute{
@@ -179,7 +188,8 @@ func (codec *Codec[D, S]) Schema() schema.Schema {
 	return codec.schema
 }
 
-// Spec converts a Terraform value into the catalog name and spec, without the secret hashes and binding names.
+// Spec converts a Terraform value into the catalog name and spec, without the secret hashes, binding names and resource
+// paths.
 func (codec *Codec[D, S]) Spec(value tftypes.Value) (string, S, error) {
 	var empty S
 
@@ -191,8 +201,9 @@ func (codec *Codec[D, S]) Spec(value tftypes.Value) (string, S, error) {
 
 	value, err = nullAttributes(value, func(path *tftypes.AttributePath) bool {
 		_, isName := bindingAttributeIndex(path, bindingNameAttribute)
+		_, isPath := bindingAttributeIndex(path, resourcePathAttribute)
 
-		return isName
+		return isName || isPath
 	})
 
 	if err != nil {

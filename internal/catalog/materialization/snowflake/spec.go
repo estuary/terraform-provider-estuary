@@ -78,7 +78,7 @@ type Config struct {
 type Resource struct {
 	Table        string `yaml:"table" x-collection-name:"true" description:"Snowflake table to materialize into."`
 	Schema       string `yaml:"schema,omitempty" x-schema-name:"true" description:"Schema of the table, overriding config.schema."`
-	DeltaUpdates bool   `yaml:"delta_updates,omitempty" x-delta-updates:"true" description:"Appends the changes of each transaction instead of merging them into one row per key. With 'jwt' credentials, delta updates bindings load through Snowpipe Streaming. Defaults to false. Switching it from true to false requires a backfill: raise backfill.trigger, or the materialization's, in the same change, or the plan fails."`
+	DeltaUpdates bool   `yaml:"delta_updates,omitempty" x-delta-updates:"true" description:"Appends the changes of each transaction instead of merging them into one row per key. With 'jwt' credentials, delta updates bindings load through Snowpipe Streaming. Defaults to false. Switching it from true to false requires a backfill: in the same change, set or raise backfill.trigger, or set or raise the materialization's, which backfills every enabled binding, or the plan fails."`
 	Clustering   string `yaml:"clustering,omitempty" description:"Comma-separated materialized column names used as the clustering key for Snowflake Automatic Clustering (e.g., 'date, user_id'); expressions aren't accepted. It's applied each time the materialization restarts, is published or backfills. Empty drops the table's clustering key, one set outside Estuary included. Recommended only for large tables queried with selective filters on these columns, as it consumes additional Snowflake credits."`
 }
 

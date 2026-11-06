@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -17,7 +18,9 @@ import (
 // computedByRead reports the attributes Read and ImportState compute beside the refreshed ones, which tests check
 // apart.
 func computedByRead(path *tftypes.AttributePath) bool {
-	return path.Equal(catalogNamePath)
+	_, isResourcePath := bindingAttributeIndex(path, resourcePathAttribute)
+
+	return path.Equal(catalogNamePath) || isResourcePath
 }
 
 func liveCapture(bindings ...any) map[string]any {
@@ -42,41 +45,55 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 		bindings []capture.Binding[testResource]
 		live     []any
 		want     []capture.Binding[testResource]
+		missing  string
 	}{
 		"refreshes a field changed outside Terraform": {
 			discovering, []capture.Binding[testResource]{users},
 			[]any{map[string]any{"resource": map[string]any{"table": "users", "priority": 3, "_meta": map[string]any{"path": []any{"users"}}}, "target": "acmeCo/users"}},
 			[]capture.Binding[testResource]{{Resource: testResource{Table: "users", Priority: 3}, Target: "acmeCo/users"}},
+			"",
 		},
 		"refreshes a field only set live": {
 			discovering, []capture.Binding[testResource]{orders},
 			[]any{map[string]any{"resource": map[string]any{"table": "orders", "priority": 5}, "target": "acmeCo/orders"}},
 			[]capture.Binding[testResource]{{Resource: testResource{Table: "orders", Priority: 5}, Target: "acmeCo/orders"}},
+			"",
 		},
 		"leaves the empty live fields out": {
 			discovering, []capture.Binding[testResource]{orders},
 			[]any{map[string]any{"resource": map[string]any{"table": "orders", "priority": 0}, "target": "acmeCo/orders", "disable": false}},
 			[]capture.Binding[testResource]{orders},
+			"",
 		},
 		"refreshes the live backfill counter": {
 			discovering, []capture.Binding[testResource]{orders},
 			[]any{map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders", "backfill": 2}},
 			[]capture.Binding[testResource]{{Resource: orders.Resource, Target: orders.Target, Backfill: 2}},
+			"",
 		},
 		"drops a binding removed outside Terraform": {
 			discovering, []capture.Binding[testResource]{users, orders},
 			[]any{map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"}},
 			[]capture.Binding[testResource]{orders},
+			"\n\n- acmeCo/users (users)\n\n",
+		},
+		"drops a binding whose resource changed outside Terraform": {
+			plain, []capture.Binding[testResource]{orders},
+			[]any{map[string]any{"resource": map[string]any{"table": "orders_v2", "_meta": map[string]any{"path": []any{"orders_v2"}}}, "target": "acmeCo/orders"}},
+			[]capture.Binding[testResource]{},
+			"\n\n- acmeCo/orders (orders)\n    Estuary has other bindings of acmeCo/orders that Terraform doesn't manage: acmeCo/orders (orders_v2)\n\n",
 		},
 		"leaves the discovered bindings unmanaged": {
 			discovering, []capture.Binding[testResource]{orders},
 			[]any{events, map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"}},
 			[]capture.Binding[testResource]{orders},
+			"",
 		},
 		"leaves the undeclared bindings unmanaged without auto discover": {
 			plain, []capture.Binding[testResource]{orders},
 			[]any{events, map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"}},
 			[]capture.Binding[testResource]{orders},
+			"",
 		},
 		"refreshes each binding of a shared collection from its own resource": {
 			plain, []capture.Binding[testResource]{orders, {Resource: testResource{Table: "orders_archive"}, Target: "acmeCo/orders"}},
@@ -88,6 +105,7 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 				{Resource: testResource{Table: "orders", Priority: 1}, Target: "acmeCo/orders"},
 				{Resource: testResource{Table: "orders_archive", Priority: 4}, Target: "acmeCo/orders"},
 			},
+			"",
 		},
 	}
 
@@ -121,8 +139,10 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 
 		entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
 
-		if readResp.Diagnostics.HasError() || readResp.Diagnostics.WarningsCount() > 0 {
-			test.Errorf("%s: read: %v", name, readResp.Diagnostics)
+		var warned bool = readResp.Diagnostics.WarningsCount() == 1 && strings.Contains(readResp.Diagnostics[0].Detail(), expected.missing)
+
+		if readResp.Diagnostics.HasError() || warned != (expected.missing != "") || expected.missing == "" && readResp.Diagnostics.WarningsCount() > 0 {
+			test.Errorf("%s: read: %v, want missing bindings %q", name, readResp.Diagnostics, expected.missing)
 			continue
 		}
 
@@ -134,6 +154,83 @@ func TestResourceReadRefreshesManagedBindings(test *testing.T) {
 
 		if !stateWithoutLive.Equal(want) {
 			test.Errorf("%s: refreshed state = %v, want %v", name, readResp.State.Raw, want)
+		}
+	}
+}
+
+func TestResourceReadPairsBindingsByResourcePath(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	expectations := map[string]struct {
+		state      []string
+		live       map[string]any
+		wantTarget any
+		missing    bool
+	}{
+		"keeps a binding whose collection changed outside Terraform": {
+			[]string{"public", "orders"},
+			map[string]any{"resource": map[string]any{"table": "orders", "_meta": map[string]any{"path": []any{"public", "orders"}}}, "target": "acmeCo/orders_v2"},
+			"acmeCo/orders_v2", false,
+		},
+		"never pairs another resource path of the collection": {
+			[]string{"public", "orders"},
+			map[string]any{"resource": map[string]any{"table": "orders", "_meta": map[string]any{"path": []any{"PUBLIC", "orders"}}}, "target": "acmeCo/orders"},
+			nil, true,
+		},
+		"takes the live resource path of a state without one": {
+			nil,
+			map[string]any{"resource": map[string]any{"table": "orders", "_meta": map[string]any{"path": []any{"public", "orders"}}}, "target": "acmeCo/orders"},
+			"acmeCo/orders", false,
+		},
+	}
+
+	for name, expected := range expectations {
+		var backend *testBackend = &testBackend{live: liveCapture(expected.live)}
+		var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+		entry := newTestCaptureEntry(backend)
+
+		spec.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"}}
+
+		stateValue, err := entry.codec.Value("movies", spec)
+
+		if err == nil {
+			stateValue, err = withResourcePaths(stateValue, func(int, tftypes.Value) tftypes.Value {
+				return resourcePathValue(expected.state)
+			})
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var readResp resource.ReadResponse = resource.ReadResponse{State: tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue}}
+
+		entry.Read(ctx, resource.ReadRequest{State: readResp.State}, &readResp)
+
+		if readResp.Diagnostics.HasError() || (readResp.Diagnostics.WarningsCount() == 1) != expected.missing {
+			test.Errorf("%s: read: %v, want a missing binding warning %v", name, readResp.Diagnostics, expected.missing)
+			continue
+		}
+
+		refreshed, _, err := bindings(readResp.State.Raw)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		if expected.wantTarget == nil {
+			if len(refreshed) != 0 {
+				test.Errorf("%s: refreshed bindings = %v, want the binding dropped", name, refreshed)
+			}
+
+			continue
+		}
+
+		path, _ := bindingResourcePath(refreshed[0])
+
+		if len(refreshed) != 1 || bindingCollectionValue(refreshed[0]) != expected.wantTarget || !reflect.DeepEqual(path, []string{"public", "orders"}) {
+			test.Errorf("%s: refreshed bindings = %v, want target %v with the live resource path", name, refreshed, expected.wantTarget)
 		}
 	}
 }

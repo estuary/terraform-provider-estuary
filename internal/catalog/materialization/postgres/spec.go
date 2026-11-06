@@ -48,7 +48,7 @@ type Resource struct {
 	Table                    string `yaml:"table" x-collection-name:"true" description:"Table to materialize into. The connector creates it, unless it created it before."`
 	Schema                   string `yaml:"schema,omitempty" x-schema-name:"true" description:"Schema of the table, overriding config.schema."`
 	AdditionalTableCreateSQL string `yaml:"additional_table_create_sql,omitempty" description:"SQL statements run in the same transaction that creates the table, such as a CREATE INDEX. They only run when the connector creates the table: a backfill truncates an existing table without running them, so run them yourself on it. Don't re-create the table in them."`
-	DeltaUpdates             bool   `yaml:"delta_updates,omitempty" x-delta-updates:"true" description:"Appends the changes of each transaction instead of merging them into one row per key. Defaults to false. Switching it from true to false requires a backfill: raise backfill.trigger, or the materialization's, in the same change, or the plan fails."`
+	DeltaUpdates             bool   `yaml:"delta_updates,omitempty" x-delta-updates:"true" description:"Appends the changes of each transaction instead of merging them into one row per key. Defaults to false. Switching it from true to false requires a backfill: in the same change, set or raise backfill.trigger, or set or raise the materialization's, which backfills every enabled binding, or the plan fails."`
 }
 
 // Binding maps a source collection to its PostgreSQL table.

@@ -68,6 +68,26 @@ func BindingResource(binding any) map[string]any {
 	return utils.Lookup(binding, ResourceKey)
 }
 
+// BindingResourcePath returns the resource path the control plane recorded in a binding document's resource metadata,
+// nil without one.
+func BindingResourcePath(binding any) []string {
+	var path []string
+
+	components, _ := utils.Lookup(binding, ResourceKey, ResourceMetaKey)["path"].([]any)
+
+	for _, component := range components {
+		text, isText := component.(string)
+
+		if !isText {
+			return nil
+		}
+
+		path = append(path, text)
+	}
+
+	return path
+}
+
 // KeepResourceMeta copies the resource metadata of the from binding document into the to one, unless it has its own.
 func KeepResourceMeta(from any, to any) {
 	var resource map[string]any = BindingResource(to)

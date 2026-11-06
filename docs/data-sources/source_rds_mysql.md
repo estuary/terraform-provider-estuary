@@ -40,6 +40,7 @@ Read-Only:
 - `disable` (Boolean)
 - `name` (String)
 - `resource` (Object) (see [below for nested schema](#nestedobjatt--live_bindings--resource))
+- `resource_path` (List of String)
 - `target` (String)
 
 <a id="nestedobjatt--live_bindings--backfill"></a>

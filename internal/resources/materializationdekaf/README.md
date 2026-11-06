@@ -169,13 +169,13 @@ Backfill control of the whole materialization, as the dashboard's **Backfill** b
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `trigger` | Number | No | Raise it to backfill every enabled binding of the materialization, those Estuary adds through `source.capture` included. Disabled bindings are skipped. Starts at 1 and only goes up. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
+| `trigger` | Number | No | Set or raise it to backfill every enabled binding of the materialization, those Estuary adds through `source.capture` included. Disabled bindings are skipped. Setting it when the materialization is created, or in the first apply after its import, backfills nothing. At least 1, and can't be lowered. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 
 ### `bindings`
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `source` | String | Yes | Estuary collection the binding exposes (e.g., `acmeCo/mongodb/shop/orders`). The provider `tenant` isn't added to it. Changing it replaces the binding, see [Bindings](../../../docs/guides/bindings.md). |
+| `source` | String | Yes | Estuary collection the binding exposes (e.g., `acmeCo/mongodb/shop/orders`). The provider `tenant` isn't added to it. Changing it keeps the binding, which Estuary identifies by its resource path, see [Bindings](../../../docs/guides/bindings.md). |
 | `not_before` | String | No | Exposes only the documents published at or after this RFC 3339 time (e.g., `2026-01-01T00:00:00Z`). It's only a filter: changing it doesn't reprocess the documents already read. See [Time Travel](https://docs.estuary.dev/reference/time-travel/). |
 | `not_after` | String | No | Exposes only the documents published before this RFC 3339 time. Like `not_before`, it's only a filter. |
 | `resource` | Object | Yes | Topic the collection is exposed as. See [`bindings.resource`](#bindingsresource). |
@@ -185,6 +185,7 @@ Backfill control of the whole materialization, as the dashboard's **Backfill** b
 | `backfill` | Object | No | Backfill control of the binding. See [`bindings.backfill`](#bindingsbackfill). |
 | `on_incompatible_schema_change` | String | No | Overrides the materialization's `on_incompatible_schema_change` for this binding: `backfill`, `disableBinding`, `disableTask` or `abort`. |
 | `name` | String | Read-only | Collection of the binding, shown in every plan so you can tell which binding changes. |
+| `resource_path` | List of String | Read-only | Resource path Estuary identifies the binding by, such as its schema and table, as in the dashboard. See [Bindings](../../../docs/guides/bindings.md). |
 
 ### `bindings.backfill`
 
@@ -192,7 +193,7 @@ Backfill control of the binding. See [Backfill Control](../../../docs/guides/bac
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `trigger` | Number | No | Raise it to backfill the binding. Starts at 1 and only goes up. Can't be raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
+| `trigger` | Number | No | Set or raise it to backfill the binding. Setting it when the binding is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 
 ### `bindings.resource`
 

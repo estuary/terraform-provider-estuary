@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
@@ -46,7 +45,6 @@ func (list *listNode) attribute(field field) schema.Attribute {
 		Description: field.description,
 		Required:    !field.optional,
 		Optional:    field.optional,
-		Sensitive:   utils.IsSensitiveKey(field.key),
 		ElementType: list.item.(scalarNode).elementType(),
 	}
 }

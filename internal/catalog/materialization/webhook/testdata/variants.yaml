@@ -1,0 +1,24 @@
+materializations:
+  acmeCo/webhook/minimal:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-webhook:v1
+        config:
+          address: http://123.4.567.89:3000/
+    bindings:
+      - resource: { relativePath: webhook/estuary }
+        source: acmeCo/orders
+
+  acmeCo/webhook/absolute-path:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-webhook:v1
+        config:
+          address: https://hooks.example.com/v1/
+          headers:
+            customHeaders:
+              - name: Authorization
+                value: Bearer <token>
+    bindings:
+      - resource: { relativePath: https://other.example.com/events }
+        source: acmeCo/events

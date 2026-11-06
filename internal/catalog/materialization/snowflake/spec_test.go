@@ -11,11 +11,15 @@ import (
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, Image)
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
 }
 
 func TestSchemaConformance(test *testing.T) {
 	spectest.AssertConformsToSchema[Config, Resource](test)
+}
+
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, AuthTypes, TimestampTypes, materialization.DBTJobTriggerModes, materialization.OnIncompatibleSchemaChanges, materialization.TargetNamingStrategies)
 }
 
 func TestSampleVariants(test *testing.T) {
@@ -116,38 +120,22 @@ func TestSampleBindings(test *testing.T) {
 
 	var bindings []Binding = specs["acmeCo/analytics/materialize-snowflake"].Bindings
 
-	expectations := []struct {
-		resource Resource
-		exclude  []string
-	}{
-		{Resource{Table: "orders"}, nil},
-		{Resource{Table: "customers", Schema: "crm", Clustering: "region,created_at"}, nil},
-		{Resource{Table: "events", DeltaUpdates: true}, []string{"payload"}},
-	}
+	spectest.AssertMaterializationResources(test, bindings, []Resource{
+		{Table: "orders"},
+		{Table: "customers", Schema: "crm", Clustering: "region,created_at"},
+		{Table: "events", DeltaUpdates: true},
+	})
 
-	if len(bindings) != len(expectations) {
-		test.Fatalf("got %d bindings, want %d", len(bindings), len(expectations))
-	}
-
-	for index, expected := range expectations {
-		var binding Binding = bindings[index]
-
-		if binding.Resource != expected.resource {
-			test.Errorf("binding %d resource = %+v, want %+v", index, binding.Resource, expected.resource)
-		}
-
-		if expected.exclude != nil && (binding.Fields == nil || !slices.Equal(binding.Fields.Exclude, expected.exclude)) {
-			test.Errorf("binding %d fields = %+v, want exclude %v", index, binding.Fields, expected.exclude)
-		}
+	if bindings[2].Fields == nil || !slices.Equal(bindings[2].Fields.Exclude, []string{"payload"}) {
+		test.Errorf("events fields = %+v, want exclude [payload]", bindings[2].Fields)
 	}
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
 	var host *regexp.Regexp = regexp.MustCompile(`^[^/:]+.snowflakecomputing.com$`)
-
-	var seenAuthTypes map[AuthType]bool = map[AuthType]bool{}
-
-	var seenTimestampTypes map[TimestampType]bool = map[TimestampType]bool{}
+	var authTypes *spectest.EnumSamples[AuthType] = spectest.NewEnumSamples(test, "auth_type", AuthTypes)
+	var timestampTypes *spectest.EnumSamples[TimestampType] = spectest.NewEnumSamples(test, "timestamp_type", TimestampTypes)
+	var dbtModes *spectest.EnumSamples[materialization.DBTJobTriggerMode] = spectest.NewEnumSamples(test, "dbt_job_trigger mode", materialization.DBTJobTriggerModes)
 
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
@@ -161,9 +149,7 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 				test.Errorf("%s: host %q must be an account URL ending in .snowflakecomputing.com", name, config.Host)
 			}
 
-			if !slices.Contains(AuthTypes, credentials.AuthType) {
-				test.Errorf("%s: auth_type %q is not in AuthTypes", name, credentials.AuthType)
-			}
+			authTypes.Add(name, credentials.AuthType)
 
 			if credentials.AuthType == AuthTypeJWT && (credentials.User == "" || credentials.PrivateKey == "" || credentials.Password != "") {
 				test.Errorf("%s: jwt credentials need user and private_key and no password", name)
@@ -173,41 +159,24 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 				test.Errorf("%s: user_password credentials need user and password and no private_key", name)
 			}
 
-			if !slices.Contains(TimestampTypes, config.TimestampType) {
-				test.Errorf("%s: timestamp_type %q is not in TimestampTypes", name, config.TimestampType)
+			timestampTypes.Add(name, config.TimestampType)
+
+			if config.DBTJobTrigger != nil && config.DBTJobTrigger.Mode != "" {
+				dbtModes.Add(name, config.DBTJobTrigger.Mode)
 			}
-
-			if config.DBTJobTrigger != nil && config.DBTJobTrigger.Mode != "" && !slices.Contains(materialization.DBTJobTriggerModes, config.DBTJobTrigger.Mode) {
-				test.Errorf("%s: dbt_job_trigger mode %q is not in DBTJobTriggerModes", name, config.DBTJobTrigger.Mode)
-			}
-
-			seenAuthTypes[credentials.AuthType] = true
-
-			seenTimestampTypes[config.TimestampType] = true
 		}
 	}
 
-	for _, authType := range AuthTypes {
-		if !seenAuthTypes[authType] {
-			test.Errorf("auth_type %q has no sample", authType)
-		}
-	}
+	authTypes.AssertAllSampled()
 
-	for _, timestampType := range TimestampTypes {
-		if !seenTimestampTypes[timestampType] {
-			test.Errorf("timestamp_type %q has no sample", timestampType)
-		}
-	}
+	timestampTypes.AssertAllSampled()
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"camel case private key from the docs": {
-			key: "privateKey",
-			content: `
+			Key: "privateKey",
+			Content: `
 				materializations:
 					acmeCo/snowflake/typo:
 						endpoint:
@@ -226,8 +195,8 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"namespace is an Iceberg resource field": {
-			key: "namespace",
-			content: `
+			Key: "namespace",
+			Content: `
 				materializations:
 					acmeCo/snowflake/namespace:
 						endpoint:
@@ -251,13 +220,5 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseMaterializations[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownMaterializationKeys[Spec](test, documents)
 }

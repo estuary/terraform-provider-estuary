@@ -5,10 +5,15 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/capture"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"gopkg.in/yaml.v3"
 )
@@ -34,8 +39,8 @@ type testResource struct {
 	Priority int    `yaml:"priority,omitempty"`
 }
 
-func (resource testResource) RecommendedName() string {
-	return "public/" + resource.Table
+func (resource testResource) ResourcePath() []string {
+	return []string{resource.Table}
 }
 
 var testConnector Connector = Connector{
@@ -46,7 +51,7 @@ var testConnector Connector = Connector{
 func TestCaptureCodecSchema(test *testing.T) {
 	var ctx context.Context = context.Background()
 
-	codec, err := NewCaptureCodec[testConfig, testResource](testConnector)
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testConnector, captureType[testResource]())
 
 	if err != nil {
 		test.Fatal(err)
@@ -128,8 +133,54 @@ func TestCaptureCodecSchema(test *testing.T) {
 	}
 }
 
+func TestDocumentEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[captureDocument[struct{}, struct{}]](test, backfillStrategies)
+
+	spectest.AssertEnumTags[materializationDocument[struct{}, struct{}]](test, materialization.OnIncompatibleSchemaChanges, materialization.TargetNamingStrategies)
+}
+
+func TestCaptureCodecImageAllowsOnlyTags(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testConnector, captureType[testResource]())
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	attribute, _ := codec.Schema().Attributes[imageAttribute].(schema.StringAttribute)
+
+	expectations := map[string]bool{
+		"ghcr.io/estuary/source-test:v1":          true,
+		"ghcr.io/estuary/source-test:dev":         true,
+		"ghcr.io/estuary/source-test":             false,
+		"ghcr.io/estuary/source-test:":            false,
+		"ghcr.io/estuary/source-other:v1":         false,
+		"ghcr.io/estuary/source-test-fork:v1":     false,
+		"attacker.io/estuary/source-test:v1":      false,
+		"ghcr.io/estuary/source-test@sha256:abcd": false,
+		"ghcr.io/estuary/source-test:v1/extra":    false,
+	}
+
+	for image, valid := range expectations {
+		var validateResp validator.StringResponse
+
+		for _, check := range attribute.Validators {
+			check.ValidateString(ctx, validator.StringRequest{Path: path.Root(imageAttribute), ConfigValue: types.StringValue(image)}, &validateResp)
+		}
+
+		if validateResp.Diagnostics.HasError() == valid {
+			test.Errorf("image %q: diagnostics %v, want valid %v", image, validateResp.Diagnostics, valid)
+		}
+	}
+
+	if _, err := newCodec[captureDocument[testConfig, testResource]](Connector{TypeName: "capture_test", Image: "ghcr.io/estuary/source-test"}, captureType[testResource]()); err == nil {
+		test.Error("newCodec accepted a default image without a tag")
+	}
+}
+
 func TestCaptureCodecRoundTrip(test *testing.T) {
-	codec, err := NewCaptureCodec[testConfig, testResource](testConnector)
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testConnector, captureType[testResource]())
 
 	if err != nil {
 		test.Fatal(err)
@@ -157,8 +208,16 @@ func TestCaptureCodecRoundTrip(test *testing.T) {
 				},
 			},
 			Bindings: []capture.Binding[testResource]{
-				{Resource: testResource{Table: "orders", Priority: -1}, Target: "acmeCo/orders", Backfill: 2},
+				{Resource: testResource{Table: "orders", Priority: -1}, Target: "acmeCo/orders"},
 				{Resource: testResource{Table: "logs"}, Target: "acmeCo/logs", Disable: true},
+			},
+			Shards: catalog.Shards{
+				"disable":        true,
+				"logLevel":       "debug",
+				"maxTxnDuration": "4m",
+				"hotStandbys":    1,
+				"flags":          map[string]any{"enable_feature": true, "ratio": 0.5},
+				"notes":          []any{"first", 2},
 			},
 		},
 		"acmeCo/source-minimal": {
@@ -215,7 +274,7 @@ func TestCaptureCodecRejectsUnknownValues(test *testing.T) {
 		},
 	}
 
-	codec, err := NewCaptureCodec[testConfig, testResource](testConnector)
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testConnector, captureType[testResource]())
 
 	if err != nil {
 		test.Fatal(err)

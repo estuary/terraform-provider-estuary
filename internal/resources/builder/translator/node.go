@@ -7,6 +7,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
+	"gopkg.in/yaml.v3"
 )
 
 type node interface {
@@ -28,8 +29,16 @@ func newNode(kind reflect.Type) (node, error) {
 			return keySetNode{}, nil
 		}
 
+		if isDynamic(kind) {
+			return dynamicNode{}, nil
+		}
+
 		return newMapNode(kind)
 	case reflect.String:
+		if reflect.PointerTo(kind).Implements(reflect.TypeFor[yaml.Unmarshaler]()) {
+			return yamlStringNode{kind: kind}, nil
+		}
+
 		return stringNode{}, nil
 	case reflect.Bool:
 		return boolNode{}, nil

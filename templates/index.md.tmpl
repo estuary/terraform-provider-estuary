@@ -1,0 +1,50 @@
+---
+page_title: "Estuary Provider"
+description: |-
+  Manage Estuary captures (sources) and materializations (destinations) as code.
+---
+
+# Estuary Provider
+
+Manage [Estuary](https://estuary.dev) captures (sources) and materializations (destinations) as code. Each resource manages a capture or a materialization of one Estuary connector, and each capture resource has a data source of the same name listing every live binding of a capture.
+
+New to the provider? Start with the [Getting Started](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/getting-started) guide.
+
+## Prerequisites
+
+| Requirement | Version |
+|---|---|
+| Terraform | >= 1.11 |
+| [`flowctl`](https://docs.estuary.dev/concepts/flowctl/) | Latest, on `PATH` or set through `flowctl_path` |
+| Estuary account | [Sign up for free](https://dashboard.estuary.dev) |
+
+The provider runs `flowctl` to reach Estuary, so it must be installed where Terraform runs.
+
+## Example Usage
+
+{{ tffile "examples/provider/provider.tf" }}
+
+## Authentication
+
+The provider authenticates with an Estuary refresh token, from the dashboard under Admin > [CLI-API](https://dashboard.estuary.dev/admin/api). Set it in `FLOW_AUTH_TOKEN` rather than in the configuration. Access tokens also work but expire, so use a refresh token in CI/CD.
+
+| Attribute | Environment Variable |
+|---|---|
+| `token` | `FLOW_AUTH_TOKEN` |
+| `tenant` | `ESTUARY_TENANT` |
+| `data_plane` | `ESTUARY_DATA_PLANE` |
+| `backend` | `ESTUARY_BACKEND` |
+
+An attribute set in the provider block overrides its environment variable. Every attribute must be known at plan time: a value only known after apply, such as another resource's attribute, fails the plan.
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Guides
+
+- [Getting Started](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/getting-started)
+- [Bindings](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/bindings)
+- [Backfills](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/backfills)
+- [Secrets](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/secrets)
+- [Existing Pipelines](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/existing-pipelines)
+- [Task Settings](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/task-settings)
+- [Multiple Environments](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/multiple-environments)

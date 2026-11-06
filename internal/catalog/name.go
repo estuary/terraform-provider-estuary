@@ -11,8 +11,7 @@ func Tenant(tenant string) string {
 	return tenant + "/"
 }
 
-// CatalogName returns the exact catalog name of a task: name prefixed with the tenant and ending with
-// the connector name, each added unless already present.
+// CatalogName returns name with the tenant prefix and connector name suffix, adding each only when missing.
 func CatalogName(tenant string, name string, connectorName string) string {
 	if tenant != "" && !strings.HasPrefix(name, tenant) {
 		name = tenant + name
@@ -25,7 +24,7 @@ func CatalogName(tenant string, name string, connectorName string) string {
 	return name
 }
 
-// Name returns a catalog name without its connector name, keeping its tenant as an imported entry is configured.
+// Name strips the connector name from a catalog name, keeping the tenant as configs write it.
 func Name(catalogName string, connectorName string) string {
 	if connectorName == "" {
 		return catalogName

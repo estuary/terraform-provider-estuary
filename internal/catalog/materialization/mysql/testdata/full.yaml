@@ -4,7 +4,7 @@ materializations:
       connector:
         image: ghcr.io/estuary/materialize-mysql:v2
         config:
-          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:3306
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
           user: flow_materialize
           password: <secret>
           database: analytics
@@ -33,7 +33,7 @@ materializations:
             feature_flags: allow_existing_tables_for_new_bindings
           networkTunnel:
             sshForwarding:
-              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              sshEndpoint: ssh://ec2-user@ec2-123-4-567-89.compute-1.amazonaws.com:22
               privateKey: |
                 -----BEGIN RSA PRIVATE KEY-----
                 <private-key>

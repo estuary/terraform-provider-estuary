@@ -1,0 +1,30 @@
+materializations:
+  acmeCo/analytics/materialize-webhook:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-webhook:v1
+        config:
+          address: https://hooks.example.com/estuary/
+          headers:
+            customHeaders:
+              - name: my-header
+                value: my-value
+
+              - name: another-header
+                value: another-value
+          advanced:
+            feature_flags: field_selection
+    bindings:
+      - resource:
+          relativePath: orders
+        source: acmeCo/orders
+        fields:
+          recommended: true
+
+      - resource:
+          relativePath: crm/customers
+        source: acmeCo/customers
+        fields:
+          recommended: 1
+          require:
+            flow_document: {}

@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// SampleFiles returns every YAML sample under the package testdata directory.
+// SampleFiles returns the YAML samples under testdata.
 func SampleFiles(test testing.TB) []string {
 	test.Helper()
 
@@ -35,7 +35,7 @@ func DecodeStrict(content []byte, out any) error {
 	return decoder.Decode(out)
 }
 
-// Dedent strips the shared leading tabs of a tab indented YAML document, each remaining tab becoming two spaces.
+// Dedent strips the shared leading tabs of a YAML document, turning each remaining tab into two spaces.
 func Dedent(content []byte) []byte {
 	var lines [][]byte = bytes.Split(content, []byte("\n"))
 
@@ -72,7 +72,7 @@ func Dedent(content []byte) []byte {
 	return bytes.Join(lines, []byte("\n"))
 }
 
-// ParseCaptures strictly decodes a catalog spec document into its captures, S being the connector capture spec.
+// ParseCaptures strictly decodes the captures of a catalog spec document.
 func ParseCaptures[S any](content []byte) (map[string]S, error) {
 	var document struct {
 		Captures map[string]S `yaml:"captures"`
@@ -83,8 +83,7 @@ func ParseCaptures[S any](content []byte) (map[string]S, error) {
 	return document.Captures, err
 }
 
-// ParseMaterializations strictly decodes a catalog spec document into its materializations, S being the
-// connector materialization spec.
+// ParseMaterializations strictly decodes the materializations of a catalog spec document.
 func ParseMaterializations[S any](content []byte) (map[string]S, error) {
 	var document struct {
 		Materializations map[string]S `yaml:"materializations"`
@@ -95,7 +94,7 @@ func ParseMaterializations[S any](content []byte) (map[string]S, error) {
 	return document.Materializations, err
 }
 
-// DecodeCaptures reads a YAML file and strictly decodes its captures, failing the test on error.
+// DecodeCaptures strictly decodes the captures of a YAML file, failing the test on error.
 func DecodeCaptures[S any](test testing.TB, path string) map[string]S {
 	test.Helper()
 
@@ -108,7 +107,7 @@ func DecodeCaptures[S any](test testing.TB, path string) map[string]S {
 	return captures
 }
 
-// DecodeMaterializations reads a YAML file and strictly decodes its materializations, failing the test on error.
+// DecodeMaterializations strictly decodes the materializations of a YAML file, failing the test on error.
 func DecodeMaterializations[S any](test testing.TB, path string) map[string]S {
 	test.Helper()
 

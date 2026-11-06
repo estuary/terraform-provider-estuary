@@ -1,30 +1,37 @@
 package mysql
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/sslmode"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 )
 
 func TestSpec(test *testing.T) {
-	spectest.RunMaterializationSuite[Spec](test, Image)
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: ImageMySQL, Name: ConnectorNameMySQL}, spectest.Connector{Image: ImageAmazonAurora, Name: ConnectorNameAmazonAurora}, spectest.Connector{Image: ImageAmazonRDS, Name: ConnectorNameAmazonRDS})
+}
+
+func TestEnumTagsMatchLists(test *testing.T) {
+	spectest.AssertEnumTags[Spec](test, sslmode.MySQLModes, materialization.DBTJobTriggerModes, materialization.OnIncompatibleSchemaChanges, materialization.TargetNamingStrategies)
 }
 
 func TestSampleVariants(test *testing.T) {
 	var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, "testdata/variants.yaml")
 
 	expectations := map[string]struct {
-		sslMode   SSLMode
+		image     string
+		sslMode   sslmode.MySQL
 		timezone  string
 		sshTunnel bool
 	}{
-		"acmeCo/mysql/password":   {"", "", false},
-		"acmeCo/mysql/verify-ca":  {SSLModeVerifyCA, "", false},
-		"acmeCo/mysql/ssh-tunnel": {"", "", true},
-		"acmeCo/mysql/timezone":   {"", "America/New_York", false},
+		"acmeCo/mysql/password":     {ImageMySQL, "", "", false},
+		"acmeCo/mysql/verify-ca":    {ImageMySQL, sslmode.MySQLVerifyCA, "", false},
+		"acmeCo/mysql/ssh-tunnel":   {ImageMySQL, "", "", true},
+		"acmeCo/aurora/mysql-tls":   {ImageAmazonAurora, sslmode.MySQLRequired, "", false},
+		"acmeCo/rds/mysql-password": {ImageAmazonRDS, "", "", false},
+		"acmeCo/rds/mysql-timezone": {ImageAmazonRDS, "", "America/New_York", false},
 	}
 
 	if len(specs) != len(expectations) {
@@ -41,7 +48,11 @@ func TestSampleVariants(test *testing.T) {
 
 			var config Config = spec.Endpoint.Connector.Config
 
-			var sslMode SSLMode
+			if spec.Endpoint.Connector.Image != expected.image {
+				test.Errorf("image = %q, want %q", spec.Endpoint.Connector.Image, expected.image)
+			}
+
+			var sslMode sslmode.MySQL
 
 			if config.Advanced != nil {
 				sslMode = config.Advanced.SSLMode
@@ -75,7 +86,7 @@ func TestSampleFullSpec(test *testing.T) {
 		test.Errorf("dbt_job_trigger = %+v, want ignore mode", config.DBTJobTrigger)
 	}
 
-	if config.Advanced == nil || config.Advanced.SSLMode != SSLModeVerifyIdentity || !config.Advanced.NoFlowDocument {
+	if config.Advanced == nil || config.Advanced.SSLMode != sslmode.MySQLVerifyIdentity || !config.Advanced.NoFlowDocument {
 		test.Fatalf("advanced = %+v, want verify_identity without the flow document", config.Advanced)
 	}
 
@@ -91,24 +102,16 @@ func TestSampleBindings(test *testing.T) {
 
 	var bindings []Binding = specs["acmeCo/analytics/materialize-mysql"].Bindings
 
-	expectations := []Resource{
+	spectest.AssertMaterializationResources(test, bindings, []Resource{
 		{Table: "orders"},
 		{Table: "customers", AdditionalTableCreateSQL: "CREATE INDEX customers_email ON customers (email);"},
 		{Table: "events", DeltaUpdates: true},
-	}
-
-	if len(bindings) != len(expectations) {
-		test.Fatalf("got %d bindings, want %d", len(bindings), len(expectations))
-	}
-
-	for index, expected := range expectations {
-		if bindings[index].Resource != expected {
-			test.Errorf("binding %d resource = %+v, want %+v", index, bindings[index].Resource, expected)
-		}
-	}
+	})
 }
 
 func TestSamplesFollowConnectorRules(test *testing.T) {
+	var sslModes *spectest.EnumSamples[sslmode.MySQL] = spectest.NewEnumSamples(test, "sslmode", sslmode.MySQLModes)
+
 	for _, file := range spectest.SampleFiles(test) {
 		var specs map[string]Spec = spectest.DecodeMaterializations[Spec](test, file)
 
@@ -123,13 +126,13 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 				continue
 			}
 
-			var sslMode SSLMode = config.Advanced.SSLMode
+			var sslMode sslmode.MySQL = config.Advanced.SSLMode
 
-			if sslMode != "" && !slices.Contains(SSLModes, sslMode) {
-				test.Errorf("%s: sslmode %q is not in SSLModes", name, sslMode)
+			if sslMode != "" {
+				sslModes.Add(name, sslMode)
 			}
 
-			if (sslMode == SSLModeVerifyCA || sslMode == SSLModeVerifyIdentity) && config.Advanced.SSLServerCA == "" {
+			if (sslMode == sslmode.MySQLVerifyCA || sslMode == sslmode.MySQLVerifyIdentity) && config.Advanced.SSLServerCA == "" {
 				test.Errorf("%s: sslmode %q requires ssl_server_ca", name, sslMode)
 			}
 		}
@@ -137,20 +140,17 @@ func TestSamplesFollowConnectorRules(test *testing.T) {
 }
 
 func TestUnknownKeysAreRejected(test *testing.T) {
-	documents := map[string]struct {
-		key     string
-		content string
-	}{
+	documents := map[string]spectest.UnknownKey{
 		"credentials is a MySQL capture field": {
-			key: "credentials",
-			content: `
+			Key: "credentials",
+			Content: `
 				materializations:
 					acmeCo/mysql/credentials:
 						endpoint:
 							connector:
 								image: ghcr.io/estuary/materialize-mysql:v2
 								config:
-									address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:3306
+									address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
 									user: flow_materialize
 									database: analytics
 									credentials:
@@ -160,15 +160,15 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 			`,
 		},
 		"schema is a PostgreSQL resource field": {
-			key: "schema",
-			content: `
+			Key: "schema",
+			Content: `
 				materializations:
 					acmeCo/mysql/schema:
 						endpoint:
 							connector:
 								image: ghcr.io/estuary/materialize-mysql:v2
 								config:
-									address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:3306
+									address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:3306
 									user: flow_materialize
 									password: <secret>
 									database: analytics
@@ -181,13 +181,5 @@ func TestUnknownKeysAreRejected(test *testing.T) {
 		},
 	}
 
-	for name, document := range documents {
-		test.Run(name, func(test *testing.T) {
-			_, err := spectest.ParseMaterializations[Spec]([]byte(document.content))
-
-			if err == nil || !strings.Contains(err.Error(), "field "+document.key+" not found") {
-				test.Fatalf("error = %v, want strict decoding to reject the %s key", err, document.key)
-			}
-		})
-	}
+	spectest.AssertUnknownMaterializationKeys[Spec](test, documents)
 }

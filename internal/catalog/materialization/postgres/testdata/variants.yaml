@@ -4,7 +4,7 @@ materializations:
       connector:
         image: ghcr.io/estuary/materialize-postgres:v5
         config:
-          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+          address: 123.4.567.89:5432
           user: flow_materialize
           database: analytics
           credentials:
@@ -14,18 +14,34 @@ materializations:
       - resource: { table: orders }
         source: acmeCo/orders
 
-  acmeCo/postgres/aurora-iam:
+  acmeCo/postgres/gcp-iam:
     endpoint:
       connector:
         image: ghcr.io/estuary/materialize-postgres:v5
         config:
-          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+          address: 123.4.567.89:5432
           user: flow_materialize
           database: analytics
           credentials:
-            auth_type: AWSIAM
-            aws_region: us-east-1
-            aws_role_arn: arn:aws:iam::123456789012:role/estuary-materialize
+            auth_type: GCPIAM
+            gcp_service_account_to_impersonate: estuary-materialize@my-project.iam.gserviceaccount.com
+            gcp_workload_identity_pool_audience: //iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/estuary/providers/estuary
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/postgres/azure-iam:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-postgres:v5
+        config:
+          address: 123.4.567.89:5432
+          user: flow_materialize
+          database: analytics
+          credentials:
+            auth_type: AzureIAM
+            azure_client_id: 00000000-0000-0000-0000-000000000001
+            azure_tenant_id: 00000000-0000-0000-0000-000000000002
     bindings:
       - resource: { table: orders }
         source: acmeCo/orders
@@ -35,14 +51,14 @@ materializations:
       connector:
         image: ghcr.io/estuary/materialize-postgres:v5
         config:
-          address: 10.0.0.12:5432
+          address: 123.4.567.89:5432
           user: flow_materialize
           credentials:
             auth_type: UserPassword
             password: <secret>
           networkTunnel:
             sshForwarding:
-              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              sshEndpoint: ssh://ec2-user@ec2-123-4-567-89.compute-1.amazonaws.com:22
               privateKey: |
                 -----BEGIN RSA PRIVATE KEY-----
                 <private-key>
@@ -56,9 +72,56 @@ materializations:
       connector:
         image: ghcr.io/estuary/materialize-postgres:v5
         config:
-          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com
+          address: 123.4.567.89
           user: flow_materialize
           password: <secret>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/rds/postgres-password:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-amazon-rds-postgres:v5
+        config:
+          address: my-instance.123456789.us-east-1.rds.amazonaws.com:5432
+          user: flow_materialize
+          database: analytics
+          credentials:
+            auth_type: UserPassword
+            password: <secret>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/rds/postgres-iam:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-amazon-rds-postgres:v5
+        config:
+          address: my-instance.123456789.us-east-1.rds.amazonaws.com:5432
+          user: flow_materialize
+          database: analytics
+          credentials:
+            auth_type: AWSIAM
+            aws_region: us-east-1
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-materialize
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/aurora/postgres-iam:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-amazon-aurora-postgres:v5
+        config:
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:5432
+          user: flow_materialize
+          database: analytics
+          credentials:
+            auth_type: AWSIAM
+            aws_region: us-east-1
+            aws_role_arn: arn:aws:iam::123456789012:role/estuary-materialize
     bindings:
       - resource: { table: orders }
         source: acmeCo/orders

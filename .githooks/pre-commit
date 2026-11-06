@@ -1,0 +1,18 @@
+#!/bin/sh
+
+set -eu
+
+# Only schemas, examples and templates change the docs.
+if ! git diff --cached --name-only | grep -qE '^(internal/|examples/|templates/|main\.go$|go\.mod$)'; then
+	exit 0
+fi
+
+echo "pre-commit: regenerating docs/ with go generate"
+
+if ! output="$(go generate ./... 2>&1)"; then
+	echo "$output" >&2
+	echo "pre-commit: go generate failed, commit aborted" >&2
+	exit 1
+fi
+
+git add -A docs/

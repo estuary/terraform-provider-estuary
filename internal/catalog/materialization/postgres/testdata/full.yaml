@@ -4,7 +4,7 @@ materializations:
       connector:
         image: ghcr.io/estuary/materialize-postgres:v5
         config:
-          address: my-cluster.cluster-abc123.us-east-1.rds.amazonaws.com:5432
+          address: my-cluster.cluster-123456789.us-east-1.rds.amazonaws.com:5432
           user: flow_materialize
           database: analytics
           schema: estuary
@@ -27,17 +27,31 @@ materializations:
             feature_flags: allow_existing_tables_for_new_bindings
           networkTunnel:
             sshForwarding:
-              sshEndpoint: ssh://ec2-user@ec2-198-21-98-1.compute-1.amazonaws.com:22
+              sshEndpoint: ssh://ec2-user@ec2-123-4-567-89.compute-1.amazonaws.com:22
               privateKey: |
                 -----BEGIN RSA PRIVATE KEY-----
                 <private-key>
                 -----END RSA PRIVATE KEY-----
+    source:
+      capture: acmeCo/analytics/source-postgres
+      deltaUpdates: false
+      fieldsRecommended: 1
+    targetNaming:
+      strategy: prefixTableNames
+      schema: estuary
+      skipCommonDefaults: true
+      tableTemplate: raw_{{table}}
+    onIncompatibleSchemaChange: disableBinding
     bindings:
       - resource:
           table: orders
         source: acmeCo/orders
+        priority: 10
+        onIncompatibleSchemaChange: abort
         fields:
-          recommended: true
+          recommended: 1
+          groupBy:
+            - id
 
       - resource:
           table: customers
@@ -48,7 +62,10 @@ materializations:
       - resource:
           table: events
           delta_updates: true
-        source: acmeCo/events
+        source:
+          name: acmeCo/events
+          notBefore: "2026-01-01T00:00:00Z"
+        disable: true
         fields:
           recommended: true
           exclude:

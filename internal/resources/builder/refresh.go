@@ -6,50 +6,46 @@ import (
 	"math/big"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-const bindingsAttribute string = "bindings"
-const bindingTargetAttribute string = "target"
-const bindingSourceAttribute string = "source"
-const bindingNameAttribute string = "name"
-
-// RefreshBindings returns state with each of its bindings refreshed from the live binding of the same target, and
-// without the bindings no longer live, so plans show the changes made outside Terraform.
-// Only the fields set in state are refreshed, the ones Estuary fills in staying unmanaged. Unmanaged appends the
-// live bindings state doesn't hold, when Terraform manages every binding of the entry and the next apply removes them.
-func (codec *Codec[D, S]) RefreshBindings(state tftypes.Value, live tftypes.Value, unmanaged bool) (tftypes.Value, error) {
+// Refresh returns state refreshed from live, so plans show changes made outside Terraform. Only attributes set in
+// state refresh; bindings pair by collection and resource path, as Estuary does, so a binding whose resource changed
+// outside Terraform is no longer the one state holds. AppendUnheld appends live bindings state doesn't hold.
+func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appendUnheld bool) (tftypes.Value, error) {
 	var refreshed []tftypes.Value = []tftypes.Value{}
-	var managed map[string]bool = map[string]bool{}
+	var path *tftypes.AttributePath = bindingsPath
+	var resourcePath resourcePath = codec.catalogType.resourcePath
 
-	stateBindings, bindingsType, err := bindings(state)
-
-	if err != nil || bindingsType == nil {
-		return state, err
-	}
-
-	liveBindings, _, err := bindings(live)
+	state, err := codec.refreshManaged(tftypes.NewAttributePath(), state, live)
 
 	if err != nil {
 		return state, err
 	}
 
-	var liveByTarget map[string]tftypes.Value = byTarget(liveBindings)
-	var path *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(bindingsAttribute)
+	stateBindings, err := resourcePath.entryBindings(state)
 
-	for index, binding := range stateBindings {
-		var target string = bindingTarget(binding)
+	if err != nil || stateBindings.listType == nil {
+		return state, err
+	}
 
-		liveBinding, found := liveByTarget[target]
+	liveBindings, err := resourcePath.entryBindings(live)
 
-		if !found {
+	if err != nil {
+		return state, err
+	}
+
+	var pairs []int = resourcePath.pairSame(stateBindings.keys, liveBindings.keys)
+	var held []int = inversePairs(pairs, len(liveBindings.values))
+
+	for index, binding := range stateBindings.values {
+		if pairs[index] == -1 {
 			continue
 		}
 
-		managed[target] = true
-
-		refreshedBinding, err := codec.refreshManaged(path.WithElementKeyInt(index), binding, liveBinding)
+		refreshedBinding, err := codec.refreshManaged(path.WithElementKeyInt(index), binding, liveBindings.values[pairs[index]])
 
 		if err != nil {
 			return state, err
@@ -58,29 +54,96 @@ func (codec *Codec[D, S]) RefreshBindings(state tftypes.Value, live tftypes.Valu
 		refreshed = append(refreshed, refreshedBinding)
 	}
 
-	for _, binding := range liveBindings {
-		if unmanaged && !managed[bindingTarget(binding)] {
+	for index, binding := range liveBindings.values {
+		if appendUnheld && held[index] == -1 {
 			refreshed = append(refreshed, binding)
 		}
 	}
 
-	return tftypes.Transform(state, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		if !attributePath.Equal(path) {
-			return current, nil
-		}
-
-		return tftypes.NewValue(bindingsType, refreshed), nil
+	return withAttribute(state, path, func(tftypes.Value) tftypes.Value {
+		return tftypes.NewValue(stateBindings.listType, refreshed)
 	})
 }
 
-// refreshManaged returns the live value of the fields set in state, keeping the null ones, the secrets and their hash.
+// missingBindings describes each state binding no live binding pairs with, see Refresh, as its label followed by the
+// labels of the live bindings of its collection Terraform doesn't manage, which the apply leaves beside it.
+func (codec *Codec[D, S]) missingBindings(state tftypes.Value, live tftypes.Value) ([]string, error) {
+	var missing []string
+	var resourcePath resourcePath = codec.catalogType.resourcePath
+
+	stateBindings, err := resourcePath.entryBindings(state)
+
+	if err != nil {
+		return nil, err
+	}
+
+	liveBindings, err := resourcePath.entryBindings(live)
+
+	if err != nil {
+		return nil, err
+	}
+
+	var pairs []int = resourcePath.pairSame(stateBindings.keys, liveBindings.keys)
+	var held []int = inversePairs(pairs, len(liveBindings.values))
+
+	for index, binding := range stateBindings.values {
+		var others []int
+		var collection string = bindingCollectionValue(binding)
+
+		if pairs[index] != -1 {
+			continue
+		}
+
+		for liveIndex, key := range liveBindings.keys {
+			if held[liveIndex] == -1 && key.collection == collection {
+				others = append(others, liveIndex)
+			}
+		}
+
+		var line string = "- " + resourcePath.bindingLabel(state, binding)
+
+		if len(others) > 0 {
+			line += "\n    Estuary has other bindings of " + collection + " that Terraform doesn't manage: " +
+				strings.Join(resourcePath.bindingLabels(live, liveBindings, others), ", ")
+		}
+
+		missing = append(missing, line)
+	}
+
+	return missing, nil
+}
+
+// refreshManaged returns the live value of every field except secrets, provider-only attributes and bindings.
+// Fields null in state stay null while live holds nothing, as Estuary fills in empty defaults.
 func (codec *Codec[D, S]) refreshManaged(path *tftypes.AttributePath, state tftypes.Value, live tftypes.Value) (tftypes.Value, error) {
-	if state.IsNull() || !state.IsKnown() || codec.secretAttribute(path) {
+	if _, isBlock := bindingAttributeIndex(path, backfillAttribute); isBlock && live.IsNull() && !state.IsNull() && state.IsKnown() {
+		var nulls map[string]tftypes.Value = map[string]tftypes.Value{}
+
+		for attribute, attributeType := range state.Type().(tftypes.Object).AttributeTypes {
+			nulls[attribute] = tftypes.NewValue(attributeType, nil)
+		}
+
+		live = tftypes.NewValue(state.Type(), nulls)
+	}
+
+	if path.Equal(shardsPath) && state.IsKnown() {
+		return refreshedShards(state, live)
+	}
+
+	if !state.IsKnown() || codec.secrets.attribute(path) || providerOnly(path) || path.Equal(bindingsPath) {
 		return state, nil
 	}
 
+	if state.IsNull() && holdsNothing(live) {
+		return state, nil
+	}
+
+	if state.IsNull() {
+		return live, nil
+	}
+
 	if live.IsNull() {
-		if zeroValue(state) {
+		if zeroValue(state) || codec.catalogType.omittedDefault != nil && codec.catalogType.omittedDefault(path, state) {
 			return state, nil
 		}
 
@@ -117,8 +180,60 @@ func (codec *Codec[D, S]) refreshManaged(path *tftypes.AttributePath, state tfty
 	return tftypes.NewValue(objectType, refreshed), nil
 }
 
-// BindingChanges returns the changes publishing the planned binding at path makes to the live one it replaces, as
-// "field: live -> planned" sorted by field, leaving the secrets and their hash out.
+// refreshedShards returns every live shard setting, so plans show settings set outside Terraform. Zero values
+// set in state stay when live omits them.
+func refreshedShards(state tftypes.Value, live tftypes.Value) (tftypes.Value, error) {
+	var stateAttributes map[string]tftypes.Value
+	var refreshed map[string]tftypes.Value = map[string]tftypes.Value{}
+	var attributeTypes map[string]tftypes.Type = map[string]tftypes.Type{}
+
+	if !state.IsNull() && state.As(&stateAttributes) != nil {
+		return live, nil
+	}
+
+	if !live.IsNull() {
+		if err := live.As(&refreshed); err != nil {
+			return state, err
+		}
+	}
+
+	for key, value := range stateAttributes {
+		if _, isLive := refreshed[key]; !isLive && zeroValue(value) {
+			refreshed[key] = value
+		}
+	}
+
+	if len(refreshed) == 0 {
+		return tftypes.NewValue(state.Type(), nil), nil
+	}
+
+	for key, value := range refreshed {
+		attributeTypes[key] = value.Type()
+	}
+
+	return tftypes.NewValue(tftypes.Object{AttributeTypes: attributeTypes}, refreshed), nil
+}
+
+// planShards returns the configured shards, else the live ones in state, null for an entry not created yet.
+func planShards(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (tftypes.Value, error) {
+	var configured tftypes.Value = blockAttribute(config, shardsAttribute, tftypes.DynamicPseudoType)
+	var stored tftypes.Value = tftypes.NewValue(tftypes.DynamicPseudoType, nil)
+
+	if !configured.IsNull() || config.Type() == nil || config.IsNull() {
+		return plan, nil
+	}
+
+	if exists(state) {
+		stored = blockAttribute(state, shardsAttribute, tftypes.DynamicPseudoType)
+	}
+
+	return withAttribute(plan, shardsPath, func(tftypes.Value) tftypes.Value {
+		return stored
+	})
+}
+
+// BindingChanges returns the "field: live -> planned" changes publishing the binding at path makes, sorted,
+// excluding secrets, hashes, provider-only attributes and the resource path, which identifies rather than configures.
 func (codec *Codec[D, S]) BindingChanges(path *tftypes.AttributePath, planned tftypes.Value, live tftypes.Value) ([]string, error) {
 	var changes []string
 
@@ -128,8 +243,18 @@ func (codec *Codec[D, S]) BindingChanges(path *tftypes.AttributePath, planned tf
 }
 
 func (codec *Codec[D, S]) bindingChanges(path *tftypes.AttributePath, planned tftypes.Value, live tftypes.Value, changes *[]string) error {
-	if codec.secretAttribute(path) {
+	if _, isPath := bindingAttributeIndex(path, resourcePathAttribute); isPath || codec.secrets.attribute(path) || providerOnly(path) {
 		return nil
+	}
+
+	if objectType, isObject := planned.Type().(tftypes.Object); isObject && planned.IsKnown() && !planned.IsNull() && live.IsNull() {
+		var nulls map[string]tftypes.Value = map[string]tftypes.Value{}
+
+		for attribute, attributeType := range objectType.AttributeTypes {
+			nulls[attribute] = tftypes.NewValue(attributeType, nil)
+		}
+
+		live = tftypes.NewValue(objectType, nulls)
 	}
 
 	if objectType, isObject := planned.Type().(tftypes.Object); isObject && planned.IsKnown() && !planned.IsNull() && !live.IsNull() {
@@ -161,7 +286,7 @@ func (codec *Codec[D, S]) bindingChanges(path *tftypes.AttributePath, planned tf
 	return nil
 }
 
-// displayValue returns a scalar value as plans show it, (unset) when null.
+// displayValue returns a scalar as plans show it, (unset) when null.
 func displayValue(value tftypes.Value) string {
 	var text string
 	var flag bool
@@ -183,7 +308,29 @@ func displayValue(value tftypes.Value) string {
 	}
 }
 
-// zeroValue reports whether value is the zero value of its type, which the spec omits.
+// holdsNothing reports whether a live value is null, zero, empty, or an object holding nothing.
+func holdsNothing(value tftypes.Value) bool {
+	var attributes map[string]tftypes.Value
+	var items []tftypes.Value
+
+	if value.Type() == nil || value.IsNull() || !value.IsKnown() || zeroValue(value) {
+		return true
+	}
+
+	if value.As(&attributes) == nil {
+		for _, attribute := range attributes {
+			if !holdsNothing(attribute) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	return value.As(&items) == nil && len(items) == 0
+}
+
+// zeroValue reports whether value is its type's zero value, which the spec omits.
 func zeroValue(value tftypes.Value) bool {
 	var text string
 	var flag bool
@@ -199,99 +346,4 @@ func zeroValue(value tftypes.Value) bool {
 	default:
 		return false
 	}
-}
-
-// bindings returns the bindings of an entry value and their list type, a nil type when the entry or its bindings are null.
-func bindings(value tftypes.Value) ([]tftypes.Value, tftypes.Type, error) {
-	var attributes map[string]tftypes.Value
-	var items []tftypes.Value
-
-	if value.Type() == nil || value.IsNull() || !value.IsKnown() {
-		return nil, nil, nil
-	}
-
-	if err := value.As(&attributes); err != nil {
-		return nil, nil, err
-	}
-
-	list, found := attributes[bindingsAttribute]
-
-	if !found || list.IsNull() || !list.IsKnown() {
-		return nil, nil, nil
-	}
-
-	if err := list.As(&items); err != nil {
-		return nil, nil, err
-	}
-
-	return items, list.Type(), nil
-}
-
-// byTarget returns the bindings by their target collection.
-func byTarget(items []tftypes.Value) map[string]tftypes.Value {
-	var indexed map[string]tftypes.Value = map[string]tftypes.Value{}
-
-	for _, binding := range items {
-		indexed[bindingTarget(binding)] = binding
-	}
-
-	return indexed
-}
-
-// bindingTarget returns the target collection of a capture binding value, empty when unknown.
-func bindingTarget(binding tftypes.Value) string {
-	var target string
-	var value tftypes.Value = bindingAttribute(binding, bindingTargetAttribute)
-
-	if value.IsKnown() && !value.IsNull() {
-		_ = value.As(&target)
-	}
-
-	return target
-}
-
-// withBindingNames returns value with the name of each binding set to its collection, the target of a capture binding
-// or the source of a materialization one, unknown while the collection is.
-func withBindingNames(value tftypes.Value) (tftypes.Value, error) {
-	return tftypes.Transform(value, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		var steps []tftypes.AttributePathStep = path.Steps()
-		var attributes map[string]tftypes.Value
-
-		if len(steps) != 2 || steps[0] != tftypes.AttributeName(bindingsAttribute) || !current.IsKnown() || current.IsNull() {
-			return current, nil
-		}
-
-		if err := current.As(&attributes); err != nil {
-			return current, err
-		}
-
-		collection, isCapture := attributes[bindingTargetAttribute]
-
-		if !isCapture {
-			collection = bindingAttribute(current, bindingSourceAttribute)
-		}
-
-		attributes[bindingNameAttribute] = collection
-
-		return tftypes.NewValue(current.Type(), attributes), nil
-	})
-}
-
-// bindingAttribute returns an attribute of a binding value, unknown when the binding is.
-func bindingAttribute(binding tftypes.Value, attribute string) tftypes.Value {
-	var attributes map[string]tftypes.Value
-
-	if !binding.IsKnown() {
-		return tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
-	}
-
-	if binding.IsNull() || binding.As(&attributes) != nil {
-		return tftypes.NewValue(tftypes.String, nil)
-	}
-
-	if value, found := attributes[attribute]; found {
-		return value
-	}
-
-	return tftypes.NewValue(tftypes.String, nil)
 }

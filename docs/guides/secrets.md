@@ -1,0 +1,24 @@
+---
+page_title: "Secrets"
+description: |-
+  How connector secrets stay out of Terraform state and plans.
+---
+
+# Secrets
+
+Connector secrets, such as `password` and `private_key`, are [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments): Terraform sends them to Estuary but never stores them in state or shows them in plans.
+
+- State keeps a salted hash of each one, such as `config.password_hash`, so a changed secret shows as a plan warning.
+- A declared secret can't be empty. Leave an optional secret out instead.
+- When a secret is changed outside Terraform, such as in the dashboard, the plan warns `Secrets changed outside Terraform` and the apply publishes your configured secrets again. To keep the new ones, set them in your configuration first.
+
+Never commit tokens or passwords. Pass them through environment variables: the provider reads `FLOW_AUTH_TOKEN`, and Terraform reads each `TF_VAR_<name>` as the variable `<name>`.
+
+```yaml
+# GitHub Actions
+env:
+  FLOW_AUTH_TOKEN: ${{ secrets.ESTUARY_REFRESH_TOKEN }}
+  TF_VAR_mongodb_password: ${{ secrets.MONGODB_PASSWORD }}
+```
+
+> **Warning:** Run Terraform where no other user or job can read your files, such as your workstation or an ephemeral CI runner. While a command runs, the provider writes the spec, secrets included, to a private `estuary-tf-*` directory under `TMPDIR` for `flowctl`, and removes it afterwards. A provider killed mid-command leaves it behind, so on shared machines point `TMPDIR` to a directory removed after each run.

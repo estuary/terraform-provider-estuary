@@ -2,7 +2,8 @@ package builder
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"maps"
 	"reflect"
 	"strings"
 
@@ -14,587 +15,480 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// publisher publishes a catalog entry as its YAML document.
-type publisher func(ctx context.Context, backend catalog.Backend, name string, document map[string]any) error
-
-type entryResource[D Document[D, S], S any] struct {
-	connector       Connector
-	entity          string
-	codec           *Codec[D, S]
-	err             error
-	publish         publisher
-	session         *catalog.Session
-	refreshBindings bool
+// publication is what publishing an entry does besides its spec: discover adds discovered bindings, matched
+// through identifier, and resets lists the collections it dataflow resets.
+type publication struct {
+	discover   bool
+	identifier catalog.BindingsIdentifier
+	resets     []string
 }
 
-// Register terraform inferred resources for ResourceWithConfigure, ResourceWithImportState & ResourceWithModifyPlan modes
+// publisher publishes a catalog entry as its YAML document.
+type publisher func(ctx context.Context, backend catalog.Backend, name string, document map[string]any, publication publication) error
+
+// bindingsPlanner returns plan with the binding attributes the configuration omits planned, its bindings paired by pairing.
+type bindingsPlanner func(plan tftypes.Value, config tftypes.Value, pairing bindingPairing) (tftypes.Value, error)
+
+// tablesMover returns the planned bindings whose table differs from the live one, as "collection: old -> new" lines.
+type tablesMover func(pairing bindingPairing) []string
+
+// entryResource is the Terraform resource of a catalog entry, a capture or a materialization.
+type entryResource[D Document[D, S], S any] struct {
+	entry[D, S]
+}
+
+// Compile-time checks that entryResource implements the framework resource interfaces.
 var _ resource.ResourceWithConfigure = &entryResource[captureDocument[struct{}, struct{}], CaptureSpec[struct{}, struct{}]]{}
 var _ resource.ResourceWithImportState = &entryResource[captureDocument[struct{}, struct{}], CaptureSpec[struct{}, struct{}]]{}
 var _ resource.ResourceWithModifyPlan = &entryResource[captureDocument[struct{}, struct{}], CaptureSpec[struct{}, struct{}]]{}
 
-func newResource[D Document[D, S], S any](connector Connector, entity string, publish publisher, refreshBindings bool) func() resource.Resource {
+func newResource[D Document[D, S], S any](connector Connector, catalogType catalogType) func() resource.Resource {
 	return func() resource.Resource {
-		codec, err := NewCodec[D, S](connector)
-
 		return &entryResource[D, S]{
-			connector:       connector,
-			entity:          entity,
-			codec:           codec,
-			err:             err,
-			publish:         publish,
-			refreshBindings: refreshBindings,
+			entry: newEntry[D, S](connector, catalogType),
 		}
 	}
 }
 
 func (entryResource *entryResource[D, S]) Metadata(_ context.Context, metadataReq resource.MetadataRequest, metadataResp *resource.MetadataResponse) {
-	metadataResp.TypeName = metadataReq.ProviderTypeName + "_" + entryResource.connector.TypeName
+	metadataResp.TypeName = entryResource.connector.typeName(metadataReq.ProviderTypeName)
 }
 
 func (entryResource *entryResource[D, S]) Schema(_ context.Context, _ resource.SchemaRequest, schemaResp *resource.SchemaResponse) {
-	if entryResource.err != nil {
-		schemaResp.Diagnostics.AddError("Invalid connector schema", entryResource.err.Error())
-		return
+	if !entryResource.schemaError(&schemaResp.Diagnostics) {
+		schemaResp.Schema = entryResource.codec.Schema()
 	}
-
-	schemaResp.Schema = entryResource.codec.Schema()
 }
 
 func (entryResource *entryResource[D, S]) Configure(_ context.Context, configureReq resource.ConfigureRequest, configureResp *resource.ConfigureResponse) {
-	if configureReq.ProviderData == nil {
-		return
-	}
-
-	session, ok := configureReq.ProviderData.(*catalog.Session)
-
-	if !ok {
-		configureResp.Diagnostics.AddError("Unexpected provider data", fmt.Sprintf("expected *catalog.Session, got %T", configureReq.ProviderData))
-		return
-	}
-
-	entryResource.session = session
+	entryResource.configure(configureReq.ProviderData, &configureResp.Diagnostics)
 }
 
-// ModifyPlan plans the secrets hash, the unset binding targets and the binding names, and replaces the entry only when
-// its catalog name changes, names with or without the tenant and connector name being the same entry.
+// ModifyPlan plans secret hashes, binding targets, names and resource paths, and validates backfill triggers. It replaces the entry
+// only when its catalog name changes, with or without tenant and connector name being the same entry, warning when
+// a provider tenant change is what moves it.
 func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modifyPlanReq resource.ModifyPlanRequest, modifyPlanResp *resource.ModifyPlanResponse) {
 	var stateName types.String
 	var planName types.String
 	var readLive liveReader = entryResource.newLiveReader(ctx, modifyPlanReq.State.Raw)
+	var readPublication publicationReader
+	var pairing bindingPairing
 
 	if modifyPlanReq.Plan.Raw.IsNull() {
 		return
 	}
 
-	modifyPlanResp.Diagnostics.Append(entryResource.planSecretsHash(modifyPlanReq, modifyPlanResp)...)
+	planned, diagnostics := entryResource.planSecretsHash(modifyPlanReq.Plan.Raw, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)
 
-	planned, err := entryResource.planTargets(modifyPlanResp.Plan.Raw, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
+	modifyPlanResp.Diagnostics.Append(diagnostics...)
+
+	planned, err := entryResource.planCatalogName(planned)
+
+	if err == nil {
+		planned, err = entryResource.planTargets(ctx, planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
+	}
 
 	if err == nil {
 		planned, err = withBindingNames(planned)
 	}
 
-	if err != nil {
-		modifyPlanResp.Diagnostics.AddError("Planning "+entryResource.entity+" bindings", err.Error())
+	if err == nil {
+		planned, err = planShards(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)
 	}
 
+	if err == nil {
+		pairing, err = entryResource.catalogType.resourcePath.newPairing(planned, modifyPlanReq.State.Raw, readLive)
+		pairing.recordsTriggers = imported(ctx, optionalPrivate(modifyPlanReq.Private))
+	}
+
+	if err == nil && entryResource.catalogType.planBindings != nil {
+		planned, err = entryResource.catalogType.planBindings(planned, modifyPlanReq.Config.Raw, pairing)
+	}
+
+	if err == nil {
+		planned, err = entryResource.planResourcePaths(ctx, planned, modifyPlanReq.State.Raw)
+	}
+
+	if err == nil {
+		pairing, err = pairing.withPlan(planned)
+	}
+
+	if err != nil {
+		modifyPlanResp.Diagnostics.AddError("Planning "+entryResource.catalogType.name+" bindings", err.Error())
+		return
+	}
+
+	modifyPlanResp.Diagnostics.Append(validateBackfillTriggers(pairing, entryResource.catalogType)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.validateKeepUnmanagedBindings(planned)...)
+
 	modifyPlanResp.Plan.Raw = planned
+
+	if !modifyPlanResp.Diagnostics.HasError() {
+		modifyPlanResp.Diagnostics.Append(entryResource.warnAddedBindings(planned, modifyPlanReq.State.Raw)...)
+	}
 
 	if modifyPlanReq.State.Raw.IsNull() || modifyPlanResp.Diagnostics.HasError() {
 		return
 	}
 
-	modifyPlanResp.Diagnostics.Append(modifyPlanReq.State.GetAttribute(ctx, path.Root("name"), &stateName)...)
-	modifyPlanResp.Diagnostics.Append(modifyPlanReq.Plan.GetAttribute(ctx, path.Root("name"), &planName)...)
+	modifyPlanResp.Diagnostics.Append(modifyPlanReq.State.GetAttribute(ctx, path.Root(nameAttribute), &stateName)...)
+	modifyPlanResp.Diagnostics.Append(modifyPlanReq.Plan.GetAttribute(ctx, path.Root(nameAttribute), &planName)...)
 
 	if modifyPlanResp.Diagnostics.HasError() {
 		return
 	}
 
-	if planName.IsUnknown() || entryResource.catalogName(planName.ValueString()) != entryResource.catalogName(stateName.ValueString()) {
-		modifyPlanResp.RequiresReplace = append(modifyPlanResp.RequiresReplace, path.Root("name"))
+	if planName.IsUnknown() || entryResource.catalogName(planName.ValueString()) != entryResource.storedCatalogName(modifyPlanReq.State.Raw, stateName.ValueString()) {
+		modifyPlanResp.RequiresReplace = append(modifyPlanResp.RequiresReplace, path.Root(nameAttribute), path.Root(catalogNameAttribute))
+		modifyPlanResp.Diagnostics.Append(entryResource.warnTenantChange(modifyPlanReq.State.Raw, stateName.ValueString(), planName)...)
 		return
 	}
 
-	modifyPlanResp.Diagnostics.Append(entryResource.warnTakenOverBindings(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw, readLive)...)
-	modifyPlanResp.Diagnostics.Append(entryResource.warnRemovedBindings(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw)...)
-}
+	readPublication = entryResource.newPublicationReader(pairing)
 
-// warnRemovedBindings warns about each binding the plan removes while discovery adds the resources not bound, which
-// may add it back. It warns about none while a planned target is unknown, as it may be the removed one.
-func (entryResource *entryResource[D, S]) warnRemovedBindings(plan tftypes.Value, state tftypes.Value) diag.Diagnostics {
-	var diagnostics diag.Diagnostics
-	var planned map[string]bool = map[string]bool{}
-
-	_, spec, err := entryResource.codec.Spec(plan)
-
-	adder, isAdder := any(spec).(catalog.NewBindingsAdder)
-
-	if err != nil || !isAdder || !adder.AddsNewBindings() {
-		return diagnostics
-	}
-
-	plannedBindings, _, err := bindings(plan)
-
-	if err != nil {
-		return diagnostics
-	}
-
-	prior, _, err := bindings(state)
-
-	if err != nil {
-		return diagnostics
-	}
-
-	for _, binding := range plannedBindings {
-		if !bindingAttribute(binding, bindingTargetAttribute).IsKnown() {
-			return diagnostics
-		}
-
-		planned[bindingTarget(binding)] = true
-	}
-
-	for _, binding := range prior {
-		var target string = bindingTarget(binding)
-
-		if target == "" || planned[target] {
-			continue
-		}
-
-		diagnostics.AddWarning("Removed binding may be added back",
-			target+" is removed from the "+entryResource.entity+", but auto discovery adds new bindings, so the next discovery "+
-				"may add it back while its resource exists.\n\nTo stop capturing it, keep the binding with disable = true instead.")
-	}
-
-	return diagnostics
-}
-
-// warnTakenOverBindings warns about each planned binding Terraform didn't manage whose target is already live, which
-// plans show as added although the apply updates the live binding in place, listing the fields the apply changes.
-// Failing to read the live spec only skips the warnings.
-func (entryResource *entryResource[D, S]) warnTakenOverBindings(plan tftypes.Value, state tftypes.Value, readLive liveReader) diag.Diagnostics {
-	var diagnostics diag.Diagnostics
-	var managed map[string]bool = map[string]bool{}
-	var candidates map[int]string = map[int]string{}
-
-	if !entryResource.refreshBindings {
-		return diagnostics
-	}
-
-	planned, _, err := bindings(plan)
-
-	if err != nil {
-		return diagnostics
-	}
-
-	prior, _, err := bindings(state)
-
-	if err != nil {
-		return diagnostics
-	}
-
-	for _, binding := range prior {
-		managed[bindingTarget(binding)] = true
-	}
-
-	for index, binding := range planned {
-		if target := bindingTarget(binding); target != "" && !managed[target] {
-			candidates[index] = target
-		}
-	}
-
-	if len(candidates) == 0 {
-		return diagnostics
-	}
-
-	live, found := readLive()
-
-	if !found {
-		return diagnostics
-	}
-
-	liveBindings, _, err := bindings(live)
-
-	if err != nil {
-		return diagnostics
-	}
-
-	var liveByTarget map[string]tftypes.Value = byTarget(liveBindings)
-
-	for index, binding := range planned {
-		target, isCandidate := candidates[index]
-		liveBinding, isLive := liveByTarget[target]
-
-		if !isCandidate || !isLive {
-			continue
-		}
-
-		changes, err := entryResource.codec.BindingChanges(tftypes.NewAttributePath().WithAttributeName(bindingsAttribute).WithElementKeyInt(index), binding, liveBinding)
-
-		if err != nil {
-			continue
-		}
-
-		var detail string = "No field changes, Terraform only starts managing it."
-
-		if len(changes) > 0 {
-			detail = "Compared with the live binding, the apply only changes:\n  " + strings.Join(changes, "\n  ")
-		}
-
-		diagnostics.AddAttributeWarning(path.Root(bindingsAttribute).AtListIndex(index), "Existing binding taken over",
-			target+" is already bound in the "+entryResource.entity+". Terraform starts managing it and updates it in place, rather than adding it.\n\n"+detail+
-				"\n\nThis is expected the first time Terraform manages an existing binding, and no action is needed.")
-	}
-
-	return diagnostics
-}
-
-// planSecretsHash plans the hash beside each write-only secret, unknown when the secret changed, and warns about each
-// changed secret at its attribute, as plans never show write-only values.
-func (entryResource *entryResource[D, S]) planSecretsHash(modifyPlanReq resource.ModifyPlanRequest, modifyPlanResp *resource.ModifyPlanResponse) diag.Diagnostics {
-	var diagnostics diag.Diagnostics
-
-	planned, changed, err := entryResource.codec.PlanSecretsHash(modifyPlanReq.Plan.Raw, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)
-
-	if err != nil {
-		diagnostics.AddError("Planning "+entryResource.entity+" secrets", err.Error())
-		return diagnostics
-	}
-
-	modifyPlanResp.Plan.Raw = planned
-
-	for _, secret := range changed {
-		diagnostics.AddAttributeWarning(attributePath(secret), "Secret changed",
-			attributePath(secret).String()+" changed. The "+entryResource.entity+" is published with the new value.")
-	}
-
-	return diagnostics
+	modifyPlanResp.Diagnostics.Append(entryResource.warnTakenOverBindings(pairing)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnMovedTables(pairing)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnNamingChange(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnRemovedBindings(pairing)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnUnmanagedBindingsRemoval(pairing)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnDataflowResets(pairing, readPublication)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnEntryBackfill(pairing, readPublication)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnBindingBackfills(pairing, readPublication)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.validateMissingBackfills(readPublication)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnDisabledLive(modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)...)
 }
 
 func (entryResource *entryResource[D, S]) Create(ctx context.Context, createReq resource.CreateRequest, createResp *resource.CreateResponse) {
-	createResp.Diagnostics.Append(entryResource.apply(ctx, createReq.Plan, createReq.Config, nil, &createResp.State)...)
+	fingerprint, diagnostics := entryResource.apply(ctx, createReq.Plan, createReq.Config, nil, false, &createResp.State)
+
+	createResp.Diagnostics.Append(diagnostics...)
+
+	if !createResp.Diagnostics.HasError() {
+		createResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(createResp.Private), fingerprint)...)
+	}
 }
 
 func (entryResource *entryResource[D, S]) Read(ctx context.Context, readReq resource.ReadRequest, readResp *resource.ReadResponse) {
 	var name types.String
 
-	readResp.Diagnostics.Append(readReq.State.GetAttribute(ctx, path.Root("name"), &name)...)
+	readResp.Diagnostics.Append(readReq.State.GetAttribute(ctx, path.Root(nameAttribute), &name)...)
 
 	if readResp.Diagnostics.HasError() {
 		return
 	}
 
-	var catalogName string = entryResource.catalogName(name.ValueString())
+	stored, diagnostics := storedFingerprint(ctx, optionalPrivate(readReq.Private))
 
-	if entryResource.refreshBindings {
-		readResp.Diagnostics.Append(entryResource.readLive(ctx, name.ValueString(), catalogName, readReq, readResp)...)
+	readResp.Diagnostics.Append(diagnostics...)
+
+	if readResp.Diagnostics.HasError() {
 		return
 	}
 
-	entry, err := entryResource.session.Backend.ReadCatalogEntry(ctx, catalogName)
+	fingerprint, diagnostics := entryResource.readState(ctx, name.ValueString(), stored, readReq, readResp)
 
-	if err != nil {
-		readResp.Diagnostics.AddError("Reading "+entryResource.entity+" "+catalogName, err.Error())
-		return
-	}
+	readResp.Diagnostics.Append(diagnostics...)
 
-	if entry == nil {
-		readResp.State.RemoveResource(ctx)
+	if !readResp.Diagnostics.HasError() && !readResp.State.Raw.IsNull() {
+		readResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(readResp.Private), fingerprint)...)
 	}
 }
 
-// readLive refreshes the state from the live spec, removing the entry when it no longer exists. A live spec the
-// provider can't decode keeps the state as is with a warning, rather than failing every plan.
-func (entryResource *entryResource[D, S]) readLive(ctx context.Context, name string, catalogName string, readReq resource.ReadRequest, readResp *resource.ReadResponse) diag.Diagnostics {
+// readState refreshes state from the live spec of its stored catalog name, removing deleted entries, and returns the
+// secrets fingerprint to store, see refreshedFingerprint. An undecodable live spec fails, as the plan couldn't show it.
+func (entryResource *entryResource[D, S]) readState(ctx context.Context, name string, stored string, readReq resource.ReadRequest, readResp *resource.ReadResponse) (string, diag.Diagnostics) {
 	var diagnostics diag.Diagnostics
+	var catalogName string = entryResource.storedCatalogName(readReq.State.Raw, name)
 
-	sealed, err := entryResource.session.Backend.ReadSpec(ctx, catalogName)
+	sealed, err := entryResource.readSealed(ctx, catalogName)
 
 	if err != nil {
-		diagnostics.AddError("Reading "+entryResource.entity+" "+catalogName, err.Error())
-		return diagnostics
+		diagnostics.AddError("Reading "+entryResource.catalogType.name+" "+catalogName, err.Error())
+		return stored, diagnostics
 	}
 
 	if sealed == nil {
 		readResp.State.RemoveResource(ctx)
-		return diagnostics
+		return stored, diagnostics
 	}
 
-	refreshed, err := entryResource.refreshedState(name, readReq.State.Raw, sealed)
+	refreshed, redactedPaths, missing, err := entryResource.refreshedState(name, readReq.State.Raw, sealed)
+
+	if err == nil {
+		refreshed, err = withCatalogName(refreshed, catalogName)
+	}
 
 	if err != nil {
-		diagnostics.AddWarning("Not refreshing "+entryResource.entity+" "+catalogName+" bindings",
-			err.Error()+"\n\nThe plan doesn't show the binding changes made outside Terraform.")
-		return diagnostics
+		diagnostics.AddError("Refreshing "+entryResource.catalogType.name+" "+catalogName,
+			err.Error()+"\n\nThe live spec doesn't match the provider schema, so the plan can't show it. Fix it in Estuary, "+
+				"then plan again.")
+		return stored, diagnostics
 	}
+
+	fingerprint, refreshed, fingerprintDiagnostics := entryResource.refreshedFingerprint(catalogName, stored, sealed, refreshed)
+
+	diagnostics.Append(fingerprintDiagnostics...)
+
+	redactedCredentialsWarning(&diagnostics, catalogName, redactedPaths)
+	entryResource.missingBindingsWarning(&diagnostics, catalogName, missing)
 
 	readResp.State.Raw = refreshed
 
-	return diagnostics
+	return fingerprint, diagnostics
 }
 
-// refreshedState returns state with its bindings refreshed from the sealed live spec. Terraform manages every live
-// binding unless the control plane may add some, in which case the live bindings state doesn't hold stay unmanaged.
-func (entryResource *entryResource[D, S]) refreshedState(name string, state tftypes.Value, sealed map[string]any) (tftypes.Value, error) {
-	live, err := entryResource.liveValue(name, sealed)
+// refreshedState returns state refreshed from the sealed live spec, the paths whose credentials it redacted, and the
+// state bindings missing live, see missingBindings. Live bindings state doesn't hold stay unmanaged, out of state,
+// unless keep_unmanaged_bindings is false.
+func (entryResource *entryResource[D, S]) refreshedState(name string, state tftypes.Value, sealed map[string]any) (tftypes.Value, []*tftypes.AttributePath, []string, error) {
+	live, redactedPaths, err := entryResource.codec.liveValue(name, sealed)
 
 	if err != nil {
-		return state, err
+		return state, nil, nil, err
 	}
 
-	_, stateSpec, err := entryResource.codec.Spec(state)
+	missing, err := entryResource.codec.missingBindings(state, live)
 
 	if err != nil {
-		return state, err
+		return state, nil, nil, err
 	}
 
-	return entryResource.codec.RefreshBindings(state, live, !generatesBindings(stateSpec))
+	refreshed, err := entryResource.codec.Refresh(state, live, !keepsUnmanagedBindings(state))
+
+	if err != nil {
+		return state, nil, nil, err
+	}
+
+	return refreshed, redactedPaths, missing, nil
 }
 
-// liveValue returns the Terraform value of a sealed live spec, without the secrets it can't decrypt.
-func (entryResource *entryResource[D, S]) liveValue(name string, sealed map[string]any) (tftypes.Value, error) {
-	liveSpec, err := entryResource.codec.LiveSpec(liveDocument(sealed), false)
-
-	if err != nil {
-		return tftypes.Value{}, err
+// missingBindingsWarning explains the bindings missing live, which the next apply adds back.
+func (entryResource *entryResource[D, S]) missingBindingsWarning(diagnostics *diag.Diagnostics, catalogName string, missing []string) {
+	if len(missing) == 0 {
+		return
 	}
 
-	return entryResource.codec.Value(name, liveSpec)
+	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), "Bindings missing in Estuary in "+catalogName,
+		"These bindings Terraform manages have no live binding with their resource path, such as after their table was "+
+			"renamed or the binding removed in the dashboard. Estuary identifies a binding by its resource path, so a binding "+
+			"whose resource changed is another binding: the next apply adds these back, each starting from scratch, and keeps "+
+			"the others listed, which Terraform doesn't manage:\n\n"+strings.Join(missing, "\n")+"\n\n"+
+			"To manage one of those instead, set the declared resource to its resource. To stop managing a missing binding, "+
+			"remove it from bindings.")
 }
 
 func (entryResource *entryResource[D, S]) Update(ctx context.Context, updateReq resource.UpdateRequest, updateResp *resource.UpdateResponse) {
-	updateResp.Diagnostics.Append(entryResource.apply(ctx, updateReq.Plan, updateReq.Config, &updateReq.State, &updateResp.State)...)
+	var recordsTriggers bool = imported(ctx, optionalPrivate(updateReq.Private))
+
+	fingerprint, diagnostics := entryResource.apply(ctx, updateReq.Plan, updateReq.Config, &updateReq.State, recordsTriggers, &updateResp.State)
+
+	updateResp.Diagnostics.Append(diagnostics...)
+
+	if !updateResp.Diagnostics.HasError() {
+		updateResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(updateResp.Private), fingerprint)...)
+	}
+
+	if !updateResp.Diagnostics.HasError() && recordsTriggers && updateResp.Private != nil {
+		updateResp.Diagnostics.Append(updateResp.Private.SetKey(ctx, importedKey, nil)...)
+	}
 }
 
 func (entryResource *entryResource[D, S]) Delete(ctx context.Context, deleteReq resource.DeleteRequest, deleteResp *resource.DeleteResponse) {
 	var name types.String
 
-	deleteResp.Diagnostics.Append(deleteReq.State.GetAttribute(ctx, path.Root("name"), &name)...)
+	deleteResp.Diagnostics.Append(deleteReq.State.GetAttribute(ctx, path.Root(nameAttribute), &name)...)
 
 	if deleteResp.Diagnostics.HasError() {
 		return
 	}
 
-	var catalogName string = entryResource.catalogName(name.ValueString())
+	var catalogName string = entryResource.storedCatalogName(deleteReq.State.Raw, name.ValueString())
 
-	if err := entryResource.session.Backend.DeleteCatalogEntry(ctx, catalogName); err != nil {
-		deleteResp.Diagnostics.AddError("Deleting "+entryResource.entity+" "+catalogName, err.Error())
+	backend, err := entryResource.backend()
+
+	if err == nil {
+		err = backend.DeleteCatalogEntry(ctx, catalogName)
+	}
+
+	if err != nil {
+		deleteResp.Diagnostics.AddError("Deleting "+entryResource.catalogType.name+" "+catalogName, err.Error())
 	}
 }
 
-// ImportState takes the catalog name as ID, storing it with its tenant and without its connector name, along with the
-// live spec. Secrets are write-only and bindings the control plane may add are left unmanaged, see mergeLiveBindings.
+// ImportState imports by catalog name, stored with the tenant and without the connector name, or whole when
+// stripping it would address another entry. Secrets are write-only, and bindings the control plane may add stay
+// unmanaged, out of state.
 func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, importReq resource.ImportStateRequest, importResp *resource.ImportStateResponse) {
 	var name string = catalog.Name(importReq.ID, entryResource.connector.ConnectorName)
-	var catalogName string = entryResource.catalogName(name)
 
-	sealed, err := entryResource.session.Backend.ReadSpec(ctx, catalogName)
+	if entryResource.catalogName(name) != importReq.ID {
+		name = importReq.ID
+	}
+
+	var catalogName string = entryResource.catalogName(name)
+	var value tftypes.Value
+	var redactedPaths []*tftypes.AttributePath
+
+	sealed, err := entryResource.readSealed(ctx, catalogName)
 
 	if err != nil {
-		importResp.Diagnostics.AddError("Importing "+entryResource.entity+" "+catalogName, err.Error())
+		importResp.Diagnostics.AddError("Importing "+entryResource.catalogType.name+" "+catalogName, err.Error())
 		return
 	}
 
 	if sealed == nil {
-		importResp.Diagnostics.AddError("Importing "+entryResource.entity+" "+catalogName, "No catalog entry is named "+catalogName+".")
+		importResp.Diagnostics.AddError("Importing "+entryResource.catalogType.name+" "+catalogName, "Estuary has no "+entryResource.catalogType.name+" named "+catalogName+". Check the name, including its tenant.")
 		return
 	}
 
 	var live map[string]any = liveDocument(sealed)
 
-	spec, err := entryResource.codec.LiveSpec(live, true)
+	if _, err := decode[S](live, true); err != nil {
+		importResp.Diagnostics.AddWarning("Importing "+entryResource.catalogType.name+" "+catalogName+" without the fields the provider doesn't manage",
+			err.Error()+"\n\nThese fields aren't in the imported state. The next apply keeps them at the top level of the spec. "+
+				"It keeps them in the endpoint too, unless it publishes the endpoint, which happens when the configuration sets "+
+				"secrets or changes the endpoint. It removes them from the bindings declared in the configuration.")
+	}
 
-	if err != nil {
-		importResp.Diagnostics.AddWarning("Importing "+entryResource.entity+" "+catalogName+" without the fields the provider doesn't manage",
-			err.Error()+"\n\nThese fields are not in the imported state and the next apply removes them.")
+	spec, err := decode[S](live, false)
 
-		spec, err = entryResource.codec.LiveSpec(live, false)
+	if err == nil {
+		value, redactedPaths, err = entryResource.codec.liveValue(name, sealed)
 	}
 
 	if err == nil && generatesBindings(spec) {
-		delete(live, "bindings")
+		var unbound map[string]any = maps.Clone(sealed)
 
-		spec, err = entryResource.codec.LiveSpec(live, false)
+		delete(unbound, catalog.BindingsKey)
+
+		value, _, err = entryResource.codec.liveValue(name, unbound)
 	}
-
-	if err != nil {
-		importResp.Diagnostics.AddError("Importing "+entryResource.entity+" "+catalogName, err.Error())
-		return
-	}
-
-	value, err := entryResource.codec.Value(name, spec)
 
 	if err == nil {
-		value, err = entryResource.codec.NullSecrets(value)
+		value, err = withCatalogName(value, catalogName)
 	}
 
 	if err != nil {
-		importResp.Diagnostics.AddError("Importing "+entryResource.entity+" "+catalogName, err.Error())
+		importResp.Diagnostics.AddError("Importing "+entryResource.catalogType.name+" "+catalogName, err.Error())
 		return
 	}
 
+	redactedCredentialsWarning(&importResp.Diagnostics, catalogName, redactedPaths)
+
 	importResp.State.Raw = value
+
+	importResp.Diagnostics.Append(storeFingerprint(ctx, optionalPrivate(importResp.Private), catalog.SecretsFingerprint(sealed))...)
+
+	if importResp.Private != nil {
+		importResp.Diagnostics.Append(importResp.Private.SetKey(ctx, importedKey, importedMark)...)
+	}
 }
 
-// apply publishes the planned entry under its catalog name, its secrets taken from config, and stores the plan as its
-// state with the secrets hash. Updating an entry keeps the live bindings Terraform never managed when the control plane
-// may add them, see mergeBindings, and the live encrypted endpoint when it is unchanged, see sealedEndpoint.
-func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.Plan, config tfsdk.Config, prior *tfsdk.State, state *tfsdk.State) diag.Diagnostics {
+// apply publishes the plan, with secrets from config, and stores it as state, returning the secrets fingerprint of the
+// published entry. Updates that leave the live spec unchanged, such as a trigger strategy change, publish nothing.
+// RecordsTriggers makes backfill triggers record their starting value, see bindingPairing.
+func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.Plan, config tfsdk.Config, prior *tfsdk.State, recordsTriggers bool, state *tfsdk.State) (string, diag.Diagnostics) {
 	var diagnostics diag.Diagnostics
-	var live map[string]any
 
-	planned, err := entryResource.codec.WithConfigSecrets(plan.Raw, config.Raw)
+	planned, err := entryResource.codec.secrets.withConfigSecrets(plan.Raw, config.Raw)
 
 	if err != nil {
-		diagnostics.AddError("Converting "+entryResource.entity+" plan", err.Error())
-		return diagnostics
+		diagnostics.AddError("Converting "+entryResource.catalogType.name+" plan", err.Error())
+		return "", diagnostics
+	}
+
+	if paths := entryResource.codec.secrets.credentialPaths(planned); len(paths) > 0 {
+		diagnostics.AddError("Credentials in connection string",
+			strings.Join(paths, ", ")+" of the "+entryResource.catalogType.name+" holds credentials, such as user:password@ or a password, token, API key or signature option, "+
+				"which the catalog entry and state would store in plain text. Set them in the connector's write-only attributes instead.")
+		return "", diagnostics
 	}
 
 	name, spec, err := entryResource.codec.Spec(planned)
 
 	if err != nil {
-		diagnostics.AddError("Converting "+entryResource.entity+" plan", err.Error())
-		return diagnostics
+		diagnostics.AddError("Converting "+entryResource.catalogType.name+" plan", err.Error())
+		return "", diagnostics
 	}
 
 	var catalogName string = entryResource.catalogName(name)
 
+	backend, err := entryResource.backend()
+
+	if err != nil {
+		diagnostics.AddError("Publishing "+entryResource.catalogType.name+" "+catalogName, err.Error())
+		return "", diagnostics
+	}
+
 	document, err := utils.YAMLDocument(spec)
 
 	if err != nil {
-		diagnostics.AddError("Converting "+entryResource.entity+" plan", err.Error())
-		return diagnostics
+		diagnostics.AddError("Converting "+entryResource.catalogType.name+" plan", err.Error())
+		return "", diagnostics
 	}
 
-	if prior != nil {
-		live, err = entryResource.session.Backend.ReadSpec(ctx, catalogName)
+	ctx = catalog.WithSecrets(ctx, entryResource.codec.secrets.values(planned)...)
+
+	var publication publication = publication{discover: prior == nil && addsNewBindings(spec)}
+
+	publication.identifier, _ = any(spec).(catalog.BindingsIdentifier)
+
+	var live map[string]any
+	var conflictHint string
+
+	// A create asserts no entry has the name yet, so it never publishes over one another resource or Estuary holds.
+	// An update asserts the publication ID it read, see mergeLive.
+	if prior == nil {
+		document[catalog.ExpectPubIDKey] = catalog.NewEntryPubID
+		conflictHint = "\n\n" + catalogName + " already exists in Estuary: import it with terraform import instead of creating it."
+	} else {
+		publication.resets, live, err = entryResource.mergeLive(ctx, name, catalogName, document, keepsUnmanagedBindings(plan.Raw), recordsTriggers, plan.Raw, prior.Raw)
 
 		if err != nil {
-			diagnostics.AddError("Reading "+entryResource.entity+" "+catalogName, err.Error())
-			return diagnostics
-		}
-	}
-
-	if prior != nil && generatesBindings(spec) {
-		if err := entryResource.mergeLiveBindings(document, *prior, live); err != nil {
-			diagnostics.AddError("Merging "+entryResource.entity+" "+catalogName+" bindings", err.Error())
-			return diagnostics
-		}
-	}
-
-	if prior != nil && !entryResource.codec.SecretsChanged(plan.Raw, prior.Raw) {
-		endpoint, err := entryResource.sealedEndpoint(plan, *prior, live)
-
-		if err != nil {
-			diagnostics.AddError("Comparing "+entryResource.entity+" "+catalogName+" endpoint", err.Error())
-			return diagnostics
+			diagnostics.AddError("Merging "+entryResource.catalogType.name+" "+catalogName+" with its live spec", err.Error())
+			return "", diagnostics
 		}
 
-		if endpoint != nil {
-			document["endpoint"] = endpoint
+		conflictHint = "\n\nAnother publication changed " + catalogName + " while this apply ran, such as a dashboard edit or " +
+			"an auto-discovery, so nothing was published: run terraform plan and apply again."
+	}
+
+	if live != nil && len(publication.resets) == 0 && reflect.DeepEqual(document, live) {
+		tflog.Debug(ctx, "Skipping the publication, the spec is unchanged", map[string]any{"name": catalogName})
+	} else if err := entryResource.catalogType.publish(ctx, backend, catalogName, document, publication); err != nil {
+		var detail string = err.Error()
+
+		if errors.Is(err, catalog.ErrPublicationConflict) {
+			detail += conflictHint
 		}
+
+		diagnostics.AddError("Publishing "+entryResource.catalogType.name+" "+catalogName, detail)
+		return "", diagnostics
 	}
 
-	if err := entryResource.publish(ctx, entryResource.session.Backend, catalogName, document); err != nil {
-		diagnostics.AddError("Publishing "+entryResource.entity+" "+catalogName, err.Error())
-		return diagnostics
+	stored, err := entryResource.codec.secrets.stateHashes(plan.Raw, planned)
+
+	if planned := blockAttribute(stored, catalogNameAttribute, tftypes.String); err == nil && !planned.IsKnown() {
+		stored, err = withCatalogName(stored, catalogName)
 	}
 
-	state.Raw, err = entryResource.codec.StateSecretsHash(plan.Raw, planned)
+	if err == nil {
+		stored, err = entryResource.publishedResourcePaths(ctx, catalogName, stored)
+	}
 
 	if err != nil {
-		diagnostics.AddError("Hashing "+entryResource.entity+" "+catalogName+" secrets", err.Error())
+		diagnostics.AddError("Hashing "+entryResource.catalogType.name+" "+catalogName+" secrets", err.Error())
+		return "", diagnostics
 	}
 
-	return diagnostics
-}
+	fingerprint, fingerprintDiagnostics := entryResource.publishedFingerprint(ctx, catalogName, document, planned)
 
-// sealedEndpoint returns the live endpoint, its configs encrypted by Estuary, when the planned endpoint is the prior
-// one and nobody changed it since, so publishing it keeps the stored secrets. It returns nil otherwise.
-func (entryResource *entryResource[D, S]) sealedEndpoint(plan tfsdk.Plan, prior tfsdk.State, live map[string]any) (any, error) {
-	if live == nil {
-		return nil, nil
-	}
+	diagnostics.Append(fingerprintDiagnostics...)
 
-	_, plannedSpec, err := entryResource.codec.Spec(plan.Raw)
+	state.Raw = stored
 
-	if err != nil {
-		return nil, err
-	}
-
-	_, priorSpec, err := entryResource.codec.Spec(prior.Raw)
-
-	if err != nil {
-		return nil, err
-	}
-
-	liveSpec, err := entryResource.codec.LiveSpec(liveDocument(live), false)
-
-	if err != nil {
-		return nil, err
-	}
-
-	plannedDocument, err := utils.YAMLDocument(plannedSpec)
-
-	if err != nil {
-		return nil, err
-	}
-
-	priorDocument, err := utils.YAMLDocument(priorSpec)
-
-	if err != nil {
-		return nil, err
-	}
-
-	liveDocument, err := utils.YAMLDocument(liveSpec)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if !reflect.DeepEqual(plannedDocument["endpoint"], priorDocument["endpoint"]) || !reflect.DeepEqual(priorDocument["endpoint"], liveDocument["endpoint"]) {
-		return nil, nil
-	}
-
-	return live["endpoint"], nil
-}
-
-// mergeLiveBindings sets the document bindings to the planned ones merged over the live bindings, the prior state
-// telling which bindings Terraform managed.
-func (entryResource *entryResource[D, S]) mergeLiveBindings(document map[string]any, prior tfsdk.State, live map[string]any) error {
-	_, priorSpec, err := entryResource.codec.Spec(prior.Raw)
-
-	if err != nil {
-		return err
-	}
-
-	priorDocument, err := utils.YAMLDocument(priorSpec)
-
-	if err != nil {
-		return err
-	}
-
-	planned, _ := document["bindings"].([]any)
-	previous, _ := priorDocument["bindings"].([]any)
-	current, _ := live["bindings"].([]any)
-
-	document["bindings"] = mergeBindings(planned, previous, current)
-
-	return nil
-}
-
-// catalogName returns the exact catalog name of an entry named name, with the tenant and connector name.
-func (entryResource *entryResource[D, S]) catalogName(name string) string {
-	return catalog.CatalogName(entryResource.tenant(), name, entryResource.connector.ConnectorName)
-}
-
-// tenant returns the tenant of the configured provider, empty until it is configured.
-func (entryResource *entryResource[D, S]) tenant() string {
-	if entryResource.session == nil {
-		return ""
-	}
-
-	return entryResource.session.Tenant
+	return fingerprint, diagnostics
 }

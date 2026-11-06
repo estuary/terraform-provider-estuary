@@ -9,6 +9,7 @@ examples-local/
 *.dll
 *.so
 *.dylib
+__debug_bin*
 
 # Go test binaries, built with go test -c
 *.test
@@ -30,6 +31,7 @@ go.work.sum
 *.tfvars.json
 .terraform/
 .terraform.lock.hcl
+*.tfbackend
 crash.log
 crash.*.log
 
@@ -59,7 +61,7 @@ id_rsa*
 id_ed25519*
 
 # Local tool and editor settings
-.claude/settings.local.json
+.claude/
 .idea/
 .vscode/
 

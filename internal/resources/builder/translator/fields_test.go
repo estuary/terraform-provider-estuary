@@ -15,8 +15,8 @@ func TestAttributeName(test *testing.T) {
 		"URLPath":                       "url_path",
 		"s3Bucket":                      "s3_bucket",
 	} {
-		if got := attributeName(key); got != want {
-			test.Errorf("attributeName(%q) = %q, want %q", key, got, want)
+		if got := AttributeName(key); got != want {
+			test.Errorf("AttributeName(%q) = %q, want %q", key, got, want)
 		}
 	}
 }
@@ -29,5 +29,23 @@ func TestFieldsRejectsAttributeCollisions(test *testing.T) {
 
 	if _, err := fields(reflect.TypeFor[collision]()); err == nil {
 		test.Error("fields accepted two keys mapped to ssl_mode")
+	}
+}
+
+func TestFieldsRejectsTagsOnNonStrings(test *testing.T) {
+	type secretList struct {
+		Keys []string `yaml:"keys" secret:"true"`
+	}
+
+	type enumNumber struct {
+		Port int `yaml:"port" enum:"5432,3306"`
+	}
+
+	if _, err := fields(reflect.TypeFor[secretList]()); err == nil {
+		test.Error("fields accepted a secret tag on a list")
+	}
+
+	if _, err := fields(reflect.TypeFor[enumNumber]()); err == nil {
+		test.Error("fields accepted an enum tag on a number")
 	}
 }

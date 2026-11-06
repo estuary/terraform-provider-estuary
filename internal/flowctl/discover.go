@@ -2,112 +2,58 @@ package flowctl
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
-	"github.com/estuary/terraform-provider-estuary/internal/utils"
-	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"gopkg.in/yaml.v3"
 )
 
-type discoveredCollection struct {
-	Key        []string `yaml:"key"`
-	Schema     any      `yaml:"schema"`
-	ReadSchema any      `yaml:"readSchema"`
+// discoveredResources returns each binding resource of the discovered capture name, by target, none without it.
+func discoveredResources(tree *catalogTree, name string) map[string]map[string]any {
+	var resources map[string]map[string]any = map[string]map[string]any{}
+
+	for _, binding := range catalog.Bindings(tree.capture(name)) {
+		if target := catalog.BindingCollection(binding); target != "" {
+			resources[target] = catalog.BindingResource(binding)
+		}
+	}
+
+	return resources
 }
 
-func discoveredStreams(content []byte, name string, directory string) (map[string]catalog.DiscoveredStreamInfo, error) {
-	var discovered catalogFile
+// discover runs flowctl discover on the workspace spec file and reads the discovered catalog tree back.
+func (client *Client) discover(ctx context.Context, directory string) (*catalogTree, error) {
+	var arguments []string = client.withDataPlane([]string{"discover"}, "--data-plane")
 
-	if err := yaml.Unmarshal(content, &discovered); err != nil {
-		return nil, fmt.Errorf("parsing discovered spec: %w", err)
+	if _, err := client.execCommand(ctx, append(arguments, "--source", filepath.Join(directory, specFile))...); err != nil {
+		return nil, err
 	}
 
-	var streams map[string]catalog.DiscoveredStreamInfo = map[string]catalog.DiscoveredStreamInfo{}
-
-	for _, binding := range discovered.Captures[name].Bindings {
-		target, _ := binding["target"].(string)
-
-		collection, found := discovered.Collections[target]
-
-		if !found {
-			continue
-		}
-
-		streams[target] = catalog.DiscoveredStreamInfo{
-			Resource:   utils.Lookup(binding, "resource"),
-			Keys:       collection.Key,
-			KeySchemas: keySchemas(collection, directory),
-		}
-	}
-
-	return streams, nil
+	return readCatalogTree(directory)
 }
 
-func keySchemas(collection discoveredCollection, directory string) map[string]any {
-	var properties map[string]any = schemaProperties(collection.ReadSchema, directory)
+// DiscoverCapture discovers the capture on the client data plane, returning each binding resource by target.
+func (client *Client) DiscoverCapture(ctx context.Context, name string, spec catalog.CaptureSpec) (map[string]map[string]any, error) {
+	var resources map[string]map[string]any
 
-	if properties == nil {
-		properties = schemaProperties(collection.Schema, directory)
-	}
-
-	var schemas map[string]any = make(map[string]any, len(collection.Key))
-
-	for _, key := range collection.Key {
-		var field string = strings.TrimPrefix(key, "/")
-
-		if schema, found := properties[field]; found {
-			schemas[field] = schema
-
-			continue
-		}
-
-		schemas[field] = map[string]any{"type": "string"}
-	}
-
-	return schemas
-}
-
-func schemaProperties(schema any, directory string) map[string]any {
-	if path, isPath := schema.(string); isPath {
-		content, err := os.ReadFile(filepath.Join(directory, path))
-
-		if err != nil {
-			return nil
-		}
-
-		if err := yaml.Unmarshal(content, &schema); err != nil {
-			return nil
-		}
-	}
-
-	object, _ := schema.(map[string]any)
-
-	properties, _ := object["properties"].(map[string]any)
-
-	return properties
-}
-
-// DiscoverCapture discovers the capture bindings, keyed by their target collection name.
-func (client *Client) DiscoverCapture(ctx context.Context, name string, spec catalog.CaptureSpec) (map[string]catalog.DiscoveredStreamInfo, error) {
 	files, err := captureFiles(name, spec)
 
 	if err != nil {
 		return nil, err
 	}
 
-	tflog.Debug(ctx, "Discovering capture", map[string]any{"spec": string(utils.MaskYAML(files[specFile]))})
+	ctx, cancel := client.connectorContext(ctx, "Discovering capture", files)
 
-	content, directory, err := client.runOnSpec(ctx, files, "--source", "discover", "--flat")
+	defer cancel()
 
-	if err != nil {
-		return nil, err
-	}
+	err = inWorkspace(files, func(directory string) error {
+		tree, err := client.discover(ctx, directory)
 
-	defer os.RemoveAll(directory)
+		if err == nil {
+			resources = discoveredResources(tree, name)
+		}
 
-	return discoveredStreams(content, name, directory)
+		return err
+	})
+
+	return resources, err
 }

@@ -6,13 +6,10 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 )
 
-func TestDiscoveredStreams(test *testing.T) {
-	var directory string = test.TempDir()
-
+func TestDiscoveredResources(test *testing.T) {
 	var content []byte = spectest.Dedent([]byte(`
 		captures:
 			acmeCo/mongodb/source:
@@ -25,51 +22,38 @@ func TestDiscoveredStreams(test *testing.T) {
 						target: acmeCo/mongodb/users
 					- resource: { database: shop, collection: events }
 						target: acmeCo/mongodb/events
-					- resource: { database: shop, collection: orphan }
-						target: acmeCo/mongodb/orphan
+					- resource: { database: shop, collection: untargeted }
 		collections:
 			acmeCo/mongodb/users:
 				key: [/_id]
-				readSchema: users.read.schema.yaml
-			acmeCo/mongodb/events:
-				key: [/id, /ts]
-				schema:
-					properties:
-						id: { type: integer }
 	`))
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml":                "import: [acmeCo/mongodb/flow.yaml]\n",
+		"acmeCo/mongodb/flow.yaml": string(content),
+	})
 
-	var schema []byte = spectest.Dedent([]byte(`
-		properties:
-			_id: { type: string, format: objectid }
-	`))
+	var resources map[string]map[string]any = discoveredResources(tree, "acmeCo/mongodb/source")
 
-	if err := os.WriteFile(filepath.Join(directory, "users.read.schema.yaml"), schema, 0600); err != nil {
-		test.Fatalf("writing schema file: %v", err)
+	expected := map[string]map[string]any{
+		"acmeCo/mongodb/users":  {"database": "shop", "collection": "users"},
+		"acmeCo/mongodb/events": {"database": "shop", "collection": "events"},
 	}
 
-	streams, err := discoveredStreams(content, "acmeCo/mongodb/source", directory)
-
-	if err != nil {
-		test.Fatalf("discoveredStreams: %v", err)
+	if !reflect.DeepEqual(resources, expected) {
+		test.Errorf("resources = %+v, want %+v", resources, expected)
 	}
 
-	expected := map[string]catalog.DiscoveredStreamInfo{
-		"acmeCo/mongodb/users": {
-			Resource:   map[string]any{"database": "shop", "collection": "users"},
-			Keys:       []string{"/_id"},
-			KeySchemas: map[string]any{"_id": map[string]any{"type": "string", "format": "objectid"}},
-		},
-		"acmeCo/mongodb/events": {
-			Resource: map[string]any{"database": "shop", "collection": "events"},
-			Keys:     []string{"/id", "/ts"},
-			KeySchemas: map[string]any{
-				"id": map[string]any{"type": "integer"},
-				"ts": map[string]any{"type": "string"},
-			},
-		},
+	if missing := discoveredResources(tree, "acmeCo/mongodb/missing"); len(missing) != 0 {
+		test.Errorf("resources of a missing capture = %v, want none", missing)
 	}
 
-	if !reflect.DeepEqual(streams, expected) {
-		test.Errorf("streams = %+v, want %+v", streams, expected)
+	var directory string = test.TempDir()
+
+	if err := os.WriteFile(filepath.Join(directory, specFile), []byte("captures: [unclosed"), 0600); err != nil {
+		test.Fatal(err)
+	}
+
+	if _, err := readCatalogTree(directory); err == nil {
+		test.Error("readCatalogTree accepted an unparseable spec")
 	}
 }

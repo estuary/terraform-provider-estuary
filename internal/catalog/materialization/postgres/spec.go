@@ -3,73 +3,59 @@ package postgres
 import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/auth"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/sslmode"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 )
 
-// SSLMode overrides the connection SSL behavior through the PostgreSQL 'sslmode' parameter.
-type SSLMode string
-
-// Image is the PostgreSQL connector image, also materializing into Amazon Aurora and RDS for PostgreSQL.
-const Image string = "ghcr.io/estuary/materialize-postgres:v5"
-
-// ConnectorName ends the catalog name of every task of the connector, as the dashboard names them.
-const ConnectorName string = "materialize-postgres"
-
+// Images of the connector variants, re-tags of one connector named after the dashboard tiles.
 const (
-	SSLModeDisable    SSLMode = "disable"
-	SSLModeAllow      SSLMode = "allow"
-	SSLModePrefer     SSLMode = "prefer"
-	SSLModeRequire    SSLMode = "require"
-	SSLModeVerifyCA   SSLMode = "verify-ca"
-	SSLModeVerifyFull SSLMode = "verify-full"
+	ImagePostgres     string = "ghcr.io/estuary/materialize-postgres:v5"
+	ImageAmazonAurora string = "ghcr.io/estuary/materialize-amazon-aurora-postgres:v5"
+	ImageAmazonRDS    string = "ghcr.io/estuary/materialize-amazon-rds-postgres:v5"
 )
 
-// SSLModes lists every supported SSL mode, useful for schema validators.
-var SSLModes = []SSLMode{
-	SSLModeDisable,
-	SSLModeAllow,
-	SSLModePrefer,
-	SSLModeRequire,
-	SSLModeVerifyCA,
-	SSLModeVerifyFull,
-}
+// Connector names are the catalog name suffixes of the tasks of each image, as the dashboard names them.
+const (
+	ConnectorNamePostgres     string = "materialize-postgres"
+	ConnectorNameAmazonAurora string = "materialize-amazon-aurora-postgres"
+	ConnectorNameAmazonRDS    string = "materialize-amazon-rds-postgres"
+)
 
-// Advanced carries the advanced endpoint options, including the SSL mode and feature flags.
+// Advanced holds advanced endpoint options, such as the SSL mode.
 type Advanced struct {
-	SSLMode        SSLMode `yaml:"sslmode,omitempty"`
-	NoFlowDocument bool    `yaml:"no_flow_document,omitempty"`
-	FeatureFlags   string  `yaml:"feature_flags,omitempty"`
+	SSLMode        sslmode.Postgres `yaml:"sslmode,omitempty" enum:"disable,allow,prefer,require,verify-ca,verify-full" description:"Overrides the PostgreSQL sslmode connection parameter: 'disable', 'allow', 'prefer', 'require', 'verify-ca' or 'verify-full'."`
+	NoFlowDocument bool             `yaml:"no_flow_document,omitempty" description:"Stops requiring the flow_document field in bindings with standard updates. Defaults to false."`
+	FeatureFlags   string           `yaml:"feature_flags,omitempty" description:"Connector settings for edge cases and experimental features, see https://docs.estuary.dev/guides/advanced-usage/feature-flags/. Intended for Estuary internal use: change them only as directed by Estuary support."`
 }
 
-// Config carries the ghcr.io/estuary/materialize-postgres connector configurations, including
-// the database connection, its authentication and the default schema. Password is the
-// deprecated form of Credentials.
+// Config is the materialize-postgres configuration shared by every image variant; Password is the deprecated form of
+// Credentials.
 type Config struct {
-	Address       string                         `yaml:"address"`
-	User          string                         `yaml:"user"`
-	Password      string                         `yaml:"password,omitempty"`
-	Database      string                         `yaml:"database,omitempty"`
-	Schema        string                         `yaml:"schema,omitempty"`
-	HardDelete    bool                           `yaml:"hardDelete,omitempty"`
-	Credentials   *auth.DatabaseCredentials      `yaml:"credentials,omitempty"`
-	DBTJobTrigger *materialization.DBTJobTrigger `yaml:"dbt_job_trigger,omitempty"`
-	Advanced      *Advanced                      `yaml:"advanced,omitempty"`
-	NetworkTunnel *endpoint.NetworkTunnel        `yaml:"networkTunnel,omitempty"`
+	Address       string                         `yaml:"address" credentials:"forbidden" description:"Host or host:port of the database. The port defaults to 5432. The plan rejects credentials in it, such as user:password@ or a password, token, API key or signature option, as state and logs would hold them in plain text. Credentials found in the live value show as ***."`
+	User          string                         `yaml:"user" description:"Database user to connect as."`
+	Password      string                         `yaml:"password,omitempty" description:"Deprecated form of credentials with auth_type 'UserPassword', still accepted for existing materializations. Write-only."`
+	Database      string                         `yaml:"database,omitempty" description:"Logical database to materialize to."`
+	Schema        string                         `yaml:"schema,omitempty" x-default-namespace:"true" description:"Schema of the materialized tables and of the connector's metadata tables, unless a binding sets its own. Defaults to 'public'."`
+	HardDelete    bool                           `yaml:"hardDelete,omitempty" description:"Deletes from the table the documents deleted in the source. Otherwise, the _meta/op column marks deleted rows (soft delete). Defaults to false."`
+	Credentials   *auth.DatabaseCredentials      `yaml:"credentials,omitempty" description:"How the user authenticates. Set it, or the deprecated password, for the materialization to connect."`
+	DBTJobTrigger *materialization.DBTJobTrigger `yaml:"dbt_job_trigger,omitempty" description:"Triggers a dbt Cloud job when new data is materialized."`
+	Advanced      *Advanced                      `yaml:"advanced,omitempty" description:"Options for advanced users, rarely needed."`
+	NetworkTunnel *endpoint.NetworkTunnel        `yaml:"networkTunnel,omitempty" description:"Connects through an SSH server acting as a bastion host."`
 }
 
-// Resource identifies the target PostgreSQL table, Schema overriding the endpoint schema.
+// Resource identifies the target PostgreSQL table; Schema overrides the endpoint schema.
 type Resource struct {
-	Table                    string `yaml:"table"`
-	Schema                   string `yaml:"schema,omitempty"`
-	AdditionalTableCreateSQL string `yaml:"additional_table_create_sql,omitempty"`
-	DeltaUpdates             bool   `yaml:"delta_updates,omitempty"`
+	Table                    string `yaml:"table" x-collection-name:"true" description:"Table to materialize into. The connector creates it, unless it created it before."`
+	Schema                   string `yaml:"schema,omitempty" x-schema-name:"true" description:"Schema of the table, overriding config.schema."`
+	AdditionalTableCreateSQL string `yaml:"additional_table_create_sql,omitempty" description:"SQL statements run in the same transaction that creates the table, such as a CREATE INDEX. They only run when the connector creates the table: a backfill truncates an existing table without running them, so run them yourself on it. Don't re-create the table in them."`
+	DeltaUpdates             bool   `yaml:"delta_updates,omitempty" x-delta-updates:"true" description:"Appends the changes of each transaction instead of merging them into one row per key. Defaults to false. Switching it from true to false requires a backfill: in the same change, set or raise backfill.trigger, or set or raise the materialization's, which backfills every enabled binding, or the plan fails."`
 }
 
-// Binding maps a source collection to the PostgreSQL table it materializes into.
+// Binding maps a source collection to its PostgreSQL table.
 type Binding = materialization.Binding[Resource]
 
-// EndpointSpec wraps the connector under the "connector" key, as in endpoint.connector.
+// EndpointSpec wraps the connector under endpoint.connector.
 type EndpointSpec = endpoint.ConnectorSpec[Config]
 
-// Spec is a full PostgreSQL materialization entry, keyed by its catalog name in a catalog spec.
+// Spec is a PostgreSQL materialization entry.
 type Spec = materialization.Spec[EndpointSpec, Resource]

@@ -2,10 +2,10 @@ package dekaf
 
 import "github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
 
-// Variant identifies the kind of consumer to which the Dekaf materialization connector is tailored to.
+// Variant is the kind of consumer the Dekaf connector is tailored to.
 type Variant string
 
-// DeletionMode controls how source deletions are surfaced to Kafka consumers.
+// DeletionMode is how source deletions reach Kafka consumers.
 type DeletionMode string
 
 const (
@@ -44,24 +44,21 @@ var DeletionModes = []DeletionMode{
 	DeletionModeCDC,
 }
 
-// Config carries the Dekaf materialization connector configurations, including
-// Authentication configs through the Token property and deletion and topic naming
-// strategy.
+// Config is the Dekaf connector configuration.
 type Config struct {
-	Token            string       `yaml:"token"`
-	StrictTopicNames bool         `yaml:"strict_topic_names"`
-	Deletions        DeletionMode `yaml:"deletions"`
+	Token            string       `yaml:"token" description:"Password Kafka consumers authenticate with, using the full materialization name as username. Write-only."`
+	StrictTopicNames bool         `yaml:"strict_topic_names" description:"Exposes topic names in a strictly Kafka-compliant format, for consumers that require it. The dashboard sets false."`
+	Deletions        DeletionMode `yaml:"deletions" enum:"kafka,cdc" description:"How deletions reach consumers: 'kafka' emits Kafka records with null values, 'cdc' emits the deletion document with an _is_deleted field, useful for hard deletes. The dashboard sets 'kafka'."`
 }
 
-// Resource identifies the base Dekaf resource characteristics, including the target topic name to be generated.
+// Resource identifies the target Dekaf topic.
 type Resource struct {
-	TopicName string `yaml:"topic_name"`
+	TopicName string `yaml:"topic_name" description:"Kafka topic the collection is exposed as, through the Kafka metadata and discovery APIs."`
 }
 
-// Endpoint carries the Dekaf connector endpoint configurations that
-// will reflect in the connector specs in Estuary platform
+// Endpoint holds the Dekaf variant and its configuration.
 type Endpoint struct {
-	Variant Variant `yaml:"variant"`
+	Variant Variant `yaml:"variant" enum:"generic,materialize,tinybird,clickhouse,risingwave,singlestore,startree,imply-polaris,bytewax"`
 	Config  Config  `yaml:"config"`
 }
 
@@ -70,13 +67,13 @@ type EndpointSpec struct {
 	Dekaf Endpoint `yaml:"dekaf"`
 }
 
-// ConnectorName returns the name ending the catalog name of every task of the variant, e.g. dekaf-generic.
+// Binding maps a source collection to its Dekaf topic.
+type Binding = materialization.Binding[Resource]
+
+// Spec is a Dekaf materialization entry.
+type Spec = materialization.Spec[EndpointSpec, Resource]
+
+// ConnectorName returns the catalog name suffix of the variant, e.g. dekaf-generic.
 func ConnectorName(variant Variant) string {
 	return "dekaf-" + string(variant)
 }
-
-// Binding maps a source collection to the Dekaf topic exposing it.
-type Binding = materialization.Binding[Resource]
-
-// Spec is a full Dekaf materialization entry, keyed by its catalog name in a catalog spec.
-type Spec = materialization.Spec[EndpointSpec, Resource]

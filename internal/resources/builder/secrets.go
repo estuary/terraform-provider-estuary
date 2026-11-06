@@ -11,34 +11,44 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/builder/translator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 const secretsHashAlgorithm string = "pbkdf2-sha256"
 const secretsHashSaltSize int = 16
 
-// secretsHashIterations follows the OWASP recommendation. https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html.
+// secretsHashIterations follows OWASP: https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html.
 const secretsHashIterations int = 600000
 
-func (codec *Codec[D, S]) writeOnly(path *tftypes.AttributePath) bool {
-	attribute, err := codec.schema.AttributeAtTerraformPath(context.Background(), path)
+// verifiedSecrets holds, for this provider process only, each stored hash with the SHA-256 of a secret verified to match.
+var verifiedSecrets sync.Map
+
+// secrets handles a schema's write-only attributes and the salted hash beside each.
+type secrets struct {
+	schema schema.Schema
+}
+
+func (secrets secrets) writeOnly(path *tftypes.AttributePath) bool {
+	attribute, err := secrets.schema.AttributeAtTerraformPath(context.Background(), path)
 
 	return err == nil && attribute.IsWriteOnly()
 }
 
-// secretAttribute reports whether the attribute at path is a write-only secret or its hash, which plans and live specs
-// never hold.
-func (codec *Codec[D, S]) secretAttribute(path *tftypes.AttributePath) bool {
-	_, isHash := codec.secretPath(path)
+// attribute reports whether path is a write-only secret or its hash, which plans and live specs never hold.
+func (secrets secrets) attribute(path *tftypes.AttributePath) bool {
+	_, isHash := secrets.secretPath(path)
 
-	return isHash || codec.writeOnly(path)
+	return isHash || secrets.writeOnly(path)
 }
 
-// secretPath returns the path of the write-only attribute whose hash is at path, found being false when path isn't a hash.
-func (codec *Codec[D, S]) secretPath(path *tftypes.AttributePath) (*tftypes.AttributePath, bool) {
+// secretPath returns the write-only attribute path of the hash at path, false when path isn't a hash.
+func (secrets secrets) secretPath(path *tftypes.AttributePath) (*tftypes.AttributePath, bool) {
 	var steps []tftypes.AttributePathStep = path.Steps()
 
 	if len(steps) == 0 {
@@ -53,10 +63,10 @@ func (codec *Codec[D, S]) secretPath(path *tftypes.AttributePath) (*tftypes.Attr
 
 	var secret *tftypes.AttributePath = tftypes.NewAttributePathWithSteps(append(slices.Clone(steps[:len(steps)-1]), tftypes.AttributeName(strings.TrimSuffix(string(name), translator.HashSuffix))))
 
-	return secret, codec.writeOnly(secret)
+	return secret, secrets.writeOnly(secret)
 }
 
-// attributePath converts a Terraform path into the framework path diagnostics point to.
+// attributePath converts a Terraform path into a framework path for diagnostics.
 func attributePath(attributePath *tftypes.AttributePath) path.Path {
 	var converted path.Path
 
@@ -78,7 +88,7 @@ func attributePath(attributePath *tftypes.AttributePath) path.Path {
 	return converted
 }
 
-// hashSecret returns the salted hash of a secret stored beside it, with a new random salt.
+// hashSecret returns the salted hash of a secret, with a new random salt.
 func hashSecret(secret string) (string, error) {
 	var salt []byte = make([]byte, secretsHashSaltSize)
 
@@ -89,8 +99,28 @@ func hashSecret(secret string) (string, error) {
 	return secretHash(secret, salt, secretsHashIterations)
 }
 
-// verifySecret reports whether the secret is the one the stored hash was computed from.
+// verifySecret reports whether secret matches the stored hash, deriving it once per provider process.
 func verifySecret(secret string, stored string) bool {
+	var digest [sha256.Size]byte = sha256.Sum256([]byte(secret))
+	var key string = stored + "$" + base64.RawStdEncoding.EncodeToString(digest[:])
+
+	if _, verified := verifiedSecrets.Load(key); verified {
+		return true
+	}
+
+	if !deriveMatches(secret, stored) {
+		return false
+	}
+
+	verifiedSecrets.Store(key, true)
+
+	return true
+}
+
+// deriveMatches reports whether deriving secret with the parameters of the stored hash gives that hash. State is
+// untrusted input, so a hash with parameters hashSecret never writes, such as more iterations, doesn't match rather
+// than costing every plan its iterations; the plan then shows the secret as changed and the apply hashes it again.
+func deriveMatches(secret string, stored string) bool {
 	var parts []string = strings.Split(stored, "$")
 
 	if len(parts) != 4 || parts[0] != secretsHashAlgorithm {
@@ -99,13 +129,13 @@ func verifySecret(secret string, stored string) bool {
 
 	iterations, err := strconv.Atoi(parts[1])
 
-	if err != nil || iterations <= 0 {
+	if err != nil || iterations <= 0 || iterations > secretsHashIterations {
 		return false
 	}
 
 	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
 
-	if err != nil {
+	if err != nil || len(salt) != secretsHashSaltSize {
 		return false
 	}
 
@@ -124,21 +154,104 @@ func secretHash(secret string, salt []byte, iterations int) (string, error) {
 	return fmt.Sprintf("%s$%d$%s$%s", secretsHashAlgorithm, iterations, base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
 }
 
-// NullSecrets returns value with its write-only attributes null, as Terraform never stores them.
-func (codec *Codec[D, S]) NullSecrets(value tftypes.Value) (tftypes.Value, error) {
-	return nullAttributes(value, codec.writeOnly)
+// nullSecrets nulls the write-only attributes, as Terraform never stores them.
+func (secrets secrets) nullSecrets(value tftypes.Value) (tftypes.Value, error) {
+	return nullAttributes(value, secrets.writeOnly)
 }
 
-// nullSecretsHash returns value with its hashes null, the plan ones being unknown until apply.
-func (codec *Codec[D, S]) nullSecretsHash(value tftypes.Value) (tftypes.Value, error) {
+// withoutLiveSecrets nulls the write-only attributes of a live value and redacts the credentials of attributes
+// forbidding them, such as a MongoDB address with user info, returning the redacted paths.
+func (secrets secrets) withoutLiveSecrets(value tftypes.Value) (tftypes.Value, []*tftypes.AttributePath, error) {
+	var redactedPaths []*tftypes.AttributePath
+
+	value, err := secrets.nullSecrets(value)
+
+	if err != nil {
+		return value, nil, err
+	}
+
+	value, err = tftypes.Transform(value, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
+		text, credentials, restricted := secrets.restricted(path, current)
+
+		if !restricted {
+			return current, nil
+		}
+
+		if safe := translator.RedactCredentials(text, credentials); safe != text {
+			redactedPaths = append(redactedPaths, path)
+
+			return tftypes.NewValue(current.Type(), safe), nil
+		}
+
+		return current, nil
+	})
+
+	return value, redactedPaths, err
+}
+
+// credentialPaths returns the paths of the attributes holding the credentials their field forbids. Plan validators skip
+// values unknown at plan time, such as an address built from another resource, so the apply checks them again.
+func (secrets secrets) credentialPaths(value tftypes.Value) []string {
+	var paths []string
+
+	tftypes.Walk(value, func(valuePath *tftypes.AttributePath, current tftypes.Value) (bool, error) {
+		if text, credentials, restricted := secrets.restricted(valuePath, current); restricted && translator.HoldsCredentials(text, credentials) {
+			paths = append(paths, attributePath(valuePath).String())
+		}
+
+		return true, nil
+	})
+
+	return paths
+}
+
+// restricted returns the text of a known string attribute at path whose field forbids credentials, and its rule,
+// reporting false for other attributes.
+func (secrets secrets) restricted(path *tftypes.AttributePath, value tftypes.Value) (string, catalog.Credentials, bool) {
+	var text string
+
+	if !value.Type().Is(tftypes.String) || !value.IsKnown() || value.IsNull() || value.As(&text) != nil {
+		return "", catalog.CredentialsAllowed, false
+	}
+
+	attribute, err := secrets.schema.AttributeAtTerraformPath(context.Background(), path)
+
+	if err != nil {
+		return "", catalog.CredentialsAllowed, false
+	}
+
+	var credentials catalog.Credentials = translator.AttributeCredentials(attribute)
+
+	return text, credentials, credentials != catalog.CredentialsAllowed
+}
+
+// nullHashes nulls the hashes, plan ones being unknown until apply.
+func (secrets secrets) nullHashes(value tftypes.Value) (tftypes.Value, error) {
 	return nullAttributes(value, func(path *tftypes.AttributePath) bool {
-		_, isHash := codec.secretPath(path)
+		_, isHash := secrets.secretPath(path)
 
 		return isHash
 	})
 }
 
-// nullAttributes returns value with the attributes matching null.
+// values returns the config secrets in value, for backends to mask.
+func (secrets secrets) values(value tftypes.Value) []string {
+	var values []string
+
+	tftypes.Walk(value, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
+		var text string
+
+		if secrets.writeOnly(path) && current.IsKnown() && !current.IsNull() && current.As(&text) == nil && text != "" {
+			values = append(values, text)
+		}
+
+		return true, nil
+	})
+
+	return values
+}
+
+// nullAttributes nulls the attributes whose path matching reports.
 func nullAttributes(value tftypes.Value, matching func(path *tftypes.AttributePath) bool) (tftypes.Value, error) {
 	return tftypes.Transform(value, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
 		if current.IsNull() || !matching(path) {
@@ -149,10 +262,10 @@ func nullAttributes(value tftypes.Value, matching func(path *tftypes.AttributePa
 	})
 }
 
-// WithConfigSecrets returns value with its write-only attributes taken from config, the only value holding them.
-func (codec *Codec[D, S]) WithConfigSecrets(value tftypes.Value, config tftypes.Value) (tftypes.Value, error) {
+// withConfigSecrets fills the write-only attributes from config, the only value holding them.
+func (secrets secrets) withConfigSecrets(value tftypes.Value, config tftypes.Value) (tftypes.Value, error) {
 	return tftypes.Transform(value, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		if !codec.writeOnly(path) {
+		if !secrets.writeOnly(path) {
 			return current, nil
 		}
 
@@ -166,14 +279,13 @@ func (codec *Codec[D, S]) WithConfigSecrets(value tftypes.Value, config tftypes.
 	})
 }
 
-// PlanSecretsHash returns plan with the hash beside each write-only attribute: the state one while the secret in config
-// still matches it, unknown until apply when the secret is set and changed, and null when it is unset.
-// Changed holds the paths of the secrets whose state hash no longer matches.
-func (codec *Codec[D, S]) PlanSecretsHash(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (tftypes.Value, []*tftypes.AttributePath, error) {
+// planHashes plans each hash: the state one while the secret matches, unknown when changed, null when unset.
+// Changed holds the paths of the changed secrets.
+func (secrets secrets) planHashes(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (tftypes.Value, []*tftypes.AttributePath, error) {
 	var changed []*tftypes.AttributePath
 
 	planned, err := tftypes.Transform(plan, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		secretPath, isHash := codec.secretPath(path)
+		secretPath, isHash := secrets.secretPath(path)
 
 		if !isHash {
 			return current, nil
@@ -205,11 +317,10 @@ func (codec *Codec[D, S]) PlanSecretsHash(plan tftypes.Value, config tftypes.Val
 	return planned, changed, err
 }
 
-// StateSecretsHash returns plan with each hash it doesn't know yet computed from the secret beside it in planned, the
-// plan holding the config secrets, with a new salt.
-func (codec *Codec[D, S]) StateSecretsHash(plan tftypes.Value, planned tftypes.Value) (tftypes.Value, error) {
+// stateHashes computes each unknown hash from the planned secret beside it, with a new salt.
+func (secrets secrets) stateHashes(plan tftypes.Value, planned tftypes.Value) (tftypes.Value, error) {
 	return tftypes.Transform(plan, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		secretPath, isHash := codec.secretPath(path)
+		secretPath, isHash := secrets.secretPath(path)
 
 		if !isHash || (current.IsKnown() && !current.IsNull()) {
 			return current, nil
@@ -237,10 +348,10 @@ func (codec *Codec[D, S]) StateSecretsHash(plan tftypes.Value, planned tftypes.V
 	})
 }
 
-// SecretsChanged reports whether plan changes the secrets of prior, a hash being unknown until apply or differing.
-func (codec *Codec[D, S]) SecretsChanged(plan tftypes.Value, prior tftypes.Value) bool {
-	var planned map[string]tftypes.Value = codec.secretsHashes(plan)
-	var stored map[string]tftypes.Value = codec.secretsHashes(prior)
+// changed reports whether plan changes the secrets of prior.
+func (secrets secrets) changed(plan tftypes.Value, prior tftypes.Value) bool {
+	var planned map[string]tftypes.Value = secrets.hashes(plan)
+	var stored map[string]tftypes.Value = secrets.hashes(prior)
 
 	if len(planned) != len(stored) {
 		return true
@@ -255,12 +366,12 @@ func (codec *Codec[D, S]) SecretsChanged(plan tftypes.Value, prior tftypes.Value
 	return false
 }
 
-// secretsHashes returns the hashes set in value by their path.
-func (codec *Codec[D, S]) secretsHashes(value tftypes.Value) map[string]tftypes.Value {
+// hashes returns the hashes set in value, by path.
+func (secrets secrets) hashes(value tftypes.Value) map[string]tftypes.Value {
 	var hashes map[string]tftypes.Value = map[string]tftypes.Value{}
 
 	tftypes.Walk(value, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
-		if _, isHash := codec.secretPath(path); isHash && !current.IsNull() {
+		if _, isHash := secrets.secretPath(path); isHash && !current.IsNull() {
 			hashes[path.String()] = current
 		}
 
@@ -270,7 +381,7 @@ func (codec *Codec[D, S]) secretsHashes(value tftypes.Value) map[string]tftypes.
 	return hashes
 }
 
-// attributeValue returns the value at path in value, an error when value or one of the path parents is null.
+// attributeValue returns the value at path, an error when value or a parent is null.
 func attributeValue(value tftypes.Value, path *tftypes.AttributePath) (tftypes.Value, error) {
 	if value.Type() == nil || value.IsNull() {
 		return tftypes.Value{}, fmt.Errorf("no value at %s", path)

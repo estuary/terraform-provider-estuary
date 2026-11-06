@@ -6,14 +6,6 @@
 <p align="center">
     <b>Build millisecond-latency, scalable, future-proof data pipelines in minutes</b>
 </p>
-<div align="center">
-
-[![Estuary's Flow Repo](https://img.shields.io/github/stars/estuary/flow?label=Estuary)](https://github.com/estuary/flow)
-[![Subscribe to Estuary's YouTube Channel](https://img.shields.io/youtube/channel/subscribers/UCJ9JIjh7uaUdjcFR6xTkJXQ?label=Subscribe)](https://www.youtube.com/@estuarydev?sub_confirmation=1)
-[![Join Estuary's Slack](https://img.shields.io/badge/Slack-Estuary-blue)](https://go.estuary.dev/slack)
-[![Follow Estuary on LinkedIn](https://img.shields.io/badge/Follow_on-LinkedIn-lightblue)](https://www.linkedin.com/company/estuary-tech/)
-
-</div>
 
 <div align="center">
 
@@ -26,14 +18,15 @@ We are pleased to present the Estuary Terraform provider, a dedicated provider f
 
 Estuary is an ETL data pipeline platform that combines batch and real-time data. With Estuary, you can choose from hundreds of in-house low- and no-code connectors, transform and aggregate data, and power truly real-time applications.
 
-## Table of Contents
+## Documentation
 
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Provider Configuration](#provider-configuration)
-- [Resources](#resources)
+The provider documentation is available on the [Terraform Registry](https://registry.terraform.io/providers/estuary/estuary/latest/docs): There you can find the provider configuration, resources and data source, specifications, also the usage guides guides.
 
-## Prerequisites
+We recommend starting from [Getting Started](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/getting-started).
+
+## Quick Start
+
+### Requirements
 
 | Requirement | Minimum Version |
 |---|---|
@@ -43,15 +36,13 @@ Estuary is an ETL data pipeline platform that combines batch and real-time data.
 | Estuary account | [Sign up for free](https://dashboard.estuary.dev) |
 
 > [!WARNING]
-> For now, `flowctl` is the only backend the provider supports for acting on the Estuary platform, so it must be installed on the host where Terraform runs.
+> Currently, `flowctl` is the only backend the provider supports for acting on the Estuary platform, so it must be installed on the host where Terraform runs.
 
 Install `flowctl` by following the [official docs](https://docs.estuary.dev/concepts/flowctl/).
 
 ---
 
-## Installation
-
-Add the provider to your `terraform` block:
+### Installation
 
 ```hcl
 terraform {
@@ -72,40 +63,211 @@ Then run:
 terraform init
 ```
 
----
+## Connectors
 
-## Provider Configuration
+Connectors configured the same way share one page, with examples and every attribute.
 
-Configure the provider once per Terraform root module. All attributes can be sourced from environment variables, which is the recommended approach for CI/CD pipelines and remote servers.
+### Captures
+
+| Connector | Resources |
+|---|---|
+| [Amazon DynamoDB](internal/resources/sourcedynamodb/README.md) | `estuary_source_dynamodb` |
+| [MongoDB](internal/resources/sourcemongodb/README.md) | `estuary_source_mongodb` |
+| [MySQL](internal/resources/sourcemysql/README.md) | `estuary_source_mysql`, `estuary_source_aurora_mysql`, `estuary_source_rds_mysql` |
+| [PostgreSQL](internal/resources/sourcepostgres/README.md) | `estuary_source_postgres`, `estuary_source_aurora_postgres`, `estuary_source_rds_postgres` |
+
+### Materializations
+
+| Connector | Resources |
+|---|---|
+| [Apache Iceberg](internal/resources/materializationiceberg/README.md) | `estuary_materialization_iceberg` |
+| [Apache Iceberg Tables in Amazon S3 (delta updates)](internal/resources/materializations3iceberg/README.md) | `estuary_materialization_s3_iceberg` |
+| [Dekaf](internal/resources/materializationdekaf/README.md) | `estuary_materialization_dekaf_generic`, `estuary_materialization_dekaf_bytewax`, `estuary_materialization_dekaf_clickhouse`, `estuary_materialization_dekaf_imply_polaris`, `estuary_materialization_dekaf_materialize`, `estuary_materialization_dekaf_risingwave`, `estuary_materialization_dekaf_singlestore`, `estuary_materialization_dekaf_startree`, `estuary_materialization_dekaf_tinybird` |
+| [HTTP Webhook](internal/resources/materializationwebhook/README.md) | `estuary_materialization_webhook` |
+| [MySQL](internal/resources/materializationmysql/README.md) | `estuary_materialization_mysql`, `estuary_materialization_aurora_mysql`, `estuary_materialization_rds_mysql` |
+| [PostgreSQL](internal/resources/materializationpostgres/README.md) | `estuary_materialization_postgres`, `estuary_materialization_aurora_postgres`, `estuary_materialization_rds_postgres` |
+| [Snowflake](internal/resources/materializationsnowflake/README.md) | `estuary_materialization_snowflake` |
+
+## Development Guide
+
+- [Prerequisites](#prerequisites)
+- [Local Setup](#local-setup)
+- [Project Structure](#project-structure)
+- [Adding a Connector](#adding-a-connector)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Submitting Changes](#submitting-changes)
+
+### Prerequisites
+
+| Tool | Version | Purpose |
+|---|---|---|
+| [Go](https://go.dev/dl/) | >= 1.27 | Build and test the provider |
+| [Terraform](https://developer.hashicorp.com/terraform/install) | >= 1.11 | Run the provider locally |
+| [`flowctl`](https://docs.estuary.dev/concepts/flowctl/) | Latest | Backend the provider calls to act on Estuary |
+
+### Local Setup
+
+**1. Clone and build**
+
+```bash
+git clone https://github.com/estuary/terraform-provider-estuary.git
+cd terraform-provider-estuary
+go build -o terraform-provider-estuary .
+```
+
+**2. Use the local build**
+
+Add a `dev_overrides` block to `~/.terraformrc`, so Terraform loads your binary instead of the Registry release:
 
 ```hcl
-provider "estuary" {
-  token        = var.estuary_token
-  tenant       = "acmeCo/"
-  flowctl_path = "flowctl"
-  backend      = "flowctl"
-  data_plane   = "ops/dp/public/aws-eu-west-1-c2"
+provider_installation {
+  dev_overrides {
+    "estuary/estuary" = "/absolute/path/to/terraform-provider-estuary"
+  }
+  direct {}
 }
 ```
 
-### Provider Attributes
+**3. Run it**
 
-| Attribute | Type | Required | Environment Variable | Description |
-|---|---|---|---|---|
-| `token` | String | Yes | `FLOW_AUTH_TOKEN` | Estuary Refresh or Access token, for CI/CD and remote environment that won't require temporary credentials we recommend using Refresh Tokens that can be generated in the Estuary > Admin > CLI-API [page](https://dashboard.estuary.dev/admin/api). Treat it as a secret — never hard-code in `.tf` files. |
-| `tenant` | String | No | `ESTUARY_TENANT` | Default tenant prefix prepended to all resource names (e.g., `acmeCo/`). Enables consistent naming without repeating the org prefix in every resource. |
-| `flowctl_path` | String | No | — | Absolute or relative path to the `flowctl` binary. Defaults to `flowctl` (must be on `PATH`). Useful only when the backend is `flowctl`. |
-| `backend` | String | No | `ESTUARY_ BACKEND` | Target estuary backend engine. This parameter defines how the Terraform Provider will reach to Estuary. Available Backends: `flowctl`. | 
-| `data_plane` | String | No | `ESTUARY_DATA_PLANE` | Target data plane for the managed connectors (e.g., `ops/dp/public/aws-eu-west-1-c2`). Leave unset for standard Estuary-managed deployments. |
+With overrides on, skip `terraform init` and run `terraform plan` or `terraform apply` from any configuration. Rebuild after every code change.
 
-> **Tip:** Use `FLOW_AUTH_TOKEN`, `ESTUARY_TENANT` and `ESTUARY_DATA_PLANE` as environment variables in your CI/CD system rather than storing tokens in variable files. See [Multi-Environment Best Practices](#multi-environment--multi-tenant-best-practices).
+> [!TIP]
+> Set `TF_LOG=DEBUG` to see the provider's logs, including the `flowctl` commands it runs.
 
----
+### Project Structure
 
-## Resources
+```text
+internal/
+├── catalog/              # Connector specs: Go structs mirroring each connector's catalog YAML
+│   ├── capture/          # Source connectors
+│   ├── materialization/  # Destination connectors
+│   ├── common/           # Shared blocks (auth, endpoint, SSL mode)
+│   └── spectest/         # Shared test suites every spec runs
+├── flowctl/              # flowctl client: catalog reads, discovery and publication
+├── provider/             # Provider configuration and resource registry
+└── resources/
+    ├── builder/          # Generic resource and data source built from a spec
+    ├── materialization*/ # Destination resources of one connector family, with its README
+    └── source*/          # Source resources and data sources of one connector family, with its README
+examples/                 # HCL samples rendered into the Registry docs
+templates/                # tfplugindocs templates and guides
+```
 
-Each resource manages one Estuary connector. See its documentation for examples and the full list of attributes.
+### Adding a Connector
 
-| Resource | Type | Connector |
-|---|---|---|
-| [`estuary_source_mongodb`](internal/resources/capture/mongodb/README.md) | Capture | [MongoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/) |
+The steps below use the HTTP Webhook materialization as the reference. Captures follow the same steps, with the spec under `internal/catalog/capture/` and the resource in a `source*` package.
+
+A resource package covers a connector family, not one connector: `sourcemysql` holds the MySQL, RDS MySQL and Aurora MySQL resources, all built from the `capture/mysql` spec. Add a variant of an existing family to that package instead of creating a new one.
+
+**1. Define the spec** in `internal/catalog/materialization/webhook/spec.go`. Each field maps to a key of the connector's config, and its tags drive the Terraform schema:
+
+```go
+const Image string = "ghcr.io/estuary/materialize-webhook:v1"
+const ConnectorName string = "materialize-webhook"
+
+type Config struct {
+	Address string   `yaml:"address" credentials:"forbidden" description:"Base URL the requests are sent to."`
+	Headers *Headers `yaml:"headers,omitempty" description:"HTTP headers of the requests."`
+}
+```
+
+| Tag | Effect |
+|---|---|
+| `yaml` | Key in the connector config; `omitempty` makes the attribute optional |
+| `description` | Attribute description in the schema and the Registry docs (required) |
+| `secret:"true"` | Write-only attribute, never stored in state. String fields whose key contains `password`, `secret`, `token`, `private`, `credential`, `api_key` or `client_key` are secret without the tag |
+| `credentials:"forbidden"` | The plan rejects connection strings with embedded credentials |
+| `credentials:"password"` | The plan rejects connection strings with an embedded password, but allows the user |
+| `enum:"a,b"` | Restricts the attribute to the comma-separated values |
+| `backfill:"mode"` | Marks the binding resource's backfill mode; changing it requires a backfill |
+| `x-collection-name:"true"` | Marks the binding resource's target table or topic |
+| `x-schema-name:"true"` | Marks the binding resource's target schema |
+| `x-delta-updates:"true"` | Marks the binding resource's delta-updates flag (bool fields only) |
+| `x-default-namespace:"true"` | Marks the endpoint's default schema for bindings |
+
+Every tag except `yaml`, `description` and `x-delta-updates` applies only to string fields. On other types, building the schema fails, which `go test ./...` catches.
+
+**2. Create the resource** in `internal/resources/materializationwebhook/resource.go`:
+
+```go
+var New func() resource.Resource = builder.NewMaterialization[webhook.Config, webhook.Resource](builder.Connector{
+	TypeName:      "materialization_webhook",
+	Image:         webhook.Image,
+	ConnectorName: webhook.ConnectorName,
+	Description:   "Sends the documents of Estuary collections to an HTTP endpoint of your server.",
+})
+```
+
+Captures use `builder.NewCapture`, and also expose a data source through `builder.NewCaptureDataSource`.
+
+Materializations that don't run a connector image, such as Dekaf, use `builder.NewMaterializationFromDocument` instead. They define their own Terraform document type, which maps to and from the catalog spec through `Spec` and `FromSpec` (see `internal/resources/materializationdekaf/resource.go`).
+
+**3. Register it** in `internal/provider/registry.go`, keeping the list sorted by Terraform type name:
+
+```go
+var resources []func() resource.Resource = []func() resource.Resource{
+	// ...
+	materializationwebhook.New,
+}
+```
+
+**4. Add tests and samples.** Put sample catalog specs under `testdata/`, and run the shared suite against them (see [Testing](#testing)).
+
+**5. Document it.** Add the example, the connector `README.md` and a row in the [Connectors](#connectors) table (see [Documentation](#documentation)).
+
+### Testing
+
+Every spec runs the shared conformance suite, plus its own checks on the samples in `testdata/`:
+
+```go
+func TestSpec(test *testing.T) {
+	spectest.RunMaterializationSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
+}
+```
+
+Run the checks before pushing:
+
+```bash
+go vet ./...
+go test ./...
+
+# A single package or test
+go test ./internal/catalog/materialization/webhook/ -run TestSpec -v
+```
+
+`internal/provider/registry_test.go` fails when an attribute is missing a description. It walks every resource attribute, nested ones included, and every data source attribute. Data source schemas are flat (`name` and `live_bindings`), so a top-level check covers them.
+
+### Documentation
+
+The documentation comes from three places:
+
+| Source | Becomes |
+|---|---|
+| `internal/resources/<connector>/README.md` | The connector's page on [docs.estuary.dev](https://docs.estuary.dev) |
+| Schema descriptions, `examples/` and `templates/` | The Registry pages under `docs/`, generated by [`tfplugindocs`](https://github.com/hashicorp/terraform-plugin-docs) |
+| `templates/guides/` | The Registry guides under `docs/guides/` |
+
+Each new resource needs `examples/resources/estuary_<type>/resource.tf`, and each data source `examples/data-sources/estuary_<type>/data-source.tf`. Attribute descriptions live in the spec's `description` tags and in the connector README's tables, so change both together.
+
+Never edit `docs/` by hand. Regenerate it and commit the result with your change, since the Terraform Registry publishes the `docs/` of each release tag:
+
+```bash
+go generate ./...
+```
+
+A pre-commit hook does this for you: when a commit touches `internal/`, `examples/`, `templates/`, `main.go` or `go.mod`, it regenerates `docs/` and stages the result. Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+### Submitting Changes
+
+1. Branch off `main` as `<your-name>/<type>/<topic>`, such as `jdoe/feat/bigquery-materialization`.
+2. Write commit messages as `<type>: <summary>`, where the type is `feat`, `fix` or `chore`.
+3. Before opening the pull request, check that:
+   - [ ] `go vet ./...` and `go test ./...` pass
+   - [ ] `go generate ./...` ran, by hand or through the pre-commit hook, and its `docs/` changes are committed, and new resources have examples and a README
+4. Open the pull request against `main`.

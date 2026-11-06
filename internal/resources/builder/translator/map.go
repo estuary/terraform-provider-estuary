@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/estuary/terraform-provider-estuary/internal/utils"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
-// mapNode handles a spec map of string keys to scalars, such as table properties, converting each value through the value node.
+// mapNode handles a spec map of string keys to scalars, such as table properties.
 type mapNode struct {
 	value scalarNode
 }
@@ -39,7 +38,6 @@ func (mapped *mapNode) attribute(field field) schema.Attribute {
 		Description: field.description,
 		Required:    !field.optional,
 		Optional:    field.optional,
-		Sensitive:   utils.IsSensitiveKey(field.key),
 		ElementType: mapped.value.elementType(),
 	}
 }

@@ -1,150 +1,77 @@
 package flowctl
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
-	"github.com/estuary/terraform-provider-estuary/internal/utils"
-	"gopkg.in/yaml.v3"
 )
 
-const expectPubIDKey string = "expectPubId"
+// pull pulls the live specs of names into directory, in flowctl's nested layout, and reads them back.
+func (client *Client) pull(ctx context.Context, directory string, names ...string) (*catalogTree, error) {
+	var arguments []string = []string{"catalog", "pull-specs"}
 
-type catalogRow struct {
-	CatalogName       string `json:"catalogName"`
-	LegacyCatalogName string `json:"catalog_name"`
-}
+	for _, name := range names {
+		arguments = append(arguments, flagValue("--name", name))
+	}
 
-type pulledFile struct {
-	Captures         map[string]map[string]any `yaml:"captures"`
-	Materializations map[string]map[string]any `yaml:"materializations"`
-}
-
-// ReadCatalogEntry returns the named catalog entry, or nil when it doesn't exist.
-func (client *Client) ReadCatalogEntry(ctx context.Context, name string) (*catalog.CatalogEntry, error) {
-	var arguments []string = client.withDataPlane([]string{"catalog", "list", "--name", name, "-o", "json"}, "--data-plane-name")
-
-	output, err := client.execCommand(ctx, nil, arguments...)
-
-	if err != nil {
+	if _, err := client.execCommand(ctx, append(arguments, "--overwrite", "--target", filepath.Join(directory, specFile))...); err != nil {
 		return nil, err
 	}
 
-	return findCatalogEntry(output, name)
+	return readCatalogTree(directory)
 }
 
-// ReadSpec returns the live spec of the named capture or materialization as published, its secrets still encrypted,
-// without its publication ID, nil when it doesn't exist.
-func (client *Client) ReadSpec(ctx context.Context, name string) (map[string]any, error) {
-	content, directory, err := client.runOnSpec(ctx, nil, "--target", "catalog", "pull-specs", "--name", name, "--flat", "--overwrite")
-
-	if err != nil {
-		return nil, err
-	}
-
-	defer os.RemoveAll(directory)
-
-	return pulledSpec(content, name, directory)
-}
-
-// DeleteCatalogEntry deletes the named capture or materialization.
-func (client *Client) DeleteCatalogEntry(ctx context.Context, name string) error {
-	var arguments []string = client.withDataPlane([]string{"catalog", "delete", "--name", name, "--dangerous-auto-approve"}, "--data-plane-name")
-
-	_, err := client.execCommand(ctx, nil, arguments...)
-
-	return err
-}
-
-func pulledSpec(content []byte, name string, directory string) (map[string]any, error) {
-	var pulled pulledFile
-
-	if err := yaml.Unmarshal(content, &pulled); err != nil {
-		return nil, fmt.Errorf("parsing pulled spec: %w", err)
-	}
-
-	spec, found := pulled.Captures[name]
+// pulledSpec returns the spec of name with its config inlined, nil when nothing was pulled, as for a deleted entry.
+// Other pulled entries, or a spec without bindings, fail rather than reading as a deletion.
+func pulledSpec(tree *catalogTree, name string) (map[string]any, error) {
+	spec, file, found := tree.entry(capturesKey, name)
 
 	if !found {
-		spec = pulled.Materializations[name]
+		spec, file, found = tree.entry(materializationsKey, name)
 	}
 
-	if err := inlineConfigs(spec, directory); err != nil {
+	if names := tree.names(); !found && len(names) > 0 {
+		return nil, fmt.Errorf("pulling %s returned no capture or materialization with that name, only: %s", name, strings.Join(names, ", "))
+	}
+
+	if !found {
+		return nil, nil
+	}
+
+	if _, isList := spec[catalog.BindingsKey].([]any); !isList {
+		return nil, fmt.Errorf("the pulled spec of %s has no bindings list", name)
+	}
+
+	if err := tree.inlineConfigs(spec, file); err != nil {
 		return nil, err
 	}
-
-	delete(spec, expectPubIDKey)
 
 	return spec, nil
 }
 
-// inlineConfigs replaces each endpoint config flowctl wrote to its own file, named in the spec, with the file content.
-func inlineConfigs(spec map[string]any, directory string) error {
-	for _, endpoint := range utils.Lookup(spec, "endpoint") {
-		object, _ := endpoint.(map[string]any)
-		path, isPath := object["config"].(string)
+// ReadSpec returns the live spec of a capture or materialization, secrets still encrypted, nil when it doesn't exist.
+func (client *Client) ReadSpec(ctx context.Context, name string) (map[string]any, error) {
+	var spec map[string]any
 
-		if !isPath {
-			continue
+	err := inWorkspace(nil, func(directory string) error {
+		tree, err := client.pull(ctx, directory, name)
+
+		if err == nil {
+			spec, err = pulledSpec(tree, name)
 		}
 
-		content, err := os.ReadFile(filepath.Join(directory, path))
+		return err
+	})
 
-		if err != nil {
-			return fmt.Errorf("reading pulled config %s: %w", path, err)
-		}
-
-		var config any
-
-		if err := yaml.Unmarshal(content, &config); err != nil {
-			return fmt.Errorf("parsing pulled config %s: %w", path, err)
-		}
-
-		object["config"] = config
-	}
-
-	return nil
+	return spec, err
 }
 
-func findCatalogEntry(output []byte, name string) (*catalog.CatalogEntry, error) {
-	var decoder *json.Decoder = json.NewDecoder(bytes.NewReader(output))
+// DeleteCatalogEntry deletes a capture or materialization, whatever its data plane.
+func (client *Client) DeleteCatalogEntry(ctx context.Context, name string) error {
+	_, err := client.execCommand(ctx, "catalog", "delete", flagValue("--name", name), "--dangerous-auto-approve")
 
-	for {
-		var value json.RawMessage
-
-		if err := decoder.Decode(&value); errors.Is(err, io.EOF) {
-			return nil, nil
-		} else if err != nil {
-			return nil, fmt.Errorf("parsing catalog list output: %w", err)
-		}
-
-		var rows []catalogRow
-
-		if bytes.HasPrefix(value, []byte("[")) {
-			if err := json.Unmarshal(value, &rows); err != nil {
-				return nil, fmt.Errorf("parsing catalog list output: %w", err)
-			}
-		} else {
-			var row catalogRow
-
-			if err := json.Unmarshal(value, &row); err != nil {
-				return nil, fmt.Errorf("parsing catalog list output: %w", err)
-			}
-
-			rows = append(rows, row)
-		}
-
-		for _, row := range rows {
-			if row.CatalogName == name || row.LegacyCatalogName == name {
-				return &catalog.CatalogEntry{CatalogName: name}, nil
-			}
-		}
-	}
+	return err
 }

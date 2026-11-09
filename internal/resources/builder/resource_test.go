@@ -290,12 +290,15 @@ func TestResourceModifyPlanSecretsHash(test *testing.T) {
 		want     any
 		warn     bool
 	}{
-		"keeps the hash of an unchanged secret":  {password: "secret", stored: true, want: stored},
-		"plans and warns about a changed secret": {password: "rotated", stored: true, want: tftypes.UnknownValue, warn: true},
-		"plans a secret without a hash":          {password: "secret", want: tftypes.UnknownValue},
-		"plans the secret of a created entry":    {password: "secret", create: true, want: tftypes.UnknownValue},
-		"plans a secret not known yet":           {unknown: true, stored: true, want: tftypes.UnknownValue},
-		"plans and warns about a removed secret": {stored: true, warn: true},
+		"keeps the hash of an unchanged secret":           {password: "secret", stored: true, want: stored},
+		"plans and warns about a changed secret":          {password: "rotated", stored: true, want: tftypes.UnknownValue, warn: true},
+		"plans a secret without a hash":                   {password: "secret", want: tftypes.UnknownValue},
+		"plans the secret of a created entry":             {password: "secret", create: true, want: tftypes.UnknownValue},
+		"plans and warns about a secret not known yet":    {unknown: true, stored: true, want: tftypes.UnknownValue, warn: true},
+		"plans a secret not known yet without a hash":     {unknown: true, want: tftypes.UnknownValue},
+		"plans a secret not known yet of a created entry": {unknown: true, create: true, want: tftypes.UnknownValue},
+		"plans and warns about a removed secret":          {stored: true, warn: true},
+		"plans the removed secret of a created entry":     {create: true},
 	}
 
 	for name, expected := range expectations {
@@ -364,7 +367,7 @@ func TestResourceModifyPlanSecretsHash(test *testing.T) {
 		var warnings diag.Diagnostics = modifyPlanResp.Diagnostics.Warnings()
 
 		if warned := len(warnings) == 1; warned != expected.warn || len(warnings) > 1 {
-			test.Errorf("%s: warnings = %v, want a changed secret warning %v", name, warnings, expected.warn)
+			test.Errorf("%s: warnings = %v, want a secret warning %v", name, warnings, expected.warn)
 		}
 
 		if expected.warn {
@@ -513,79 +516,6 @@ func TestResourceUpdateKeepsUnchangedSecrets(test *testing.T) {
 
 		if expected.password != "" && (hash.As(&text) != nil || !verifySecret(expected.password, text)) {
 			test.Errorf("%s: state password_hash = %v, want the hash of the planned password", name, hash)
-		}
-	}
-}
-
-func TestResourceUpdateRejectsUnplannedSecretRemoval(test *testing.T) {
-	var ctx context.Context = context.Background()
-	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
-
-	spec.Endpoint.Connector.Config.Password = "secret"
-
-	stored, err := hashSecret(spec.Endpoint.Connector.Config.Password)
-
-	if err != nil {
-		test.Fatal(err)
-	}
-
-	expectations := map[string]struct {
-		password any
-		stored   any
-	}{
-		"null at apply":                  {nil, stored},
-		"empty at apply":                 {"", stored},
-		"null at apply after an import":  {nil, nil},
-		"empty at apply after an import": {"", nil},
-	}
-
-	for name, expected := range expectations {
-		var backend *testBackend = &testBackend{live: map[string]any{}}
-
-		entry := newTestCaptureEntry(backend)
-
-		value, err := entry.codec.Value("movies", spec)
-
-		if err != nil {
-			test.Fatal(err)
-		}
-
-		stateValue, err := entry.codec.secrets.nullSecrets(value)
-
-		if err == nil {
-			stateValue, err = withValue(stateValue, testPasswordHashPath, expected.stored)
-		}
-
-		if err != nil {
-			test.Fatal(err)
-		}
-
-		planValue, err := withValue(stateValue, testPasswordHashPath, tftypes.UnknownValue)
-
-		if err != nil {
-			test.Fatal(err)
-		}
-
-		configValue, err := withValue(value, testPasswordPath, expected.password)
-
-		if err != nil {
-			test.Fatal(err)
-		}
-
-		var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
-
-		entry.Update(ctx, resource.UpdateRequest{
-			State:  tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue},
-			Plan:   tfsdk.Plan{Schema: entry.codec.Schema(), Raw: planValue},
-			Config: tfsdk.Config{Schema: entry.codec.Schema(), Raw: configValue},
-		}, &updateResp)
-
-		if !updateResp.Diagnostics.HasError() || !strings.Contains(updateResp.Diagnostics[0].Summary(), "Secret unset at apply") {
-			test.Errorf("%s: diagnostics = %v, want a secret unset at apply error", name, updateResp.Diagnostics)
-		}
-
-		if backend.published != nil {
-			test.Errorf("%s: published = %v, want nothing published", name, backend.published)
 		}
 	}
 }

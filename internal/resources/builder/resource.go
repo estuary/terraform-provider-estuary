@@ -400,17 +400,6 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 		return "", diagnostics
 	}
 
-	for _, secret := range entryResource.codec.secrets.unplanned(plan.Raw, config.Raw) {
-		diagnostics.AddAttributeError(attributePath(secret), "Secret unset at apply",
-			attributePath(secret).String()+" was unknown at plan and resolved empty or null, which would publish the "+
-				entryResource.catalogType.name+" without it, so nothing was published. Set it, or leave it out of the "+
-				"configuration to delete it with a planned warning.")
-	}
-
-	if diagnostics.HasError() {
-		return "", diagnostics
-	}
-
 	if paths := entryResource.codec.secrets.credentialPaths(planned); len(paths) > 0 {
 		diagnostics.AddError("Credentials in connection string",
 			strings.Join(paths, ", ")+" of the "+entryResource.catalogType.name+" holds credentials, such as user:password@ or a password, token, API key or signature option, "+

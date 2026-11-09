@@ -529,8 +529,8 @@ func (entryResource *entryResource[D, S]) warnTakenOverBindings(pairing bindingP
 	return diagnostics
 }
 
-// planSecretsHash plans the hash beside each write-only secret and warns about changed and removed ones, as plans
-// never show write-only values. It returns plan as is on error.
+// planSecretsHash plans the hash beside each write-only secret and warns about changed, removed and possibly removed
+// ones, as plans never show write-only values. It returns plan as is on error.
 func (entryResource *entryResource[D, S]) planSecretsHash(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (tftypes.Value, diag.Diagnostics) {
 	var diagnostics diag.Diagnostics
 
@@ -546,11 +546,20 @@ func (entryResource *entryResource[D, S]) planSecretsHash(plan tftypes.Value, co
 			attributePath(secret).String()+" changed, so the "+entryResource.catalogType.name+" is published with the new value.")
 	}
 
-	for _, secret := range entryResource.codec.secrets.removed(config, state) {
+	removed, unknown := entryResource.codec.secrets.removed(config, state)
+
+	for _, secret := range removed {
 		diagnostics.AddAttributeWarning(attributePath(secret), entryResource.warningSummary("Secret removed: "+attributePath(secret).String(), plan),
 			attributePath(secret).String()+" is no longer set, so the "+entryResource.catalogType.name+" is published without it and "+
 				"Estuary deletes the stored value, which Terraform can't restore. If this isn't intended, such as a variable "+
 				"resolving to null, set it again before applying.")
+	}
+
+	for _, secret := range unknown {
+		diagnostics.AddAttributeWarning(attributePath(secret), entryResource.warningSummary("Secret may be removed: "+attributePath(secret).String(), plan),
+			attributePath(secret).String()+" is known only at apply, such as one built from another resource. If it resolves to "+
+				"null, the "+entryResource.catalogType.name+" is published without it and Estuary deletes the stored value, which "+
+				"Terraform can't restore.")
 	}
 
 	return planned, diagnostics

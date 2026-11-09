@@ -171,80 +171,36 @@ func TestCodecSecretsRemoved(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	if removed := codec.secrets.removed(unset, state); len(removed) != 1 || !removed[0].Equal(testPasswordPath) {
-		test.Errorf("unset password: removed = %v, want the password", removed)
-	}
-
-	if removed := codec.secrets.removed(config, state); len(removed) != 0 {
-		test.Errorf("set password: removed = %v, want none", removed)
-	}
-
-	if removed := codec.secrets.removed(unset, tftypes.NewValue(state.Type(), nil)); len(removed) != 0 {
-		test.Errorf("create: removed = %v, want none", removed)
-	}
-}
-
-func TestCodecSecretsUnplanned(test *testing.T) {
-	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
-
-	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
+	unknown, err := withValue(config, testPasswordPath, tftypes.UnknownValue)
 
 	if err != nil {
 		test.Fatal(err)
 	}
 
-	spec.Endpoint.Connector.Config.Password = "secret"
-
-	config, err := codec.Value("movies", spec)
-
-	if err != nil {
-		test.Fatal(err)
-	}
-
-	unset, err := codec.secrets.nullSecrets(config)
-
-	if err != nil {
-		test.Fatal(err)
-	}
-
-	empty, err := withValue(config, testPasswordPath, "")
-
-	if err != nil {
-		test.Fatal(err)
-	}
-
-	unknownHash, err := withValue(unset, testPasswordHashPath, tftypes.UnknownValue)
-
-	if err != nil {
-		test.Fatal(err)
-	}
-
-	nullHash, err := withValue(unset, testPasswordHashPath, nil)
-
-	if err != nil {
-		test.Fatal(err)
-	}
+	var created tftypes.Value = tftypes.NewValue(state.Type(), nil)
 
 	expectations := map[string]struct {
-		plan    tftypes.Value
 		config  tftypes.Value
-		flagged bool
+		state   tftypes.Value
+		removed bool
+		unknown bool
 	}{
-		"null at apply":                 {unknownHash, unset, true},
-		"empty at apply":                {unknownHash, empty, true},
-		"set at apply":                  {unknownHash, config, false},
-		"removal the plan warned about": {nullHash, unset, false},
+		"unset password":             {unset, state, true, false},
+		"unknown password":           {unknown, state, false, true},
+		"set password":               {config, state, false, false},
+		"unset password at create":   {unset, created, false, false},
+		"unknown password at create": {unknown, created, false, false},
 	}
 
 	for name, expected := range expectations {
-		var unplanned []*tftypes.AttributePath = codec.secrets.unplanned(expected.plan, expected.config)
+		removed, unknown := codec.secrets.removed(expected.config, expected.state)
 
-		if expected.flagged && (len(unplanned) != 1 || !unplanned[0].Equal(testPasswordPath)) {
-			test.Errorf("%s: unplanned = %v, want the password", name, unplanned)
+		if found := len(removed) == 1 && removed[0].Equal(testPasswordPath); found != expected.removed || len(removed) > 1 {
+			test.Errorf("%s: removed = %v, want the password %v", name, removed, expected.removed)
 		}
 
-		if !expected.flagged && len(unplanned) != 0 {
-			test.Errorf("%s: unplanned = %v, want none", name, unplanned)
+		if found := len(unknown) == 1 && unknown[0].Equal(testPasswordPath); found != expected.unknown || len(unknown) > 1 {
+			test.Errorf("%s: unknown = %v, want the password %v", name, unknown, expected.unknown)
 		}
 	}
 }

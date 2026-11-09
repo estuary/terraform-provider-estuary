@@ -317,12 +317,14 @@ func (secrets secrets) planHashes(plan tftypes.Value, config tftypes.Value, stat
 	return planned, changed, err
 }
 
-// removed returns the paths of the secrets state holds a hash for and config leaves out, which the apply deletes.
-func (secrets secrets) removed(config tftypes.Value, state tftypes.Value) []*tftypes.AttributePath {
-	var removed []*tftypes.AttributePath
+// removed returns the paths of the secrets state holds a hash for and config leaves out, which the apply deletes, and
+// of those config leaves unknown, which the apply deletes if they resolve to null. Terraform plans again at apply
+// without the first plan, so only this plan can warn about the unknown ones.
+func (secrets secrets) removed(config tftypes.Value, state tftypes.Value) ([]*tftypes.AttributePath, []*tftypes.AttributePath) {
+	var removed, unknown []*tftypes.AttributePath
 
 	if state.Type() == nil || state.IsNull() {
-		return nil
+		return nil, nil
 	}
 
 	tftypes.Walk(state, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
@@ -332,14 +334,19 @@ func (secrets secrets) removed(config tftypes.Value, state tftypes.Value) []*tft
 			return true, nil
 		}
 
-		if secret, err := attributeValue(config, secretPath); err != nil || secret.IsNull() {
+		found, _, err := tftypes.WalkAttributePath(config, secretPath)
+		secret, isValue := found.(tftypes.Value)
+
+		if isValue && !secret.IsKnown() {
+			unknown = append(unknown, secretPath)
+		} else if err != nil || !isValue || secret.IsNull() {
 			removed = append(removed, secretPath)
 		}
 
 		return true, nil
 	})
 
-	return removed
+	return removed, unknown
 }
 
 // stateHashes computes each unknown hash from the planned secret beside it, with a new salt.

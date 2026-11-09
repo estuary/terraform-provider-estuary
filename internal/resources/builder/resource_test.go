@@ -290,12 +290,15 @@ func TestResourceModifyPlanSecretsHash(test *testing.T) {
 		want     any
 		warn     bool
 	}{
-		"keeps the hash of an unchanged secret":  {password: "secret", stored: true, want: stored},
-		"plans and warns about a changed secret": {password: "rotated", stored: true, want: tftypes.UnknownValue, warn: true},
-		"plans a secret without a hash":          {password: "secret", want: tftypes.UnknownValue},
-		"plans the secret of a created entry":    {password: "secret", create: true, want: tftypes.UnknownValue},
-		"plans a secret not known yet":           {unknown: true, stored: true, want: tftypes.UnknownValue},
-		"plans and warns about a removed secret": {stored: true, warn: true},
+		"keeps the hash of an unchanged secret":           {password: "secret", stored: true, want: stored},
+		"plans and warns about a changed secret":          {password: "rotated", stored: true, want: tftypes.UnknownValue, warn: true},
+		"plans a secret without a hash":                   {password: "secret", want: tftypes.UnknownValue},
+		"plans the secret of a created entry":             {password: "secret", create: true, want: tftypes.UnknownValue},
+		"plans and warns about a secret not known yet":    {unknown: true, stored: true, want: tftypes.UnknownValue, warn: true},
+		"plans a secret not known yet without a hash":     {unknown: true, want: tftypes.UnknownValue},
+		"plans a secret not known yet of a created entry": {unknown: true, create: true, want: tftypes.UnknownValue},
+		"plans and warns about a removed secret":          {stored: true, warn: true},
+		"plans the removed secret of a created entry":     {create: true},
 	}
 
 	for name, expected := range expectations {
@@ -364,7 +367,7 @@ func TestResourceModifyPlanSecretsHash(test *testing.T) {
 		var warnings diag.Diagnostics = modifyPlanResp.Diagnostics.Warnings()
 
 		if warned := len(warnings) == 1; warned != expected.warn || len(warnings) > 1 {
-			test.Errorf("%s: warnings = %v, want a changed secret warning %v", name, warnings, expected.warn)
+			test.Errorf("%s: warnings = %v, want a secret warning %v", name, warnings, expected.warn)
 		}
 
 		if expected.warn {

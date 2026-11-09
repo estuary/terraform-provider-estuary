@@ -171,16 +171,44 @@ func TestCodecSecretsRemoved(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	if removed := codec.secrets.removed(unset, state); len(removed) != 1 || !removed[0].Equal(testPasswordPath) {
-		test.Errorf("unset password: removed = %v, want the password", removed)
+	unknown, err := withValue(config, testPasswordPath, tftypes.UnknownValue)
+
+	if err != nil {
+		test.Fatal(err)
 	}
 
-	if removed := codec.secrets.removed(config, state); len(removed) != 0 {
-		test.Errorf("set password: removed = %v, want none", removed)
+	unknownParent, err := withValue(config, tftypes.NewAttributePath().WithAttributeName("config"), tftypes.UnknownValue)
+
+	if err != nil {
+		test.Fatal(err)
 	}
 
-	if removed := codec.secrets.removed(unset, tftypes.NewValue(state.Type(), nil)); len(removed) != 0 {
-		test.Errorf("create: removed = %v, want none", removed)
+	var created tftypes.Value = tftypes.NewValue(state.Type(), nil)
+
+	expectations := map[string]struct {
+		config  tftypes.Value
+		state   tftypes.Value
+		removed bool
+		unknown bool
+	}{
+		"unset password":             {unset, state, true, false},
+		"unknown password":           {unknown, state, false, true},
+		"password in unknown config": {unknownParent, state, false, true},
+		"set password":               {config, state, false, false},
+		"unset password at create":   {unset, created, false, false},
+		"unknown password at create": {unknown, created, false, false},
+	}
+
+	for name, expected := range expectations {
+		removed, unknown := codec.secrets.removed(expected.config, expected.state)
+
+		if found := len(removed) == 1 && removed[0].Equal(testPasswordPath); found != expected.removed || len(removed) > 1 {
+			test.Errorf("%s: removed = %v, want the password %v", name, removed, expected.removed)
+		}
+
+		if found := len(unknown) == 1 && unknown[0].Equal(testPasswordPath); found != expected.unknown || len(unknown) > 1 {
+			test.Errorf("%s: unknown = %v, want the password %v", name, unknown, expected.unknown)
+		}
 	}
 }
 

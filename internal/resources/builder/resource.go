@@ -392,7 +392,6 @@ func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, impor
 // RecordsTriggers makes backfill triggers record their starting value, see bindingPairing.
 func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.Plan, config tfsdk.Config, prior *tfsdk.State, recordsTriggers bool, state *tfsdk.State) (string, diag.Diagnostics) {
 	var diagnostics diag.Diagnostics
-	var priorRaw tftypes.Value
 
 	planned, err := entryResource.codec.secrets.withConfigSecrets(plan.Raw, config.Raw)
 
@@ -401,13 +400,7 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 		return "", diagnostics
 	}
 
-	
-
-	if prior != nil {
-		priorRaw = prior.Raw
-	}
-
-	for _, secret := range entryResource.codec.secrets.unplanned(plan.Raw, config.Raw, priorRaw) {
+	for _, secret := range entryResource.codec.secrets.unplanned(plan.Raw, config.Raw) {
 		diagnostics.AddAttributeError(attributePath(secret), "Secret unset at apply",
 			attributePath(secret).String()+" was unknown at plan and resolved empty or null, which would publish the "+
 				entryResource.catalogType.name+" without it, so nothing was published. Set it, or leave it out of the "+

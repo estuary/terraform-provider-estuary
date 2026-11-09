@@ -342,9 +342,9 @@ func (secrets secrets) removed(config tftypes.Value, state tftypes.Value) []*tft
 	return removed
 }
 
-// unplanned returns the paths of the secrets unknown at plan that config resolves empty, or null while prior holds their
-// hash, as the plan couldn't warn about deleting them.
-func (secrets secrets) unplanned(plan tftypes.Value, config tftypes.Value, prior tftypes.Value) []*tftypes.AttributePath {
+// unplanned returns the paths of the secrets unknown at plan that config resolves null or empty, as the plan couldn't
+// warn about publishing without them.
+func (secrets secrets) unplanned(plan tftypes.Value, config tftypes.Value) []*tftypes.AttributePath {
 	var unplanned []*tftypes.AttributePath
 
 	tftypes.Walk(plan, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
@@ -356,17 +356,9 @@ func (secrets secrets) unplanned(plan tftypes.Value, config tftypes.Value, prior
 
 		secret, err := attributeValue(config, secretPath)
 
-		if err != nil || secret.IsNull() {
-			if stored, err := attributeValue(prior, path); err == nil && !stored.IsNull() {
-				unplanned = append(unplanned, secretPath)
-			}
-
-			return true, nil
-		}
-
 		var text string
 
-		if secret.IsKnown() && secret.As(&text) == nil && text == "" {
+		if err != nil || secret.IsNull() || (secret.IsKnown() && secret.As(&text) == nil && text == "") {
 			unplanned = append(unplanned, secretPath)
 		}
 

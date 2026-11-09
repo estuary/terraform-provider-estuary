@@ -529,12 +529,17 @@ func TestResourceUpdateRejectsUnplannedSecretRemoval(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	expectations := map[string]any{
-		"null at apply":  nil,
-		"empty at apply": "",
+	expectations := map[string]struct {
+		password any
+		stored   any
+	}{
+		"null at apply":                  {nil, stored},
+		"empty at apply":                 {"", stored},
+		"null at apply after an import":  {nil, nil},
+		"empty at apply after an import": {"", nil},
 	}
 
-	for name, password := range expectations {
+	for name, expected := range expectations {
 		var backend *testBackend = &testBackend{live: map[string]any{}}
 
 		entry := newTestCaptureEntry(backend)
@@ -548,7 +553,7 @@ func TestResourceUpdateRejectsUnplannedSecretRemoval(test *testing.T) {
 		stateValue, err := entry.codec.secrets.nullSecrets(value)
 
 		if err == nil {
-			stateValue, err = withValue(stateValue, testPasswordHashPath, stored)
+			stateValue, err = withValue(stateValue, testPasswordHashPath, expected.stored)
 		}
 
 		if err != nil {
@@ -561,7 +566,7 @@ func TestResourceUpdateRejectsUnplannedSecretRemoval(test *testing.T) {
 			test.Fatal(err)
 		}
 
-		configValue, err := withValue(value, testPasswordPath, password)
+		configValue, err := withValue(value, testPasswordPath, expected.password)
 
 		if err != nil {
 			test.Fatal(err)

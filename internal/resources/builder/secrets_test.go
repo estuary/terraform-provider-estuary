@@ -201,12 +201,6 @@ func TestCodecSecretsUnplanned(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	state, err := codec.secrets.stateHashes(config, config)
-
-	if err != nil {
-		test.Fatal(err)
-	}
-
 	unset, err := codec.secrets.nullSecrets(config)
 
 	if err != nil {
@@ -234,19 +228,16 @@ func TestCodecSecretsUnplanned(test *testing.T) {
 	expectations := map[string]struct {
 		plan    tftypes.Value
 		config  tftypes.Value
-		prior   tftypes.Value
 		flagged bool
 	}{
-		"null at apply deletes a stored secret": {unknownHash, unset, state, true},
-		"empty at apply on update":              {unknownHash, empty, state, true},
-		"empty at apply on create":              {unknownHash, empty, tftypes.Value{}, true},
-		"null at apply on create":               {unknownHash, unset, tftypes.Value{}, false},
-		"set at apply":                          {unknownHash, config, state, false},
-		"removal the plan warned about":         {nullHash, unset, state, false},
+		"null at apply":                 {unknownHash, unset, true},
+		"empty at apply":                {unknownHash, empty, true},
+		"set at apply":                  {unknownHash, config, false},
+		"removal the plan warned about": {nullHash, unset, false},
 	}
 
 	for name, expected := range expectations {
-		var unplanned []*tftypes.AttributePath = codec.secrets.unplanned(expected.plan, expected.config, expected.prior)
+		var unplanned []*tftypes.AttributePath = codec.secrets.unplanned(expected.plan, expected.config)
 
 		if expected.flagged && (len(unplanned) != 1 || !unplanned[0].Equal(testPasswordPath)) {
 			test.Errorf("%s: unplanned = %v, want the password", name, unplanned)

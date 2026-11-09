@@ -334,12 +334,13 @@ func (secrets secrets) removed(config tftypes.Value, state tftypes.Value) ([]*tf
 			return true, nil
 		}
 
-		secret, err := attributeValue(config, secretPath)
+		found, _, err := tftypes.WalkAttributePath(config, secretPath)
+		secret, isValue := found.(tftypes.Value)
 
-		if err != nil || secret.IsNull() {
-			removed = append(removed, secretPath)
-		} else if !secret.IsKnown() {
+		if isValue && !secret.IsKnown() {
 			unknown = append(unknown, secretPath)
+		} else if err != nil || !isValue || secret.IsNull() {
+			removed = append(removed, secretPath)
 		}
 
 		return true, nil

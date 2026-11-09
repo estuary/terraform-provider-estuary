@@ -177,6 +177,12 @@ func TestCodecSecretsRemoved(test *testing.T) {
 		test.Fatal(err)
 	}
 
+	unknownParent, err := withValue(config, tftypes.NewAttributePath().WithAttributeName("config"), tftypes.UnknownValue)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
 	var created tftypes.Value = tftypes.NewValue(state.Type(), nil)
 
 	expectations := map[string]struct {
@@ -187,6 +193,7 @@ func TestCodecSecretsRemoved(test *testing.T) {
 	}{
 		"unset password":             {unset, state, true, false},
 		"unknown password":           {unknown, state, false, true},
+		"password in unknown config": {unknownParent, state, false, true},
 		"set password":               {config, state, false, false},
 		"unset password at create":   {unset, created, false, false},
 		"unknown password at create": {unknown, created, false, false},

@@ -9,7 +9,7 @@ description: |-
 Connector secrets, such as `password` and `private_key`, are [write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments): Terraform sends them to Estuary but never stores them in state or shows them in plans.
 
 - State keeps a salted hash of each one, such as `config.password_hash`, so a changed secret shows as a plan warning.
-- A declared secret can't be empty. Leave an optional secret out instead: on an existing resource this deletes the published value, which the plan warns as `Secret removed`.
+- A declared secret can't be empty. Leave an optional secret out instead: on an existing resource this deletes the published value, which the plan warns as `Secret removed`. A secret unknown at plan, such as one built from another resource, that resolves empty or null fails the apply with `Secret unset at apply` and publishes nothing.
 - When a secret is changed outside Terraform, such as in the dashboard, the plan warns `Secrets changed outside Terraform` and the apply publishes your configured secrets again. To keep the new ones, set them in your configuration first.
 
 Never commit tokens or passwords. Pass them through environment variables: the provider reads `FLOW_AUTH_TOKEN`, and Terraform reads each `TF_VAR_<name>` as the variable `<name>`.

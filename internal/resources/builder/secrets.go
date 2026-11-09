@@ -342,6 +342,40 @@ func (secrets secrets) removed(config tftypes.Value, state tftypes.Value) []*tft
 	return removed
 }
 
+// unplanned returns the paths of the secrets unknown at plan that config resolves empty, or null while prior holds their
+// hash, as the plan couldn't warn about deleting them.
+func (secrets secrets) unplanned(plan tftypes.Value, config tftypes.Value, prior tftypes.Value) []*tftypes.AttributePath {
+	var unplanned []*tftypes.AttributePath
+
+	tftypes.Walk(plan, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
+		secretPath, isHash := secrets.secretPath(path)
+
+		if !isHash || current.IsKnown() {
+			return true, nil
+		}
+
+		secret, err := attributeValue(config, secretPath)
+
+		if err != nil || secret.IsNull() {
+			if stored, err := attributeValue(prior, path); err == nil && !stored.IsNull() {
+				unplanned = append(unplanned, secretPath)
+			}
+
+			return true, nil
+		}
+
+		var text string
+
+		if secret.IsKnown() && secret.As(&text) == nil && text == "" {
+			unplanned = append(unplanned, secretPath)
+		}
+
+		return true, nil
+	})
+
+	return unplanned
+}
+
 // stateHashes computes each unknown hash from the planned secret beside it, with a new salt.
 func (secrets secrets) stateHashes(plan tftypes.Value, planned tftypes.Value) (tftypes.Value, error) {
 	return tftypes.Transform(plan, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {

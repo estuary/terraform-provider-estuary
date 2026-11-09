@@ -184,6 +184,80 @@ func TestCodecSecretsRemoved(test *testing.T) {
 	}
 }
 
+func TestCodecSecretsUnplanned(test *testing.T) {
+	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	spec.Endpoint.Connector.Config.Password = "secret"
+
+	config, err := codec.Value("movies", spec)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	state, err := codec.secrets.stateHashes(config, config)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	unset, err := codec.secrets.nullSecrets(config)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	empty, err := withValue(config, testPasswordPath, "")
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	unknownHash, err := withValue(unset, testPasswordHashPath, tftypes.UnknownValue)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	nullHash, err := withValue(unset, testPasswordHashPath, nil)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	expectations := map[string]struct {
+		plan    tftypes.Value
+		config  tftypes.Value
+		prior   tftypes.Value
+		flagged bool
+	}{
+		"null at apply deletes a stored secret": {unknownHash, unset, state, true},
+		"empty at apply on update":              {unknownHash, empty, state, true},
+		"empty at apply on create":              {unknownHash, empty, tftypes.Value{}, true},
+		"null at apply on create":               {unknownHash, unset, tftypes.Value{}, false},
+		"set at apply":                          {unknownHash, config, state, false},
+		"removal the plan warned about":         {nullHash, unset, state, false},
+	}
+
+	for name, expected := range expectations {
+		var unplanned []*tftypes.AttributePath = codec.secrets.unplanned(expected.plan, expected.config, expected.prior)
+
+		if expected.flagged && (len(unplanned) != 1 || !unplanned[0].Equal(testPasswordPath)) {
+			test.Errorf("%s: unplanned = %v, want the password", name, unplanned)
+		}
+
+		if !expected.flagged && len(unplanned) != 0 {
+			test.Errorf("%s: unplanned = %v, want none", name, unplanned)
+		}
+	}
+}
+
 func TestCodecSecretPath(test *testing.T) {
 	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
 

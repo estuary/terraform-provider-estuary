@@ -517,6 +517,74 @@ func TestResourceUpdateKeepsUnchangedSecrets(test *testing.T) {
 	}
 }
 
+func TestResourceUpdateRejectsUnplannedSecretRemoval(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+	spec.Endpoint.Connector.Config.Password = "secret"
+
+	stored, err := hashSecret(spec.Endpoint.Connector.Config.Password)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	expectations := map[string]any{
+		"null at apply":  nil,
+		"empty at apply": "",
+	}
+
+	for name, password := range expectations {
+		var backend *testBackend = &testBackend{live: map[string]any{}}
+
+		entry := newTestCaptureEntry(backend)
+
+		value, err := entry.codec.Value("movies", spec)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		stateValue, err := entry.codec.secrets.nullSecrets(value)
+
+		if err == nil {
+			stateValue, err = withValue(stateValue, testPasswordHashPath, stored)
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		planValue, err := withValue(stateValue, testPasswordHashPath, tftypes.UnknownValue)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		configValue, err := withValue(value, testPasswordPath, password)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+		entry.Update(ctx, resource.UpdateRequest{
+			State:  tfsdk.State{Schema: entry.codec.Schema(), Raw: stateValue},
+			Plan:   tfsdk.Plan{Schema: entry.codec.Schema(), Raw: planValue},
+			Config: tfsdk.Config{Schema: entry.codec.Schema(), Raw: configValue},
+		}, &updateResp)
+
+		if !updateResp.Diagnostics.HasError() || !strings.Contains(updateResp.Diagnostics[0].Summary(), "Secret unset at apply") {
+			test.Errorf("%s: diagnostics = %v, want a secret unset at apply error", name, updateResp.Diagnostics)
+		}
+
+		if backend.published != nil {
+			test.Errorf("%s: published = %v, want nothing published", name, backend.published)
+		}
+	}
+}
+
 func TestResourceModifyPlanReplacesOnCatalogNameChange(test *testing.T) {
 	var ctx context.Context = context.Background()
 

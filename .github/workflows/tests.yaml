@@ -65,5 +65,7 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - uses: ./.github/actions/setup-flowctl
+
       - name: Test
         run: go test -race -count=1 ./...

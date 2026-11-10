@@ -97,6 +97,7 @@ Connectors configured the same way share one page, with examples and every attri
 - [Testing](#testing)
 - [Documentation](#documentation)
 - [Submitting Changes](#submitting-changes)
+- [Releasing](#releasing)
 
 ### Prerequisites
 
@@ -271,3 +272,20 @@ git config core.hooksPath .githooks
    - [ ] `go vet ./...` and `go test ./...` pass
    - [ ] `go generate ./...` ran, by hand or through the pre-commit hook, and its `docs/` changes are committed, and new resources have examples and a README
 4. Open the pull request against `main`.
+
+### Releasing
+
+Releases are cut by pushing a version tag on `main`. Only release maintainers can push `v*` tags.
+
+1. Pick the next [semantic version](https://semver.org), such as `v0.2.0`, and tag the `main` commit to release:
+
+   ```bash
+   git switch main
+   git pull
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+2. The push starts the `Release` workflow. Approve its run in the `release` environment, which holds the signing key.
+3. The workflow refuses tags whose commit isn't on `main`. It then builds the provider for every platform, signs the checksums with the Estuary GPG key and publishes a GitHub Release.
+4. The Terraform Registry picks up the GitHub Release within a few minutes. Terraform downloads the provider from that release, so never delete one that was published.

@@ -6,3 +6,9 @@
 /trivy.yaml                               @estuary/operations
 /.github/workflows/dependency-scan.yaml   @estuary/operations
 /.github/CODEOWNERS                       @estuary/operations
+
+# The release pipeline builds and signs the provider that the Terraform Registry
+# serves, so changes to it need operations' approval too.
+/.github/workflows/release.yaml           @estuary/operations
+/.goreleaser.yaml                         @estuary/operations
+/.github/actions/                         @estuary/operations

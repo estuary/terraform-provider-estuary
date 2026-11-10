@@ -1,0 +1,11 @@
+name: Setup flowctl
+description: Installs flowctl
+
+runs:
+  using: composite
+  steps:
+    - name: Install flowctl
+      shell: bash
+      run: |
+        sudo curl -fsSL -o /usr/local/bin/flowctl 'https://github.com/estuary/flow/releases/latest/download/flowctl-x86_64-linux'
+        sudo chmod +x /usr/local/bin/flowctl

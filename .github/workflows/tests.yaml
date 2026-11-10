@@ -1,0 +1,69 @@
+name: Go Tests
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: File changes
+    runs-on: ubuntu-24.04
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      DOCS_PATTERN: '^(docs/|templates/)|\.md$'
+    outputs:
+      has_code: ${{ steps.classifier.outputs.has_code }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: classifier
+        run: |
+          has_code=true
+
+          if files=$(git diff --name-only "$BASE_SHA...$HEAD_SHA"); then
+            if ! echo "$files" | grep -vE "$DOCS_PATTERN" | grep -q .; then
+              has_code=false
+            fi
+          fi
+
+          echo "has_code=$has_code" >> "$GITHUB_OUTPUT"
+
+  go-tests:
+    name: Go Tests
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.has_code == 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Check tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...

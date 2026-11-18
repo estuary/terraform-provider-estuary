@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -979,6 +980,75 @@ func TestPlanBindingSchemasOmitted(test *testing.T) {
 	}
 }
 
+func TestPlanBindingSchemasPairsTheMostSpecificBinding(test *testing.T) {
+	var spec MaterializationSpec[testWarehouseConfig, testSchemaResource] = MaterializationSpec[testWarehouseConfig, testSchemaResource]{
+		Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com"}}},
+		SpecOptions: materialization.SpecOptions{
+			TargetNaming: &materialization.TargetNaming{Strategy: materialization.TargetNamingMatchSourceStructure, SchemaTemplate: "raw_{{schema}}"},
+		},
+	}
+
+	entry := NewMaterialization[testWarehouseConfig, testSchemaResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testSchemaResource], MaterializationSpec[testWarehouseConfig, testSchemaResource]])
+
+	binding := func(schema string) materialization.Binding[testSchemaResource] {
+		return materialization.Binding[testSchemaResource]{
+			Resource: testSchemaResource{Table: "orders", Schema: schema},
+			Source:   materialization.BindingSource{Name: "acmeCo/sales/orders"},
+			Fields:   &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited},
+		}
+	}
+
+	value := func(bindings ...materialization.Binding[testSchemaResource]) tftypes.Value {
+		var current MaterializationSpec[testWarehouseConfig, testSchemaResource] = spec
+
+		current.Bindings = bindings
+
+		converted, err := entry.codec.Value("warehouse", current)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	var empty tftypes.Value = value()
+	var config tftypes.Value = value(binding(""), binding("custom"))
+
+	expectations := map[string]tftypes.Value{
+		"in configuration order": value(binding(""), binding("custom")),
+		"in reverse order":       value(binding("custom"), binding("")),
+	}
+
+	for name, plan := range expectations {
+		var schemas []string
+
+		planned, err := entry.catalogType.planBindings(plan, config, testPairing(test, entry.catalogType.resourcePath, plan, empty, func() (tftypes.Value, bool) { return empty, true }))
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		items, _, err := bindings(planned)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		for _, item := range items {
+			schema, _ := known[string](resourceString(item, "schema"))
+
+			schemas = append(schemas, schema)
+		}
+
+		slices.Sort(schemas)
+
+		if !reflect.DeepEqual(schemas, []string{"custom", "raw_sales"}) {
+			test.Errorf("%s: planned schemas = %q, want the configured custom kept and target_naming for the binding omitting it", name, schemas)
+		}
+	}
+}
+
 func TestWarnNamingChange(test *testing.T) {
 	var previous *materialization.TargetNaming = &materialization.TargetNaming{Strategy: materialization.TargetNamingMatchSourceStructure, SchemaTemplate: "raw_{{schema}}"}
 	var current *materialization.TargetNaming = &materialization.TargetNaming{Strategy: materialization.TargetNamingMatchSourceStructure}
@@ -1068,6 +1138,80 @@ func TestWarnMovedTables(test *testing.T) {
 
 	if diagnostics := entry.warnMovedTables(testPairing(test, entry.catalogType.resourcePath, plan, live, func() (tftypes.Value, bool) { return tftypes.Value{}, false })); len(diagnostics) != 0 {
 		test.Errorf("diagnostics with an unreadable live spec = %v, want none", diagnostics)
+	}
+}
+
+func TestValidateDuplicateResources(test *testing.T) {
+	entry := NewMaterialization[testWarehouseConfig, testWarehouseResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testWarehouseResource], MaterializationSpec[testWarehouseConfig, testWarehouseResource]])
+
+	binding := func(collection string, schema string, table string, disable bool) materialization.Binding[testWarehouseResource] {
+		return materialization.Binding[testWarehouseResource]{
+			Resource:       testWarehouseResource{Table: table, Schema: schema},
+			Source:         materialization.BindingSource{Name: "acmeCo/sales/" + collection},
+			BindingOptions: materialization.BindingOptions{Disable: disable, Fields: &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited}},
+		}
+	}
+
+	value := func(bindings ...materialization.Binding[testWarehouseResource]) tftypes.Value {
+		converted, err := entry.codec.Value("warehouse", MaterializationSpec[testWarehouseConfig, testWarehouseResource]{
+			Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com", DefaultSchema: "public"}}},
+			Bindings: bindings,
+		})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	expectations := map[string]struct {
+		plan       tftypes.Value
+		duplicates []string
+	}{
+		"two collections to one table": {
+			plan:       value(binding("orders", "raw", "orders", true), binding("orders_v2", "raw", "orders", true), binding("users", "raw", "users", false)),
+			duplicates: []string{"acmeCo/sales/orders (raw.orders)", "acmeCo/sales/orders_v2 (raw.orders)"},
+		},
+		"one collection to one table twice, one disabled": {
+			plan:       value(binding("orders", "raw", "orders", true), binding("orders", "raw", "orders", false)),
+			duplicates: []string{"acmeCo/sales/orders (raw.orders), acmeCo/sales/orders (raw.orders)"},
+		},
+		"the endpoint schema omitted": {
+			plan:       value(binding("orders", "", "orders", false), binding("orders_v2", "public", "orders", false)),
+			duplicates: []string{"acmeCo/sales/orders (public.orders)", "acmeCo/sales/orders_v2 (public.orders)"},
+		},
+		"names differing only in case": {
+			plan:       value(binding("orders", "raw", "orders", false), binding("orders_v2", "RAW", "ORDERS", false)),
+			duplicates: []string{"acmeCo/sales/orders (raw.orders)", "acmeCo/sales/orders_v2 (RAW.ORDERS)"},
+		},
+		"distinct tables": {
+			plan: value(binding("orders", "raw", "orders", false), binding("orders", "raw", "orders_history", true), binding("orders", "public", "orders", false)),
+		},
+	}
+
+	for name, expectation := range expectations {
+		diagnostics := entry.validateDuplicateResources(expectation.plan)
+
+		if expectation.duplicates == nil {
+			if len(diagnostics) != 0 {
+				test.Errorf("%s: diagnostics = %v, want none", name, diagnostics)
+			}
+
+			continue
+		}
+
+		if len(diagnostics) != 1 || !diagnostics.HasError() {
+			test.Errorf("%s: diagnostics = %v, want one error", name, diagnostics)
+
+			continue
+		}
+
+		for _, label := range expectation.duplicates {
+			if !strings.Contains(diagnostics[0].Detail(), label) {
+				test.Errorf("%s: detail = %q, want it to name %s", name, diagnostics[0].Detail(), label)
+			}
+		}
 	}
 }
 

@@ -391,6 +391,61 @@ func (entryResource *entryResource[D, S]) validateKeepUnmanagedBindings(plan tft
 	return diagnostics
 }
 
+// validateDuplicateResources rejects bindings bound to the same resource, which Estuary rejects even when disabled,
+// comparing resource paths and the keys computed from resources. It skips bindings whose resource is unknown.
+func (entryResource *entryResource[D, S]) validateDuplicateResources(plan tftypes.Value) diag.Diagnostics {
+	var diagnostics diag.Diagnostics
+	var resourcePath resourcePath = entryResource.catalogType.resourcePath
+	var exact map[string][]int = map[string][]int{}
+	var computed map[string][]int = map[string][]int{}
+	var reported map[string]bool = map[string]bool{}
+	var duplicates []string
+
+	planned, err := resourcePath.entryBindings(plan)
+
+	if err != nil {
+		return diagnostics
+	}
+
+	for index, key := range planned.keys {
+		if key.exact != "" {
+			exact[key.exact] = append(exact[key.exact], index)
+		}
+
+		if key.path != "" {
+			computed[key.path] = append(computed[key.path], index)
+		}
+	}
+
+	for _, groups := range []map[string][]int{exact, computed} {
+		for _, key := range slices.Sorted(maps.Keys(groups)) {
+			var labels []string
+
+			if len(groups[key]) < 2 {
+				continue
+			}
+
+			for _, index := range groups[key] {
+				labels = append(labels, resourcePath.bindingLabel(plan, planned.values[index]))
+			}
+
+			if line := "- " + strings.Join(labels, ", "); !reported[line] {
+				reported[line] = true
+				duplicates = append(duplicates, line)
+			}
+		}
+	}
+
+	if len(duplicates) > 0 {
+		diagnostics.AddAttributeError(path.Root(bindingsAttribute), entryResource.warningSummary("Bindings bound to the same resource", plan),
+			"Each binding of a "+entryResource.catalogType.name+" must have its own resource, but these bindings share one, "+
+				"so Estuary would reject the apply:\n\n"+strings.Join(duplicates, "\n")+"\n\nTo fix it, give each binding "+
+				"its own resource, such as another table name, or remove the extra bindings.")
+	}
+
+	return diagnostics
+}
+
 // warnUnmanagedBindingsRemoval warns about the undeclared live bindings the apply removes when keep_unmanaged_bindings
 // turns false, as state doesn't hold them for the plan to show. It skips unknown collections and unreadable live specs.
 func (entryResource *entryResource[D, S]) warnUnmanagedBindingsRemoval(pairing bindingPairing) diag.Diagnostics {

@@ -110,6 +110,15 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 		planned, err = entryResource.catalogType.planBindings(planned, modifyPlanReq.Config.Raw, pairing)
 	}
 
+	// Before the resource paths, whose dry run fails on duplicates with Estuary's error naming binding offsets.
+	if err == nil {
+		modifyPlanResp.Diagnostics.Append(entryResource.validateDuplicateResources(planned)...)
+	}
+
+	if modifyPlanResp.Diagnostics.HasError() {
+		return
+	}
+
 	if err == nil {
 		planned, err = entryResource.planResourcePaths(ctx, planned, modifyPlanReq.State.Raw)
 	}

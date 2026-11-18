@@ -600,24 +600,92 @@ func bindingIndex(items []tftypes.Value, binding tftypes.Value) int {
 	return slices.IndexFunc(items, binding.Equal)
 }
 
+// counterpartSearch pairs planned bindings with the configured bindings they derive from, see derivesFrom. Candidates
+// are the configured binding indexes, most specific first, see specificity, and pairedPlanned the planned binding
+// paired with each configured one, -1 when none.
+type counterpartSearch struct {
+	planned       []tftypes.Value
+	configured    []tftypes.Value
+	candidates    []int
+	pairedPlanned []int
+}
+
 // configuredCounterparts returns the configured binding each planned binding derives from, see derivesFrom, a zero
-// Value when none. Sets don't keep the configured order, so bindings pair by content.
+// Value when none. Sets don't keep the configured order, so bindings pair by content, the most specific configured
+// binding first. A planned binding also deriving from a less specific one, such as one omitting the schema another
+// sets, gives it up to the binding that needs it, see counterpartSearch.pair, whatever order the plan has.
 func configuredCounterparts(planned []tftypes.Value, configured []tftypes.Value) []tftypes.Value {
 	var counterparts []tftypes.Value = make([]tftypes.Value, len(planned))
-	var taken []bool = make([]bool, len(configured))
+	var specificities []int = make([]int, len(configured))
+	var search counterpartSearch = counterpartSearch{
+		planned:       planned,
+		configured:    configured,
+		candidates:    make([]int, len(configured)),
+		pairedPlanned: slices.Repeat([]int{-1}, len(configured)),
+	}
 
-	for index, binding := range planned {
-		for candidate, configuredBinding := range configured {
-			if !taken[candidate] && derivesFrom(binding, configuredBinding) {
-				counterparts[index] = configuredBinding
-				taken[candidate] = true
+	for index, binding := range configured {
+		search.candidates[index] = index
+		specificities[index] = specificity(binding)
+	}
 
-				break
-			}
+	slices.SortStableFunc(search.candidates, func(first int, second int) int {
+		return specificities[second] - specificities[first]
+	})
+
+	for index := range planned {
+		search.pair(index, make([]bool, len(configured)))
+	}
+
+	for candidate, plannedIndex := range search.pairedPlanned {
+		if plannedIndex != -1 {
+			counterparts[plannedIndex] = configured[candidate]
 		}
 	}
 
 	return counterparts
+}
+
+// pair pairs the planned binding at index with the first candidate it derives from that is free, or whose planned
+// binding pairs with another candidate instead, reporting whether it paired. Tried holds the candidates this search
+// already tried.
+func (search counterpartSearch) pair(index int, tried []bool) bool {
+	for _, candidate := range search.candidates {
+		if tried[candidate] || !derivesFrom(search.planned[index], search.configured[candidate]) {
+			continue
+		}
+
+		tried[candidate] = true
+
+		if plannedIndex := search.pairedPlanned[candidate]; plannedIndex == -1 || search.pair(plannedIndex, tried) {
+			search.pairedPlanned[candidate] = index
+
+			return true
+		}
+	}
+
+	return false
+}
+
+// specificity returns how many values a configured value sets, see derivesFrom: each known non-null value other than an
+// object counts once, and an object counts its attributes.
+func specificity(configured tftypes.Value) int {
+	var attributes map[string]tftypes.Value
+	var count int
+
+	if !configured.IsKnown() || configured.IsNull() {
+		return 0
+	}
+
+	if _, isObject := configured.Type().(tftypes.Object); !isObject || configured.As(&attributes) != nil {
+		return 1
+	}
+
+	for _, attribute := range attributes {
+		count += specificity(attribute)
+	}
+
+	return count
 }
 
 // derivesFrom reports whether planned holds every value configured sets, as plans only fill in what configurations

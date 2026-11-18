@@ -93,7 +93,7 @@ func TestPublishCaptureCommandLines(test *testing.T) {
 		"bindings": []any{map[string]any{"resource": map[string]any{"collection": "orders"}, "target": dashName}},
 	})
 
-	if err := client.PublishCapture(context.Background(), "acmeCo/source-mongodb", spec, []string{dashName}); err != nil {
+	if err := client.PublishCapture(context.Background(), "acmeCo/source-mongodb", spec, []string{dashName}, nil); err != nil {
 		test.Fatal(err)
 	}
 
@@ -128,7 +128,7 @@ func TestPublishCaptureResetsCollectionsSharingALastSegment(test *testing.T) {
 
 	test.Setenv("FLOWCTL_PULLED", pulled)
 
-	if err := client.PublishCapture(context.Background(), "acmeCo/source-mysql", spec, []string{"acmeCo/mysql/sales", "acmeCo/postgres/sales"}); err != nil {
+	if err := client.PublishCapture(context.Background(), "acmeCo/source-mysql", spec, []string{"acmeCo/mysql/sales", "acmeCo/postgres/sales"}, nil); err != nil {
 		test.Fatal(err)
 	}
 

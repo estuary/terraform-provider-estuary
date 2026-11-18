@@ -20,7 +20,8 @@ shards = {
 ```
 
 - **Unset:** Estuary manages them, and applies keep the live settings. A task disabled outside Terraform gets a plan warning.
-- **Set:** Terraform manages every shard setting. Live keys your block leaves out, such as `flags`, show as removed: declare the ones to keep.
+- **Set:** Terraform manages every shard setting except `flags`. Live keys your block leaves out show as removed: declare the ones to keep.
+- **Flags:** Estuary sets runtime flags in `flags`, such as `enable-runtime-v2`. Applies always keep the live flags your block doesn't set, which stay out of state. When a plan shows a live flag as removed, a warning says the apply keeps it. Set a flag's value in `flags` to change it.
 - **Removed:** the settings go back to Estuary, as they are live.
 - **Unknown keys** aren't checked by the plan: Estuary rejects them on apply.
 

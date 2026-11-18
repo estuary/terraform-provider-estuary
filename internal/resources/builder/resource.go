@@ -18,12 +18,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// publication is what publishing an entry does besides its spec: discover adds discovered bindings, matched
-// through identifier, and resets lists the collections it dataflow resets.
+// publication is what publishing an entry does besides its spec: allDiscovered adds every discovered binding, matched
+// through identifier, liveBindings are the live ones it replaces, and resets lists the collections it dataflow resets.
 type publication struct {
-	discover   bool
-	identifier catalog.BindingsIdentifier
-	resets     []string
+	allDiscovered bool
+	identifier    catalog.BindingsIdentifier
+	liveBindings  []any
+	resets        []string
 }
 
 // publisher publishes a catalog entry as its YAML document.
@@ -87,16 +88,17 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 
 	planned, err := entryResource.planCatalogName(planned)
 
+	// Shards go first: targets discover from the planned spec, which converts only once no computed value is unknown.
+	if err == nil {
+		planned, err = planShards(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)
+	}
+
 	if err == nil {
 		planned, err = entryResource.planTargets(ctx, planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw, readLive)
 	}
 
 	if err == nil {
 		planned, err = withBindingNames(planned)
-	}
-
-	if err == nil {
-		planned, err = planShards(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)
 	}
 
 	if err == nil {
@@ -159,6 +161,7 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 	modifyPlanResp.Diagnostics.Append(entryResource.warnBindingBackfills(pairing, readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.validateMissingBackfills(readPublication)...)
 	modifyPlanResp.Diagnostics.Append(entryResource.warnDisabledLive(modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)...)
+	modifyPlanResp.Diagnostics.Append(entryResource.warnKeptFlags(modifyPlanResp.Plan.Raw, modifyPlanReq.State.Raw)...)
 }
 
 func (entryResource *entryResource[D, S]) Create(ctx context.Context, createReq resource.CreateRequest, createResp *resource.CreateResponse) {
@@ -319,8 +322,7 @@ func (entryResource *entryResource[D, S]) Delete(ctx context.Context, deleteReq 
 }
 
 // ImportState imports by catalog name, stored with the tenant and without the connector name, or whole when
-// stripping it would address another entry. Secrets are write-only, and bindings the control plane may add stay
-// unmanaged, out of state.
+// stripping it would address another entry. Secrets are write-only, and bindings stay unmanaged, out of state.
 func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, importReq resource.ImportStateRequest, importResp *resource.ImportStateResponse) {
 	var name string = catalog.Name(importReq.ID, entryResource.connector.ConnectorName)
 
@@ -346,6 +348,9 @@ func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, impor
 
 	var live map[string]any = liveDocument(sealed)
 
+	// Shard flags stay out of state until the configuration sets them, see keepLiveFlags.
+	sealed = withoutFlags(sealed)
+
 	if _, err := decode[S](live, true); err != nil {
 		importResp.Diagnostics.AddWarning("Importing "+entryResource.catalogType.name+" "+catalogName+" without the fields the provider doesn't manage",
 			err.Error()+"\n\nThese fields aren't in the imported state. The next apply keeps them at the top level of the spec. "+
@@ -353,18 +358,17 @@ func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, impor
 				"secrets or changes the endpoint. It removes them from the bindings declared in the configuration.")
 	}
 
-	spec, err := decode[S](live, false)
+	// Bindings stay out of state: only declaring one makes Terraform manage it, see keep_unmanaged_bindings, and the
+	// import can't read the configuration. Declared bindings take over their live ones on the first apply.
+	var unbound map[string]any = maps.Clone(sealed)
+
+	delete(unbound, catalog.BindingsKey)
+
+	// liveValue reads the spec without bindings, so the live bindings the schema can't hold fail here.
+	_, err = decode[S](live, false)
 
 	if err == nil {
-		value, redactedPaths, err = entryResource.codec.liveValue(name, sealed)
-	}
-
-	if err == nil && generatesBindings(spec) {
-		var unbound map[string]any = maps.Clone(sealed)
-
-		delete(unbound, catalog.BindingsKey)
-
-		value, _, err = entryResource.codec.liveValue(name, unbound)
+		value, redactedPaths, err = entryResource.codec.liveValue(name, unbound)
 	}
 
 	if err == nil {
@@ -432,7 +436,7 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 
 	ctx = catalog.WithSecrets(ctx, entryResource.codec.secrets.values(planned)...)
 
-	var publication publication = publication{discover: prior == nil && addsNewBindings(spec)}
+	var publication publication = publication{allDiscovered: prior == nil && addsNewBindings(spec)}
 
 	publication.identifier, _ = any(spec).(catalog.BindingsIdentifier)
 
@@ -455,6 +459,8 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 		conflictHint = "\n\nAnother publication changed " + catalogName + " while this apply ran, such as a dashboard edit or " +
 			"an auto-discovery, so nothing was published: run terraform plan and apply again."
 	}
+
+	publication.liveBindings = catalog.Bindings(live)
 
 	if live != nil && len(publication.resets) == 0 && reflect.DeepEqual(document, live) {
 		tflog.Debug(ctx, "Skipping the publication, the spec is unchanged", map[string]any{"name": catalogName})

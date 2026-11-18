@@ -36,10 +36,10 @@ func (entryDataSource *entryDataSource[D, S]) Schema(_ context.Context, _ dataso
 		return
 	}
 
-	bindings, isList := entryDataSource.codec.Schema().Attributes[bindingsAttribute].(schema.ListNestedAttribute)
+	bindings, isSet := entryDataSource.codec.Schema().Attributes[bindingsAttribute].(schema.SetNestedAttribute)
 
-	if !isList {
-		schemaResp.Diagnostics.AddError("Invalid connector schema", "The "+entryDataSource.catalogType.name+" schema has no bindings list. This is a bug in the provider: please report it.")
+	if !isSet {
+		schemaResp.Diagnostics.AddError("Invalid connector schema", "The "+entryDataSource.catalogType.name+" schema has no bindings set. This is a bug in the provider: please report it.")
 		return
 	}
 

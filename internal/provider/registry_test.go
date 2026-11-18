@@ -51,6 +51,10 @@ func TestResourceAttributeDescriptions(test *testing.T) {
 					for child, childAttribute := range nested.NestedObject.Attributes {
 						pending[name+"."+child] = childAttribute
 					}
+				case schema.SetNestedAttribute:
+					for child, childAttribute := range nested.NestedObject.Attributes {
+						pending[name+"."+child] = childAttribute
+					}
 				}
 			}
 		}

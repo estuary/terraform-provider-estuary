@@ -116,7 +116,7 @@ func TestWebhookURLsForbidCredentials(test *testing.T) {
 
 	var paths []*tftypes.AttributePath = []*tftypes.AttributePath{
 		tftypes.NewAttributePath().WithAttributeName("config").WithAttributeName("address"),
-		tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(0).WithAttributeName("resource").WithAttributeName("relative_path"),
+		tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyValue(tftypes.NewValue(tftypes.String, "")).WithAttributeName("resource").WithAttributeName("relative_path"),
 	}
 
 	for _, path := range paths {

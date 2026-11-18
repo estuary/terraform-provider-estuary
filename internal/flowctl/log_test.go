@@ -95,7 +95,7 @@ func TestPublishLogsNoSecret(test *testing.T) {
 	var client *Client = fakeFlowctl(test, "#!/bin/sh\nexit 0\n")
 	var ctx context.Context = catalog.WithSecrets(tflogtest.RootLogger(context.Background(), &output), logSecrets...)
 
-	if err := client.PublishCapture(ctx, "acmeCo/capture", logSpec(), nil); err != nil {
+	if err := client.PublishCapture(ctx, "acmeCo/capture", logSpec(), nil, nil); err != nil {
 		test.Fatal(err)
 	}
 

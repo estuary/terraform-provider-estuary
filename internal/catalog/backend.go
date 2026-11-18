@@ -18,11 +18,18 @@ type Session struct {
 	Tenant  string
 }
 
+// Discovery is what a capture publication takes from discovery: the specs of those Collections Estuary doesn't have
+// yet, and every discovered binding with AllBindings.
+type Discovery struct {
+	Identifier  BindingsIdentifier
+	Collections []string
+	AllBindings bool
+}
+
 // Backend publishes, reads, deletes and discovers catalog entries by full catalog name. ResourcePaths validates a
 // materialization without publishing it and returns the resource path Estuary gives each binding, in order.
 type Backend interface {
-	PublishCapture(ctx context.Context, name string, spec CaptureSpec, resets []string) error
-	PublishDiscoveredCapture(ctx context.Context, name string, spec CaptureSpec, identifier BindingsIdentifier) error
+	PublishCapture(ctx context.Context, name string, spec CaptureSpec, resets []string, discovery *Discovery) error
 	PublishMaterialization(ctx context.Context, name string, spec MaterializationSpec) error
 	ReadSpec(ctx context.Context, name string) (map[string]any, error)
 	DeleteCatalogEntry(ctx context.Context, name string) error

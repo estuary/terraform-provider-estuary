@@ -18,7 +18,7 @@ import (
 // computedByRead reports the attributes Read and ImportState compute beside the refreshed ones, which tests check
 // apart.
 func computedByRead(path *tftypes.AttributePath) bool {
-	_, isResourcePath := bindingAttributeIndex(path, resourcePathAttribute)
+	_, isResourcePath := bindingAttributeElement(path, resourcePathAttribute)
 
 	return path.Equal(catalogNamePath) || isResourcePath
 }
@@ -426,7 +426,7 @@ func TestResourceModifyPlanWarnsAboutTakenOverBindings(test *testing.T) {
 		test.Errorf("warning = %v, want it at bindings", warnings[0])
 	}
 
-	for _, entry := range []string{"- acmeCo/users (bindings[1]): no field changes", "- acmeCo/events (bindings[3]): no field changes"} {
+	for _, entry := range []string{"- acmeCo/users (users): no field changes", "- acmeCo/events (events): no field changes"} {
 		if !strings.Contains(warnings[0].Detail(), entry) {
 			test.Errorf("warning detail = %q, want it to list %q", warnings[0].Detail(), entry)
 		}
@@ -522,7 +522,6 @@ func TestResourceModifyPlanWarnsAboutRemovedBindings(test *testing.T) {
 }
 
 func TestCodecBindingChanges(test *testing.T) {
-	var path *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(0)
 	var users capture.Binding[testResource] = capture.Binding[testResource]{Resource: testResource{Table: "users"}, Target: "acmeCo/users"}
 
 	codec, err := newCodec[captureDocument[testConfig, testResource]](testNamedConnector, captureType[testResource]())
@@ -538,11 +537,11 @@ func TestCodecBindingChanges(test *testing.T) {
 	}{
 		"same binding":            {users, users, nil},
 		"keeps the live backfill": {users, capture.Binding[testResource]{Resource: users.Resource, Target: users.Target, Backfill: 3}, nil},
-		"drops a live-only field": {users, capture.Binding[testResource]{Resource: testResource{Table: "users", Priority: 5}, Target: users.Target}, []string{"bindings[0].resource.priority: 5 -> (unset)"}},
+		"drops a live-only field": {users, capture.Binding[testResource]{Resource: testResource{Table: "users", Priority: 5}, Target: users.Target}, []string{"resource.priority: 5 -> (unset)"}},
 		"changes several fields": {
 			capture.Binding[testResource]{Resource: testResource{Table: "people", Priority: 1}, Target: users.Target, Disable: true},
 			users,
-			[]string{"bindings[0].disable: (unset) -> true", "bindings[0].resource.priority: (unset) -> 1", `bindings[0].resource.table: "users" -> "people"`},
+			[]string{"disable: (unset) -> true", "resource.priority: (unset) -> 1", `resource.table: "users" -> "people"`},
 		},
 	}
 
@@ -567,7 +566,7 @@ func TestCodecBindingChanges(test *testing.T) {
 		planned, _, _ := bindings(plannedValue)
 		live, _, _ := bindings(liveValue)
 
-		changes, err := codec.BindingChanges(path, planned[0], live[0])
+		changes, err := codec.BindingChanges(bindingPath(planned[0]), planned[0], live[0])
 
 		if err != nil || !slices.Equal(changes, expected.want) {
 			test.Errorf("%s: changes = %q (%v), want %q", name, changes, err, expected.want)
@@ -657,7 +656,7 @@ func TestResourceReadRefreshesSetShardSettings(test *testing.T) {
 
 		entry := newTestCaptureEntry(backend)
 
-		backend.live["shards"] = map[string]any{"logLevel": "info", "disable": true, "runtimeV2": true}
+		backend.live["shards"] = map[string]any{"logLevel": "info", "disable": true, "runtimeV2": true, "flags": map[string]any{"enable-runtime-v2": "true", "debug": "true"}}
 
 		state.Shards = expected.state
 		refreshed.Shards = expected.want
@@ -733,6 +732,80 @@ func TestResourceModifyPlanWarnsAboutDisabledLiveEntries(test *testing.T) {
 		if warned := len(warnings) == 1 && warnings[0].Summary() == "Disabled outside Terraform in acmeCo/movies/source-test"; warned != expected.warn || len(warnings) > 1 {
 			test.Errorf("%s: warnings = %v, want a disabled warning %v", name, warnings, expected.warn)
 		}
+	}
+}
+
+func TestResourceModifyPlanWarnsAboutKeptFlags(test *testing.T) {
+	var live catalog.Shards = catalog.Shards{"disable": false, "flags": map[string]any{"enable-runtime-v2": "true", "debug": "true"}}
+
+	expectations := map[string]struct {
+		planned catalog.Shards
+		created bool
+		want    string
+	}{
+		"lists the flags shards leave out": {catalog.Shards{"disable": true}, false, "- debug\n- enable-runtime-v2\n\n"},
+		"lists only the flags left out":    {catalog.Shards{"flags": map[string]any{"debug": "false"}}, false, "- enable-runtime-v2\n\n"},
+		"skips planned live shards":        {live, false, ""},
+		"skips an entry not created yet":   {catalog.Shards{"disable": true}, true, ""},
+	}
+
+	entry := newTestCaptureEntry(&testBackend{})
+
+	for name, expected := range expectations {
+		var stored CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var planned CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+		stored.Shards = live
+		planned.Shards = expected.planned
+
+		state, err := entry.codec.Value("movies", stored)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		plan, err := entry.codec.Value("movies", planned)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		if expected.created {
+			state = tftypes.NewValue(entry.codec.valueType, nil)
+		}
+
+		warnings := entry.warnKeptFlags(plan, state)
+
+		if expected.want == "" && len(warnings) > 0 || expected.want != "" && (len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), expected.want)) {
+			test.Errorf("%s: warnings = %v, want flags %q", name, warnings, expected.want)
+		}
+	}
+}
+
+func TestResourceImportLeavesFlagsOut(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var backend *testBackend = &testBackend{live: liveCapture()}
+
+	backend.live["shards"] = map[string]any{"disable": true, "flags": map[string]any{"enable-runtime-v2": "true"}}
+
+	entry := newTestCaptureEntry(backend)
+
+	var importResp resource.ImportStateResponse = resource.ImportStateResponse{
+		State: tfsdk.State{Schema: entry.codec.Schema(), Raw: tftypes.NewValue(entry.codec.valueType, nil)},
+	}
+
+	entry.ImportState(ctx, resource.ImportStateRequest{ID: "acmeCo/movies/source-test"}, &importResp)
+
+	if importResp.Diagnostics.HasError() {
+		test.Fatalf("import: %v", importResp.Diagnostics)
+	}
+
+	shards, _ := attributeValue(importResp.State.Raw, tftypes.NewAttributePath().WithAttributeName("shards"))
+	flags, _ := attributeValue(importResp.State.Raw, tftypes.NewAttributePath().WithAttributeName("shards").WithAttributeName("flags"))
+	disable, _ := attributeValue(importResp.State.Raw, tftypes.NewAttributePath().WithAttributeName("shards").WithAttributeName("disable"))
+
+	if shards.IsNull() || !disable.Equal(tftypes.NewValue(tftypes.Bool, true)) || (flags.Type() != nil && !flags.IsNull()) {
+		test.Errorf("imported shards = %v, want disable kept and flags left out", shards)
 	}
 }
 

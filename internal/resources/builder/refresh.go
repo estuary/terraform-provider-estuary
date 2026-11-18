@@ -16,7 +16,6 @@ import (
 // outside Terraform is no longer the one state holds. AppendUnheld appends live bindings state doesn't hold.
 func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appendUnheld bool) (tftypes.Value, error) {
 	var refreshed []tftypes.Value = []tftypes.Value{}
-	var path *tftypes.AttributePath = bindingsPath
 	var resourcePath resourcePath = codec.catalogType.resourcePath
 
 	state, err := codec.refreshManaged(tftypes.NewAttributePath(), state, live)
@@ -27,7 +26,7 @@ func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appen
 
 	stateBindings, err := resourcePath.entryBindings(state)
 
-	if err != nil || stateBindings.listType == nil {
+	if err != nil || stateBindings.setType == nil {
 		return state, err
 	}
 
@@ -45,7 +44,7 @@ func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appen
 			continue
 		}
 
-		refreshedBinding, err := codec.refreshManaged(path.WithElementKeyInt(index), binding, liveBindings.values[pairs[index]])
+		refreshedBinding, err := codec.refreshManaged(bindingPath(binding), binding, liveBindings.values[pairs[index]])
 
 		if err != nil {
 			return state, err
@@ -60,8 +59,8 @@ func (codec *Codec[D, S]) Refresh(state tftypes.Value, live tftypes.Value, appen
 		}
 	}
 
-	return withAttribute(state, path, func(tftypes.Value) tftypes.Value {
-		return tftypes.NewValue(stateBindings.listType, refreshed)
+	return withAttribute(state, bindingsPath, func(tftypes.Value) tftypes.Value {
+		return tftypes.NewValue(stateBindings.setType, refreshed)
 	})
 }
 
@@ -116,7 +115,7 @@ func (codec *Codec[D, S]) missingBindings(state tftypes.Value, live tftypes.Valu
 // refreshManaged returns the live value of every field except secrets, provider-only attributes and bindings.
 // Fields null in state stay null while live holds nothing, as Estuary fills in empty defaults.
 func (codec *Codec[D, S]) refreshManaged(path *tftypes.AttributePath, state tftypes.Value, live tftypes.Value) (tftypes.Value, error) {
-	if _, isBlock := bindingAttributeIndex(path, backfillAttribute); isBlock && live.IsNull() && !state.IsNull() && state.IsKnown() {
+	if _, isBlock := bindingAttributeElement(path, backfillAttribute); isBlock && live.IsNull() && !state.IsNull() && state.IsKnown() {
 		var nulls map[string]tftypes.Value = map[string]tftypes.Value{}
 
 		for attribute, attributeType := range state.Type().(tftypes.Object).AttributeTypes {
@@ -180,8 +179,8 @@ func (codec *Codec[D, S]) refreshManaged(path *tftypes.AttributePath, state tfty
 	return tftypes.NewValue(objectType, refreshed), nil
 }
 
-// refreshedShards returns every live shard setting, so plans show settings set outside Terraform. Zero values
-// set in state stay when live omits them.
+// refreshedShards returns every live shard setting, so plans show settings set outside Terraform, except the flags
+// state doesn't hold, which applies keep, see keepLiveFlags. Zero values set in state stay when live omits them.
 func refreshedShards(state tftypes.Value, live tftypes.Value) (tftypes.Value, error) {
 	var stateAttributes map[string]tftypes.Value
 	var refreshed map[string]tftypes.Value = map[string]tftypes.Value{}
@@ -194,6 +193,14 @@ func refreshedShards(state tftypes.Value, live tftypes.Value) (tftypes.Value, er
 	if !live.IsNull() {
 		if err := live.As(&refreshed); err != nil {
 			return state, err
+		}
+	}
+
+	if flags, isLive := refreshed[flagsAttribute]; isLive {
+		refreshed[flagsAttribute] = managedFlags(stateAttributes[flagsAttribute], flags)
+
+		if refreshed[flagsAttribute].IsNull() {
+			delete(refreshed, flagsAttribute)
 		}
 	}
 
@@ -214,6 +221,34 @@ func refreshedShards(state tftypes.Value, live tftypes.Value) (tftypes.Value, er
 	return tftypes.NewValue(tftypes.Object{AttributeTypes: attributeTypes}, refreshed), nil
 }
 
+// managedFlags returns the live shard flags state holds, null when none, and live flags it can't read as they are.
+func managedFlags(state tftypes.Value, live tftypes.Value) tftypes.Value {
+	var stateFlags, liveFlags map[string]tftypes.Value
+	var managed map[string]tftypes.Value = map[string]tftypes.Value{}
+	var attributeTypes map[string]tftypes.Type = map[string]tftypes.Type{}
+
+	if state.Type() == nil || state.IsNull() || !state.IsKnown() || live.IsNull() {
+		return tftypes.NewValue(tftypes.DynamicPseudoType, nil)
+	}
+
+	if state.As(&stateFlags) != nil || live.As(&liveFlags) != nil {
+		return live
+	}
+
+	for flag, value := range liveFlags {
+		if _, held := stateFlags[flag]; held {
+			managed[flag] = value
+			attributeTypes[flag] = value.Type()
+		}
+	}
+
+	if len(managed) == 0 {
+		return tftypes.NewValue(tftypes.DynamicPseudoType, nil)
+	}
+
+	return tftypes.NewValue(tftypes.Object{AttributeTypes: attributeTypes}, managed)
+}
+
 // planShards returns the configured shards, else the live ones in state, null for an entry not created yet.
 func planShards(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (tftypes.Value, error) {
 	var configured tftypes.Value = blockAttribute(config, shardsAttribute, tftypes.DynamicPseudoType)
@@ -232,8 +267,9 @@ func planShards(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (
 	})
 }
 
-// BindingChanges returns the "field: live -> planned" changes publishing the binding at path makes, sorted,
-// excluding secrets, hashes, provider-only attributes and the resource path, which identifies rather than configures.
+// BindingChanges returns the "field: live -> planned" changes publishing the binding at path makes, sorted, with fields
+// named from the binding, excluding secrets, hashes, provider-only attributes and the resource path, which identifies
+// rather than configures.
 func (codec *Codec[D, S]) BindingChanges(path *tftypes.AttributePath, planned tftypes.Value, live tftypes.Value) ([]string, error) {
 	var changes []string
 
@@ -243,7 +279,7 @@ func (codec *Codec[D, S]) BindingChanges(path *tftypes.AttributePath, planned tf
 }
 
 func (codec *Codec[D, S]) bindingChanges(path *tftypes.AttributePath, planned tftypes.Value, live tftypes.Value, changes *[]string) error {
-	if _, isPath := bindingAttributeIndex(path, resourcePathAttribute); isPath || codec.secrets.attribute(path) || providerOnly(path) {
+	if _, isPath := bindingAttributeElement(path, resourcePathAttribute); isPath || codec.secrets.attribute(path) || providerOnly(path) {
 		return nil
 	}
 
@@ -279,6 +315,12 @@ func (codec *Codec[D, S]) bindingChanges(path *tftypes.AttributePath, planned tf
 
 	if planned.Equal(live) || (planned.IsNull() && zeroValue(live)) || (live.IsNull() && zeroValue(planned)) {
 		return nil
+	}
+
+	var steps []tftypes.AttributePathStep = path.Steps()
+
+	if _, isBinding := bindingElement(steps); isBinding && len(steps) > 2 {
+		path = tftypes.NewAttributePathWithSteps(steps[2:])
 	}
 
 	*changes = append(*changes, fmt.Sprintf("%s: %s -> %s", attributePath(path), displayValue(live), displayValue(planned)))

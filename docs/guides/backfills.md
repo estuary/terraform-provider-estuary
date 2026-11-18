@@ -22,7 +22,8 @@ A backfill reads a binding's data again: a capture binding captures its whole re
 > **Important:** `backfill.trigger` isn't Estuary's backfill counter: each set or raise adds one to the live counter. The two never need to match.
 >
 > - Set it, or raise it, to backfill a binding Terraform already manages. Each set or raise is one backfill, even by more than one (2 → 5).
-> - Setting it in the change that adds a binding to your configuration, or that creates the capture or materialization, only records its starting value, even when Estuary already has the binding.
+> - Setting it on a binding you add to your configuration that Estuary already has, such as one added from the dashboard, backfills it as Terraform takes it over, so one apply manages and backfills it.
+> - Setting it on a binding Estuary doesn't have yet, or in the change that creates the capture or materialization, only records its starting value, as a new binding is captured or materialized from the start anyway.
 > - The first apply after an import only records the triggers in your configuration as starting values, as triggers aren't imported. Raise them afterwards to backfill. A change that requires a backfill can't be part of that first apply.
 > - It's at least 1, can't be lowered, and must be known at plan time: `timestamp()` would backfill on every apply.
 > - Removing it does nothing, and setting it again later backfills. Keep it, with the reason in a comment, so the Git history tells why each backfill happened.
@@ -38,7 +39,7 @@ A capture's `backfill.strategy` sets what setting or raising a trigger does, and
 | `strategy` | What a set or raised trigger does |
 |---|---|
 | `incremental` (default) | Captures the resource again into the existing collection. Destination tables are kept. |
-| `dataflowReset` | Resets the collection: its data is replaced by a fresh backfill from the source, its inferred schema is cleared, and every materialization of it is backfilled, truncating its destination tables. See [Dataflow reset](https://docs.estuary.dev/reference/backfilling-data/#dataflow-reset). The plan warns about every collection it resets. |
+| `dataflowReset` | Resets the collection: its data is replaced by a fresh backfill from the source and its inferred schema is cleared. See [Dataflow reset](https://docs.estuary.dev/reference/backfilling-data/#dataflow-reset). |
 
 ```hcl
 resource "estuary_source_aurora_postgres" "sales" {
@@ -57,6 +58,8 @@ resource "estuary_source_aurora_postgres" "sales" {
   ]
 }
 ```
+
+> **Note:** A dataflow reset backfills every binding of the reset collection, not only the binding whose trigger was set or raised. This includes other bindings of the same capture that share the collection, bindings of other captures that write to it, and every materialization that reads it, which truncates its destination tables. Disabled bindings are backfilled when they are enabled again. The plan warns about each collection it resets and lists the bindings of the capture that share it.
 
 ## Changes That Require a Backfill
 

@@ -22,6 +22,8 @@ const (
 	SourceNameKey   string = "name"
 	BackfillKey     string = "backfill"
 	DisableKey      string = "disable"
+	ShardsKey       string = "shards"
+	ShardFlagsKey   string = "flags"
 )
 
 // BindingCollection returns a binding document's collection: the capture target or materialization source.

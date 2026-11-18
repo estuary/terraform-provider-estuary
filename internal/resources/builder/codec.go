@@ -98,6 +98,16 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 
 	var attributes map[string]schema.Attribute = root.Attributes()
 
+	if bindings, isList := attributes[bindingsAttribute].(schema.ListNestedAttribute); isList {
+		attributes[bindingsAttribute] = schema.SetNestedAttribute{
+			Description: bindings.Description + " Their order doesn't matter, as Estuary identifies a binding by its " +
+				"resource path, so plans show only the bindings added, removed or changed.",
+			Required:     bindings.Required,
+			Optional:     bindings.Optional,
+			NestedObject: bindings.NestedObject,
+		}
+	}
+
 	if _, found := attributes[nameAttribute]; !found {
 		return nil, fmt.Errorf("building %s schema: the document has no name", connector.TypeName)
 	}
@@ -119,7 +129,7 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 		catalogType.adjustAttributes(attributes)
 	}
 
-	if bindings, isList := attributes[bindingsAttribute].(schema.ListNestedAttribute); isList {
+	if bindings, isSet := attributes[bindingsAttribute].(schema.SetNestedAttribute); isSet {
 		bindings.NestedObject.Attributes[bindingNameAttribute] = schema.StringAttribute{
 			Description: "Collection of the binding, its target in captures and its source in materializations. " +
 				"Plans always show it, identifying the changed binding.",
@@ -200,8 +210,8 @@ func (codec *Codec[D, S]) Spec(value tftypes.Value) (string, S, error) {
 	}
 
 	value, err = nullAttributes(value, func(path *tftypes.AttributePath) bool {
-		_, isName := bindingAttributeIndex(path, bindingNameAttribute)
-		_, isPath := bindingAttributeIndex(path, resourcePathAttribute)
+		_, isName := bindingAttributeElement(path, bindingNameAttribute)
+		_, isPath := bindingAttributeElement(path, resourcePathAttribute)
 
 		return isName || isPath
 	})

@@ -28,7 +28,7 @@ type captureBackfill struct {
 // captureBindingBackfill is the capture binding backfill block: raising its trigger backfills the binding.
 // Mode mirrors the resource's backfill mode, the field tagged backfill:"mode".
 type captureBindingBackfill struct {
-	Trigger  int              `yaml:"trigger,omitempty" description:"Set or raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter, or resets the collection with 'dataflowReset', leaving the counter as is. Setting it when the binding or the capture is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding."`
+	Trigger  int              `yaml:"trigger,omitempty" description:"Set or raise it to backfill the binding: capture the whole resource again. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter, or resets the collection with 'dataflowReset', leaving the counter as is. Setting it on a binding Estuary doesn't have yet, when the capture is created, or in the first apply after an import, backfills nothing, while setting it on an existing binding Terraform takes over backfills it. At least 1, can't be lowered, and can't be set or raised on a disabled binding."`
 	Strategy backfillStrategy `yaml:"strategy,omitempty" enum:"incremental,dataflowReset" description:"Overrides the backfill.strategy of the capture for this binding: 'incremental' or 'dataflowReset'. Changing it alone publishes nothing."`
 	Mode     string           `yaml:"mode,omitempty"`
 }
@@ -47,19 +47,19 @@ var backfillStrategies []backfillStrategy = []backfillStrategy{
 // MaterializationBackfill is the materialization and binding backfill block: raising its trigger backfills the binding,
 // or every enabled binding of the materialization. Not in the catalog spec.
 type MaterializationBackfill struct {
-	Trigger int `yaml:"trigger,omitempty" description:"Set or raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter. Setting it when the binding or the materialization is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding."`
+	Trigger int `yaml:"trigger,omitempty" description:"Set or raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter. Setting it on a binding Estuary doesn't have yet, when the materialization is created, or in the first apply after an import, backfills nothing, while setting it on an existing binding Terraform takes over backfills it. At least 1, can't be lowered, and can't be set or raised on a disabled binding."`
 }
 
-// backfillRequests returns the published bindings to backfill, by index, and the sorted collections to reset: those
-// of the live planned bindings setting or raising their trigger and, when the entry trigger is set or raised, of every
-// wide binding. Each binding uses its own strategy, else the entry one. A reset backfills every binding of its
-// collection, so those aren't backfilled again.
-func (pairing bindingPairing) backfillRequests(published []publishedBinding, wide []int) ([]int, []string) {
+// backfillRequests returns the published bindings to backfill and those requesting a backfill, by index, and the sorted
+// collections to reset: those of the live planned bindings setting or raising their trigger and, when the entry trigger
+// is set or raised, of every wide binding. Each binding uses its own strategy, else the entry one. A reset backfills
+// every binding of its collection, so those aren't backfilled again.
+func (pairing bindingPairing) backfillRequests(published []publishedBinding, wide []int) ([]int, []int, []string) {
 	var backfills []int
 	var resets []string
 	var requested []int
 
-	plannedBindings, priorBindings := pairing.priorCounterparts()
+	plannedBindings, priorBindings := pairing.planned.values, pairing.triggerPriors()
 
 	for index, binding := range published {
 		if binding.live != -1 && pairing.raises(binding.plannedValue(plannedBindings), binding.plannedValue(priorBindings)) {
@@ -73,7 +73,9 @@ func (pairing bindingPairing) backfillRequests(published []publishedBinding, wid
 
 	slices.Sort(requested)
 
-	for _, index := range slices.Compact(requested) {
+	requested = slices.Compact(requested)
+
+	for _, index := range requested {
 		if bindingStrategy(pairing.plan, published[index].plannedValue(plannedBindings)) == dataflowResetStrategy {
 			resets = append(resets, catalog.BindingCollection(published[index].document))
 		} else {
@@ -89,7 +91,46 @@ func (pairing bindingPairing) backfillRequests(published []publishedBinding, wid
 		return slices.Contains(resets, catalog.BindingCollection(published[index].document))
 	})
 
-	return backfills, resets
+	return backfills, requested, resets
+}
+
+// resetBackfills returns the published bindings outside requested whose collection is reset, by index: Estuary
+// backfills every binding of a reset collection, even without a set or raised trigger.
+func resetBackfills(published []publishedBinding, requested []int, resets []string) []int {
+	var backfilled []int
+
+	for index, binding := range published {
+		if !slices.Contains(requested, index) && slices.Contains(resets, catalog.BindingCollection(binding.document)) {
+			backfilled = append(backfilled, index)
+		}
+	}
+
+	return backfilled
+}
+
+// publishedLabels returns the sorted labels of the published bindings at indexes, see bindingLabel: through their live
+// binding, which holds the resource path, else their planned one.
+func (pairing bindingPairing) publishedLabels(published []publishedBinding, indexes []int) []string {
+	var labels []string
+
+	live, found := pairing.readLive()
+
+	for _, index := range indexes {
+		var binding publishedBinding = published[index]
+
+		switch {
+		case found && binding.live != -1:
+			labels = append(labels, pairing.resourcePath.bindingLabel(live.value, live.bindings.values[binding.live]))
+		case binding.planned != -1:
+			labels = append(labels, pairing.resourcePath.bindingLabel(pairing.plan, pairing.planned.values[binding.planned]))
+		default:
+			labels = append(labels, catalog.BindingCollection(binding.document))
+		}
+	}
+
+	slices.Sort(labels)
+
+	return labels
 }
 
 // entryWide returns the indexes of the published bindings a raised entry trigger backfills: those bound live.
@@ -135,45 +176,30 @@ func bindingStrategy(entry tftypes.Value, binding tftypes.Value) backfillStrateg
 	return backfillStrategy(backfillText(entry, backfillStrategyAttribute))
 }
 
-// pendingResets returns the sorted enabled planned bindings whose backfill strategy, else the entry one,
-// is dataflowReset: raising their trigger, or the entry one, resets their collections.
-func pendingResets(plan tftypes.Value) ([]string, error) {
+// pendingResets returns the sorted collections of the enabled planned bindings whose backfill strategy, else the
+// entry one, is dataflowReset and whose backfill block the plan changes, each one when it changes the entry block:
+// raising their trigger, or the entry one, resets those collections.
+func (pairing bindingPairing) pendingResets() []string {
 	var collections []string
+	var entryChanged bool = backfillDiffers(pairing.plan, pairing.state)
 
-	plannedBindings, _, err := bindings(plan)
+	plannedBindings, priorBindings := pairing.priorCounterparts()
 
-	if err != nil {
-		return nil, err
-	}
-
-	for _, binding := range plannedBindings {
+	for index, binding := range plannedBindings {
 		var collection string = bindingCollectionValue(binding)
 
-		if collection != "" && !disabled(binding) && bindingStrategy(plan, binding) == dataflowResetStrategy {
+		if collection == "" || disabled(binding) || bindingStrategy(pairing.plan, binding) != dataflowResetStrategy {
+			continue
+		}
+
+		if entryChanged || backfillDiffers(binding, priorBindings[index]) {
 			collections = append(collections, collection)
 		}
 	}
 
 	slices.Sort(collections)
 
-	return slices.Compact(collections), nil
-}
-
-// backfillChanged reports whether the plan changes the entry backfill block or that of a binding.
-func (pairing bindingPairing) backfillChanged() bool {
-	if backfillDiffers(pairing.plan, pairing.state) {
-		return true
-	}
-
-	plannedBindings, priorBindings := pairing.priorCounterparts()
-
-	for index, binding := range plannedBindings {
-		if backfillDiffers(binding, priorBindings[index]) {
-			return true
-		}
-	}
-
-	return false
+	return slices.Compact(collections)
 }
 
 // raisesTriggers reports whether the plan sets or raises the entry backfill trigger or that of a binding.
@@ -182,7 +208,7 @@ func (pairing bindingPairing) raisesTriggers() bool {
 		return true
 	}
 
-	plannedBindings, priorBindings := pairing.priorCounterparts()
+	plannedBindings, priorBindings := pairing.planned.values, pairing.triggerPriors()
 
 	for index, binding := range plannedBindings {
 		if pairing.raises(binding, priorBindings[index]) {
@@ -211,8 +237,27 @@ func (pairing bindingPairing) raises(planned tftypes.Value, prior tftypes.Value)
 	return !pairing.recordsTriggers && raisesTrigger(planned, prior)
 }
 
+// triggerPriors returns, for each planned binding, the one its backfill trigger is compared with, see raisesTrigger:
+// its state binding, else the live binding it takes over, which has no trigger, so a set one backfills it. A binding
+// Estuary doesn't have yet has none, so its trigger is its starting value. Live is only read for a set trigger.
+func (pairing bindingPairing) triggerPriors() []tftypes.Value {
+	plannedBindings, priorBindings := pairing.priorCounterparts()
+
+	for index, binding := range plannedBindings {
+		if _, set := integer(backfillSetting(binding, backfillTriggerAttribute)); paired(priorBindings[index]) || !set {
+			continue
+		}
+
+		if live, found := pairing.readLive(); found && live.lives[index] != -1 && live.managed[live.lives[index]] == -1 {
+			priorBindings[index] = live.bindings.values[live.lives[index]]
+		}
+	}
+
+	return priorBindings
+}
+
 // raisesTrigger reports whether the plan sets or raises the backfill trigger of an owner the prior holds. Without a
-// prior owner, as on a create or for a binding added to the plan, the trigger is its starting value.
+// prior owner, as on a create or for a binding Estuary doesn't have yet, the trigger is its starting value.
 func raisesTrigger(planned tftypes.Value, prior tftypes.Value) bool {
 	if prior.Type() == nil || prior.IsNull() {
 		return false
@@ -228,13 +273,13 @@ func raisesTrigger(planned tftypes.Value, prior tftypes.Value) bool {
 func validateBackfillTriggers(pairing bindingPairing, catalogType catalogType) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
 
-	plannedBindings, priorBindings := pairing.priorCounterparts()
+	plannedBindings, priorBindings := pairing.planned.values, pairing.triggerPriors()
 
 	diagnostics.Append(validateBackfillTrigger(path.Root(backfillAttribute).AtName(backfillTriggerAttribute), "the "+catalogType.name, pairing.plan, pairing.state)...)
 
 	for index, binding := range plannedBindings {
 		var collection string = bindingCollectionValue(binding)
-		var attributePath path.Path = path.Root(bindingsAttribute).AtListIndex(index).AtName(backfillAttribute).AtName(backfillTriggerAttribute)
+		var attributePath path.Path = path.Root(bindingsAttribute)
 
 		diagnostics.Append(validateBackfillTrigger(attributePath, collection, binding, priorBindings[index])...)
 
@@ -314,10 +359,8 @@ func modeBackfills(published []publishedBinding, live []any, key string) map[int
 
 // missingBackfill is a binding change the connector only accepts along with a backfill, which the plan doesn't raise.
 type missingBackfill struct {
-	binding   int      // index of the planned binding
-	attribute []string // attribute names from the binding to the changed one
-	summary   string
-	detail    string
+	summary string
+	detail  string
 }
 
 // missingModeBackfills returns the mode changes, see modeBackfills, whose binding is neither backfilled nor reset.
@@ -332,9 +375,7 @@ func missingModeBackfills(published []publishedBinding, changes map[int]string, 
 		}
 
 		missing = append(missing, missingBackfill{
-			binding:   published[index].planned,
-			attribute: []string{backfillAttribute, backfillModeAttribute},
-			summary:   "Backfill mode changed without a backfill",
+			summary: "Backfill mode changed without a backfill",
 			detail: "backfill.mode of " + collection + " changes " + changes[index] + ". The connector requires the binding " +
 				"to be backfilled when its mode changes: in the same change, set or raise its backfill.trigger, or set or raise " +
 				"the capture's, which backfills every enabled binding.",
@@ -367,9 +408,7 @@ func missingStandardUpdatesBackfills(published []publishedBinding, live []any, k
 		}
 
 		missing = append(missing, missingBackfill{
-			binding:   binding.planned,
-			attribute: []string{bindingResourceAttribute, attribute},
-			summary:   "Delta updates disabled without a backfill",
+			summary: "Delta updates disabled without a backfill",
 			detail: "resource." + attribute + " of " + collection + " is true in Estuary and false in the plan. The connector " +
 				"requires the binding to be backfilled when it switches from delta to standard updates, as the table holds several " +
 				"rows per key that standard updates can't merge: in the same change, set or raise its backfill.trigger, or set or " +

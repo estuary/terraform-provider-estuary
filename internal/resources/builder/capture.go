@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
@@ -188,9 +189,9 @@ func (captureDocument[C, R]) FromSpec(name string, spec CaptureSpec[C, R]) captu
 func adjustCaptureAttributes[R any](attributes map[string]schema.Attribute) {
 	var resource R
 
-	bindings, isList := attributes[bindingsAttribute].(schema.ListNestedAttribute)
+	bindings, isSet := attributes[bindingsAttribute].(schema.SetNestedAttribute)
 
-	if !isList {
+	if !isSet {
 		return
 	}
 
@@ -221,10 +222,39 @@ func adjustCaptureAttributes[R any](attributes map[string]schema.Attribute) {
 	attributes[bindingsAttribute] = bindings
 }
 
+// publishCapture publishes the capture, discovering it when it adds every discovered binding or targets collections
+// no live binding does, so Estuary gets the collections it doesn't have yet.
 func publishCapture(ctx context.Context, backend catalog.Backend, name string, document map[string]any, publication publication) error {
-	if publication.discover {
-		return backend.PublishDiscoveredCapture(ctx, name, catalog.RawCapture(document), publication.identifier)
+	var discovery *catalog.Discovery
+	var added []string = addedCollections(catalog.Bindings(document), publication.liveBindings)
+
+	if publication.allDiscovered || len(added) > 0 {
+		discovery = &catalog.Discovery{
+			Identifier:  publication.identifier,
+			Collections: added,
+			AllBindings: publication.allDiscovered,
+		}
 	}
 
-	return backend.PublishCapture(ctx, name, catalog.RawCapture(document), publication.resets)
+	return backend.PublishCapture(ctx, name, catalog.RawCapture(document), publication.resets, discovery)
+}
+
+// addedCollections returns the collections bindings target that no live binding does, in order.
+func addedCollections(bindings []any, live []any) []string {
+	var added []string
+	var existing []string
+
+	for _, binding := range live {
+		existing = append(existing, catalog.BindingCollection(binding))
+	}
+
+	for _, binding := range bindings {
+		var collection string = catalog.BindingCollection(binding)
+
+		if collection != "" && !slices.Contains(existing, collection) && !slices.Contains(added, collection) {
+			added = append(added, collection)
+		}
+	}
+
+	return added
 }

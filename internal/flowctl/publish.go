@@ -24,9 +24,9 @@ type collectionRename struct {
 }
 
 // withDeclaredBindings replaces discovered bindings with declared ones of the same resource, see declaredPositions,
-// keeping discovered metadata. A declared binding naming another target renames the discovered collection, see
-// renameCollections.
-func withDeclaredBindings(tree *catalogTree, name string, declared []any, identifier catalog.BindingsIdentifier) error {
+// keeping discovered metadata, and drops the others unless allBindings. A declared binding naming another target
+// renames the discovered collection, see renameCollections.
+func withDeclaredBindings(tree *catalogTree, name string, declared []any, identifier catalog.BindingsIdentifier, allBindings bool) error {
 	var capture map[string]any = tree.capture(name)
 	var renames []collectionRename
 
@@ -40,6 +40,10 @@ func withDeclaredBindings(tree *catalogTree, name string, declared []any, identi
 
 	if err != nil {
 		return err
+	}
+
+	if !allBindings {
+		dropCollections(tree, discovered, positions)
 	}
 
 	for index, binding := range declared {
@@ -63,6 +67,10 @@ func withDeclaredBindings(tree *catalogTree, name string, declared []any, identi
 		discovered[position] = binding
 	}
 
+	if !allBindings {
+		discovered = slices.Clone(declared)
+	}
+
 	capture[catalog.BindingsKey] = discovered
 
 	renameCollections(tree, renames, discovered)
@@ -70,9 +78,29 @@ func withDeclaredBindings(tree *catalogTree, name string, declared []any, identi
 	return nil
 }
 
+// dropCollections removes the collections of the discovered bindings no declared one replaces, see declaredPositions,
+// unless a replaced one shares it, so a renamed target never keeps the schema of a resource it doesn't capture.
+func dropCollections(tree *catalogTree, discovered []any, positions []int) {
+	var kept []string
+
+	for _, position := range positions {
+		if position != -1 {
+			kept = append(kept, catalog.BindingCollection(discovered[position]))
+		}
+	}
+
+	for position, binding := range discovered {
+		var collection string = catalog.BindingCollection(binding)
+
+		if collections := tree.collections(collection); collections != nil && !slices.Contains(positions, position) && !slices.Contains(kept, collection) {
+			delete(collections, collection)
+		}
+	}
+}
+
 // renameCollections defines each renamed collection under its new target, where undefined, in the file defining it, in
-// declaration order, so a target several collections are renamed to is defined by the first. It then removes each old
-// name no binding targets, as other bindings may still share it.
+// declaration order, so a target several collections are renamed to is defined by the first, without the discovered
+// publication ID. It then removes each old name no binding targets, as other bindings may still share it.
 func renameCollections(tree *catalogTree, renames []collectionRename, bindings []any) {
 	for _, rename := range renames {
 		var collections map[string]any = tree.collections(rename.previous)
@@ -84,7 +112,11 @@ func renameCollections(tree *catalogTree, renames []collectionRename, bindings [
 		var collection any = collections[rename.previous]
 
 		if object, isObject := collection.(map[string]any); isObject {
-			collection = maps.Clone(object)
+			object = maps.Clone(object)
+
+			delete(object, catalog.ExpectPubIDKey)
+
+			collection = object
 		}
 
 		collections[rename.target] = collection
@@ -340,19 +372,51 @@ func (err conflictError) Unwrap() error {
 	return err.error
 }
 
-// addDiscovered discovers every resource of the binding-less capture, then lays the declared bindings over them.
-func (client *Client) addDiscovered(ctx context.Context, directory string, name string, declared []any, identifier catalog.BindingsIdentifier) error {
+// addDiscovered discovers the binding-less capture and lays the declared bindings over it, failing on missing collections
+// discovery doesn't define. Without discovery.AllBindings, it keeps only declared bindings and missing collections.
+func (client *Client) addDiscovered(ctx context.Context, directory string, name string, declared []any, discovery catalog.Discovery, missing []string) error {
 	tree, err := client.discover(ctx, directory)
 
 	if err != nil {
 		return err
 	}
 
-	if err := withDeclaredBindings(tree, name, declared, identifier); err != nil {
+	if err := withDeclaredBindings(tree, name, declared, discovery.Identifier, discovery.AllBindings); err != nil {
+		return err
+	}
+
+	if !discovery.AllBindings {
+		keepCollections(tree, missing)
+	}
+
+	if err := requireCollections(tree, missing); err != nil {
 		return err
 	}
 
 	return tree.write()
+}
+
+// keepCollections removes every collection of the tree but names.
+func keepCollections(tree *catalogTree, names []string) {
+	for _, file := range tree.paths {
+		collections, _ := tree.files[file][collectionsKey].(map[string]any)
+
+		for collection := range collections {
+			if !slices.Contains(names, collection) {
+				delete(collections, collection)
+			}
+		}
+	}
+}
+
+// requireCollections fails on the collections of names the tree doesn't define.
+func requireCollections(tree *catalogTree, names []string) error {
+	if undefined := tree.undefinedCollections(names); len(undefined) > 0 {
+		return fmt.Errorf("discovery found no resource for the bindings targeting %s, which Estuary doesn't have yet. "+
+			"Check that their resources exist and that the capture's user can read them", strings.Join(undefined, ", "))
+	}
+
+	return nil
 }
 
 // addResetsStep returns the step adding the collections to reset, nil without any.
@@ -392,20 +456,30 @@ func (client *Client) addResets(ctx context.Context, directory string, collectio
 	})
 }
 
-// PublishCapture publishes the capture spec, dataflow resetting the resets collections.
-func (client *Client) PublishCapture(ctx context.Context, name string, spec catalog.CaptureSpec, resets []string) error {
-	files, err := captureFiles(name, spec)
+// PublishCapture publishes the capture spec, dataflow resetting the resets collections. With discovery, it discovers
+// the capture first, as the dashboard does, to define the collections Estuary doesn't have yet.
+func (client *Client) PublishCapture(ctx context.Context, name string, spec catalog.CaptureSpec, resets []string, discovery *catalog.Discovery) error {
+	var missing []string
+	var err error
+
+	if discovery != nil {
+		missing, err = client.missingCollections(ctx, discovery.Collections)
+	}
 
 	if err != nil {
 		return err
 	}
 
-	return client.publish(ctx, files, client.addResetsStep(resets))
-}
+	if discovery == nil || (!discovery.AllBindings && len(missing) == 0) {
+		files, err := captureFiles(name, spec)
 
-// PublishDiscoveredCapture publishes the capture with its discovered bindings and collections, as the dashboard does.
-// Discovery runs without the declared bindings, whose collections may not exist yet.
-func (client *Client) PublishDiscoveredCapture(ctx context.Context, name string, spec catalog.CaptureSpec, identifier catalog.BindingsIdentifier) error {
+		if err != nil {
+			return err
+		}
+
+		return client.publish(ctx, files, client.addResetsStep(resets))
+	}
+
 	document, err := utils.YAMLDocument(spec)
 
 	if err != nil {
@@ -414,6 +488,7 @@ func (client *Client) PublishDiscoveredCapture(ctx context.Context, name string,
 
 	var declared []any = catalog.Bindings(document)
 
+	// Discovery runs without the declared bindings, whose collections may not exist yet.
 	document[catalog.BindingsKey] = []any{}
 
 	files, err := captureFiles(name, catalog.RawCapture(document))
@@ -422,9 +497,36 @@ func (client *Client) PublishDiscoveredCapture(ctx context.Context, name string,
 		return err
 	}
 
+	var addResets func(ctx context.Context, directory string) error = client.addResetsStep(resets)
+
 	return client.publish(ctx, files, func(ctx context.Context, directory string) error {
-		return client.addDiscovered(ctx, directory, name, declared, identifier)
+		if err := client.addDiscovered(ctx, directory, name, declared, *discovery, missing); err != nil || addResets == nil {
+			return err
+		}
+
+		return addResets(ctx, directory)
 	})
+}
+
+// missingCollections returns the collections of names Estuary doesn't have, in order.
+func (client *Client) missingCollections(ctx context.Context, names []string) ([]string, error) {
+	var missing []string
+
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	err := inWorkspace(nil, func(directory string) error {
+		tree, err := client.pull(ctx, directory, names...)
+
+		if err == nil {
+			missing = tree.undefinedCollections(names)
+		}
+
+		return err
+	})
+
+	return missing, err
 }
 
 // PublishMaterialization publishes the materialization spec.

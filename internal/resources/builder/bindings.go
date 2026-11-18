@@ -37,11 +37,11 @@ type bindingIdentity struct {
 	path       string
 }
 
-// entryBindings are the bindings of an entry value, the key of each and their list type, nil when null.
+// entryBindings are the bindings of an entry value, the key of each and their set type, nil when null.
 type entryBindings struct {
-	values   []tftypes.Value
-	keys     []bindingKey
-	listType tftypes.Type
+	values  []tftypes.Value
+	keys    []bindingKey
+	setType tftypes.Type
 }
 
 // bindingPairing pairs the planned bindings with the state ones, which Terraform manages, and with the live ones,
@@ -239,7 +239,7 @@ func inversePairs(pairs []int, size int) []int {
 
 // entryBindings returns the bindings of an entry value, keyed.
 func (resourcePath resourcePath) entryBindings(value tftypes.Value) (entryBindings, error) {
-	items, listType, err := bindings(value)
+	items, setType, err := bindings(value)
 
 	if err != nil {
 		return entryBindings{}, err
@@ -259,9 +259,9 @@ func (resourcePath resourcePath) entryBindings(value tftypes.Value) (entryBindin
 	}
 
 	return entryBindings{
-		values:   items,
-		keys:     keys,
-		listType: listType,
+		values:  items,
+		keys:    keys,
+		setType: setType,
 	}, nil
 }
 
@@ -569,7 +569,7 @@ func addsNewBindings(spec any) bool {
 	return isAdder && adder.AddsNewBindings()
 }
 
-// bindings returns an entry's bindings and list type, nil type when null.
+// bindings returns an entry's bindings, in the order of the spec bindings, and their set type, nil type when null.
 func bindings(value tftypes.Value) ([]tftypes.Value, tftypes.Type, error) {
 	var attributes map[string]tftypes.Value
 	var items []tftypes.Value
@@ -582,17 +582,68 @@ func bindings(value tftypes.Value) ([]tftypes.Value, tftypes.Type, error) {
 		return nil, nil, err
 	}
 
-	list, found := attributes[bindingsAttribute]
+	set, found := attributes[bindingsAttribute]
 
-	if !found || list.IsNull() || !list.IsKnown() {
+	if !found || set.IsNull() || !set.IsKnown() {
 		return nil, nil, nil
 	}
 
-	if err := list.As(&items); err != nil {
+	if err := set.As(&items); err != nil {
 		return nil, nil, err
 	}
 
-	return items, list.Type(), nil
+	return items, set.Type(), nil
+}
+
+// bindingIndex returns the index of binding in items, -1 when absent. Set elements are unique, so it identifies one.
+func bindingIndex(items []tftypes.Value, binding tftypes.Value) int {
+	return slices.IndexFunc(items, binding.Equal)
+}
+
+// configuredCounterparts returns the configured binding each planned binding derives from, see derivesFrom, a zero
+// Value when none. Sets don't keep the configured order, so bindings pair by content.
+func configuredCounterparts(planned []tftypes.Value, configured []tftypes.Value) []tftypes.Value {
+	var counterparts []tftypes.Value = make([]tftypes.Value, len(planned))
+	var taken []bool = make([]bool, len(configured))
+
+	for index, binding := range planned {
+		for candidate, configuredBinding := range configured {
+			if !taken[candidate] && derivesFrom(binding, configuredBinding) {
+				counterparts[index] = configuredBinding
+				taken[candidate] = true
+
+				break
+			}
+		}
+	}
+
+	return counterparts
+}
+
+// derivesFrom reports whether planned holds every value configured sets, as plans only fill in what configurations
+// leave null or unknown.
+func derivesFrom(planned tftypes.Value, configured tftypes.Value) bool {
+	var plannedAttributes, configuredAttributes map[string]tftypes.Value
+
+	if !configured.IsKnown() || configured.IsNull() {
+		return true
+	}
+
+	if _, isObject := configured.Type().(tftypes.Object); !isObject {
+		return planned.Equal(configured)
+	}
+
+	if !planned.IsKnown() || planned.IsNull() || planned.As(&plannedAttributes) != nil || configured.As(&configuredAttributes) != nil {
+		return false
+	}
+
+	for attribute, value := range configuredAttributes {
+		if !derivesFrom(plannedAttributes[attribute], value) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // resourceString returns a string attribute of a binding resource, null when absent and unknown when the binding is.
@@ -666,7 +717,7 @@ func providerOnly(path *tftypes.AttributePath) bool {
 		bindingBackfillPath(path, backfillTriggerAttribute) || bindingBackfillPath(path, backfillStrategyAttribute)
 }
 
-// bindingBackfillPath reports whether path is bindings[index].backfill.attribute.
+// bindingBackfillPath reports whether path is bindings[binding].backfill.attribute.
 func bindingBackfillPath(path *tftypes.AttributePath, attribute string) bool {
 	var steps []tftypes.AttributePathStep = path.Steps()
 
@@ -674,34 +725,45 @@ func bindingBackfillPath(path *tftypes.AttributePath, attribute string) bool {
 		return false
 	}
 
-	_, isBlock := bindingAttributeIndex(tftypes.NewAttributePathWithSteps(steps[:3]), backfillAttribute)
+	_, isBlock := bindingAttributeElement(tftypes.NewAttributePathWithSteps(steps[:3]), backfillAttribute)
 
 	return isBlock
 }
 
-// bindingAttributeIndex returns the index of a bindings[index].attribute path, false for other paths.
-func bindingAttributeIndex(path *tftypes.AttributePath, attribute string) (int, bool) {
+// bindingAttributeElement returns the binding of a bindings[binding].attribute path, false for other paths.
+func bindingAttributeElement(path *tftypes.AttributePath, attribute string) (tftypes.Value, bool) {
 	var steps []tftypes.AttributePathStep = path.Steps()
 
-	if len(steps) != 3 || steps[0] != tftypes.AttributeName(bindingsAttribute) || steps[2] != tftypes.AttributeName(attribute) {
-		return 0, false
+	if len(steps) != 3 || steps[2] != tftypes.AttributeName(attribute) {
+		return tftypes.Value{}, false
 	}
 
-	index, isIndex := steps[1].(tftypes.ElementKeyInt)
-
-	return int(index), isIndex
+	return bindingElement(steps)
 }
 
-// bindingResourceAttributeIndex returns the binding index of a path to a binding resource attribute.
-func bindingResourceAttributeIndex(path *tftypes.AttributePath, attribute string) (int, bool) {
+// bindingResourceAttributeElement returns the binding of a path to a binding resource attribute.
+func bindingResourceAttributeElement(path *tftypes.AttributePath, attribute string) (tftypes.Value, bool) {
 	var steps []tftypes.AttributePathStep = path.Steps()
 
-	if len(steps) != 4 || steps[0] != tftypes.AttributeName(bindingsAttribute) ||
-		steps[2] != tftypes.AttributeName(bindingResourceAttribute) || steps[3] != tftypes.AttributeName(attribute) {
-		return 0, false
+	if len(steps) != 4 || steps[2] != tftypes.AttributeName(bindingResourceAttribute) || steps[3] != tftypes.AttributeName(attribute) {
+		return tftypes.Value{}, false
 	}
 
-	index, isIndex := steps[1].(tftypes.ElementKeyInt)
+	return bindingElement(steps)
+}
 
-	return int(index), isIndex
+// bindingElement returns the binding the path steps start with, false for other paths.
+func bindingElement(steps []tftypes.AttributePathStep) (tftypes.Value, bool) {
+	if len(steps) < 2 || steps[0] != tftypes.AttributeName(bindingsAttribute) {
+		return tftypes.Value{}, false
+	}
+
+	element, isElement := steps[1].(tftypes.ElementKeyValue)
+
+	return tftypes.Value(element), isElement
+}
+
+// bindingPath returns the path of binding.
+func bindingPath(binding tftypes.Value) *tftypes.AttributePath {
+	return bindingsPath.WithElementKeyValue(binding)
 }

@@ -206,6 +206,86 @@ func TestPublishCaptureDiscoversOnlyForMissingCollections(test *testing.T) {
 	}
 }
 
+func TestPublishCaptureDiscoversMissingCollectionsOfAnExistingCapture(test *testing.T) {
+	var name string = "acmeCo/mongodb/source-mongodb"
+	var missingCheck string = "[catalog][pull-specs][--name=acmeCo/mongodb/shop/users][--overwrite][--target][$WORKSPACE/flow.yaml]"
+	var discovery string = "[discover][--data-plane=ops/dp/private/acmeCo/example-data-plane][--source][$WORKSPACE/flow.yaml]"
+	var resetsPull string = "[catalog][pull-specs][--name=acmeCo/mongodb/shop/orders][--overwrite][--target][$WORKSPACE/resets/flow.yaml]"
+	var publication string = "[catalog][publish][--source][$WORKSPACE/flow.yaml][--auto-approve][--init-data-plane=ops/dp/private/acmeCo/example-data-plane]"
+
+	expectations := map[string]struct {
+		resets []string
+		calls  []string
+	}{
+		"without resets": {nil, []string{missingCheck, discovery, publication}},
+		"with resets":    {[]string{"acmeCo/mongodb/shop/orders"}, []string{missingCheck, discovery, resetsPull, publication}},
+	}
+
+	script, err := os.ReadFile(filepath.Join("testdata", "discovering-flowctl.sh"))
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	testdata, err := filepath.Abs("testdata")
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	for caseName, expected := range expectations {
+		var identifier mongodb.Spec
+
+		_, record := recordFlowctl(test)
+
+		var client *Client = fakeFlowctl(test, string(script))
+
+		client.dataPlane = "ops/dp/private/acmeCo/example-data-plane"
+
+		test.Setenv("FLOWCTL_DISCOVERED", filepath.Join(testdata, "discovered.yaml"))
+		test.Setenv("FLOWCTL_PULLED", filepath.Join(testdata, "pulled-orders.yaml"))
+
+		spec := catalog.RawCapture{
+			"endpoint": map[string]any{"connector": map[string]any{"image": "ghcr.io/estuary/source-mongodb:v3", "config": map[string]any{"address": "mongodb://db"}}},
+			"bindings": []any{
+				map[string]any{"resource": map[string]any{"database": "shop", "collection": "users"}, "target": "acmeCo/mongodb/shop/users"},
+				map[string]any{"resource": map[string]any{"database": "shop", "collection": "orders"}, "target": "acmeCo/mongodb/shop/orders"},
+			},
+		}
+
+		if err := client.PublishCapture(context.Background(), name, spec, expected.resets, &catalog.Discovery{Identifier: identifier, Collections: []string{"acmeCo/mongodb/shop/users"}}); err != nil {
+			test.Fatalf("%s: %v", caseName, err)
+		}
+
+		assertCommandLines(test, record.commandLines(test), expected.calls)
+
+		var published map[string]any = readPublished(test, record.published)
+		var bindings []any = catalog.Bindings(utils.Lookup(published, "captures", name))
+		var collections map[string]any = utils.Lookup(published, "collections")
+
+		if len(bindings) != 2 || catalog.BindingCollection(bindings[0]) != "acmeCo/mongodb/shop/users" || catalog.BindingResource(bindings[0])["_meta"] == nil ||
+			catalog.BindingCollection(bindings[1]) != "acmeCo/mongodb/shop/orders" {
+			test.Errorf("%s: published bindings = %v, want only the declared ones, with the discovered metadata", caseName, bindings)
+		}
+
+		if _, defined := collections["acmeCo/mongodb/shop/users"]; !defined || len(collections) != 1 {
+			test.Errorf("%s: published collections = %v, want only the missing acmeCo/mongodb/shop/users", caseName, collections)
+		}
+
+		if imports, _ := published["import"].([]any); len(expected.resets) == 0 && len(imports) > 0 || len(expected.resets) > 0 && (len(imports) != 1 || imports[0] != "resets/flow.yaml") {
+			test.Errorf("%s: published imports = %v, want the resets file imported only with resets", caseName, published["import"])
+		}
+
+		if len(expected.resets) == 0 {
+			continue
+		}
+
+		if reset := utils.Lookup(readPublished(test, record.resets), "collections", "acmeCo/mongodb/shop/orders"); reset["reset"] != true || reset[catalog.ExpectPubIDKey] != nil {
+			test.Errorf("%s: published resets = %v, want acmeCo/mongodb/shop/orders reset and without its publication ID", caseName, reset)
+		}
+	}
+}
+
 func TestWithDeclaredBindingsKeepsOnlyTheDeclaredOnes(test *testing.T) {
 	var identifier mongodb.Spec
 	var name string = "acmeCo/mongodb/source-mongodb"

@@ -35,6 +35,8 @@ func (entryResource *entryResource[D, S]) planTargets(ctx context.Context, plan 
 		return plan, err
 	}
 
+	// Every planned binding pairs: Terraform rejects plans changing configured values, and bindings have no write-only
+	// attributes, which plans null.
 	for index, binding := range configuredCounterparts(items, configBindings) {
 		if target := bindingAttribute(binding, bindingTargetAttribute); paired(binding) && target.IsKnown() && target.IsNull() {
 			unset[index] = true
@@ -190,11 +192,6 @@ func unresolvedTargetsError(unset map[int]bool, paths []string, resolved map[int
 
 	return fmt.Errorf("the target of %s couldn't be planned from state, the live capture or discovery, so the apply "+
 		"couldn't publish it. Set each binding's target", strings.Join(named, ", "))
-}
-
-// resourceName returns a resource path key, see resourcePathKey, as warnings show it, joined with dots.
-func resourceName(pathKey string) string {
-	return strings.ReplaceAll(pathKey, "\x00", ".")
 }
 
 // missingTargets returns the sorted unset binding indexes whose resource targets lacks, nil when none.

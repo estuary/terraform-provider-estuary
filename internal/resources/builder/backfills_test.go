@@ -580,8 +580,8 @@ func TestValidateBackfillTriggers(test *testing.T) {
 			test.Errorf("%s: errors = %v, want none", name, diagnostics)
 		}
 
-		if expected.summary != "" && (len(diagnostics) != 1 || diagnostics[0].Summary() != expected.summary) {
-			test.Errorf("%s: errors = %v, want %q", name, diagnostics, expected.summary)
+		if expected.summary != "" && (len(diagnostics) != 1 || diagnostics[0].Summary() != expected.summary || !strings.Contains(diagnostics[0].Detail(), "acmeCo/orders (orders)")) {
+			test.Errorf("%s: errors = %v, want %q naming the binding by collection and resource", name, diagnostics, expected.summary)
 		}
 	}
 }
@@ -1399,7 +1399,7 @@ func TestResourceUpdateRequiresBackfillsOfChangedModes(test *testing.T) {
 
 		diagnostics := entry.validateMissingBackfills(entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))))
 
-		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), `changes "" -> "Normal"`)) {
+		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), `backfill.mode of acmeCo/sales (public.sales) changes "" -> "Normal"`)) {
 			test.Errorf("%s: plan diagnostics = %v, want rejected %v", name, diagnostics, expected.rejected)
 		}
 

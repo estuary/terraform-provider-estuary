@@ -179,7 +179,7 @@ resource "estuary_source_aurora_mysql" "private" {
 | `image` | String | No | Connector image. Defaults to the default image of the resource, see the table above, and only its tag can change. See [Connector Versions](../../../docs/guides/task-settings.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the database for new tables and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Connection, authentication and replication settings of the database. See [`config`](#config). |
-| `bindings` | List of Objects | Yes | Captured tables, one per binding. See [`bindings`](#bindings). |
+| `bindings` | Set of Objects | Yes | Captured tables, one per binding. Their order doesn't matter, as Estuary identifies a binding by its resource path, so plans show only the bindings added, removed or changed. See [`bindings`](#bindings). |
 | `shards` | Dynamic | No | Shard settings of the capture, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../docs/guides/task-settings.md#shard-settings). |
 | `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `auto_discover`. Defaults to `true`. A provider control Estuary never sees. See [Bindings](../../../docs/guides/bindings.md). |
 | `backfill` | Object | No | Backfill control of the whole capture. See [`backfill`](#backfill). |
@@ -298,7 +298,7 @@ Backfill control of the binding. See [Backfill Control](../../../docs/guides/bac
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `trigger` | Number | No | Set or raise it to backfill the binding: capture the whole table again from the start. Setting it on a binding Estuary doesn't have yet, or in the first apply after an import, backfills nothing, while setting it on an existing binding Terraform takes over backfills it. At least 1, can't be lowered, and can't be set or raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
+| `trigger` | Number | No | Set or raise it to backfill the binding: capture the whole table again from the start. Setting it on a binding Estuary doesn't have yet, when the capture is created, or in the first apply after an import, backfills nothing, while setting it on an existing binding Terraform takes over backfills it. At least 1, can't be lowered, and can't be set or raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 | `strategy` | String | No | Overrides the capture's `backfill.strategy` for this binding: `incremental` captures again into the existing collection, `dataflowReset` resets the collection instead, backfilling its materializations and truncating their tables. Changing it alone publishes nothing. |
 | `mode` | String | No | How the table is backfilled: `Normal` emits every change right away, `Precise` holds back changes to rows the backfill hasn't reached yet, `Only Changes` skips the backfill, and `Without Primary Key` backfills tables without a primary key. Unset lets the connector choose. Changing it requires a backfill: in the same change, set or raise `trigger`, or set or raise the capture's, which backfills every enabled binding. See [Backfill Modes](https://docs.estuary.dev/reference/backfilling-data/#resource-configuration-backfill-modes). |
 

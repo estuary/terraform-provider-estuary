@@ -113,7 +113,7 @@ func captureResourcePath[R any]() (resourcePath, error) {
 		label: func(entry tftypes.Value, binding tftypes.Value) string {
 			path, _ := bindingKey(entry, binding)
 
-			return strings.ReplaceAll(path, "\x00", ".")
+			return resourceName(path)
 		},
 		declared: func(binding tftypes.Value) ([]string, bool) {
 			if !blockAttribute(binding, bindingResourceAttribute, tftypes.DynamicPseudoType).IsFullyKnown() {
@@ -122,7 +122,7 @@ func captureResourcePath[R any]() (resourcePath, error) {
 
 			path, _ := bindingKey(tftypes.Value{}, binding)
 
-			return strings.Split(path, "\x00"), path != ""
+			return strings.Split(path, resourcePathSeparator), path != ""
 		},
 	}, nil
 }

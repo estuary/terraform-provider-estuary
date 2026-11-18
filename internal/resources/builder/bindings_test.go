@@ -2,6 +2,7 @@ package builder
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
@@ -197,6 +198,110 @@ func TestPublishedBindings(test *testing.T) {
 
 	if _, err := (livePairing{}).publishedBindings([]any{plannedOrders}, nil, true); err == nil {
 		test.Error("publishedBindings of documents not matching the paired bindings returned no error")
+	}
+}
+
+func TestConfiguredCounterparts(test *testing.T) {
+	var resourceType tftypes.Object = tftypes.Object{AttributeTypes: map[string]tftypes.Type{"schema": tftypes.String, "table": tftypes.String, "delta_updates": tftypes.Bool}}
+	var bindingType tftypes.Object = tftypes.Object{AttributeTypes: map[string]tftypes.Type{"source": tftypes.String, "resource": resourceType}}
+	var unknownBinding tftypes.Value = tftypes.NewValue(bindingType, tftypes.UnknownValue)
+
+	binding := func(source any, schema any, table any, deltaUpdates any) tftypes.Value {
+		return tftypes.NewValue(bindingType, map[string]tftypes.Value{
+			"source": tftypes.NewValue(tftypes.String, source),
+			"resource": tftypes.NewValue(resourceType, map[string]tftypes.Value{
+				"schema":        tftypes.NewValue(tftypes.String, schema),
+				"table":         tftypes.NewValue(tftypes.String, table),
+				"delta_updates": tftypes.NewValue(tftypes.Bool, deltaUpdates),
+			}),
+		})
+	}
+
+	expectations := map[string]struct {
+		planned    []tftypes.Value
+		configured []tftypes.Value
+		want       []int
+	}{
+		"pairs fan-in bindings by resource": {
+			[]tftypes.Value{binding("acmeCo/orders", "public", "b", true), binding("acmeCo/orders", "public", "a", false)},
+			[]tftypes.Value{binding("acmeCo/orders", "public", "a", nil), binding("acmeCo/orders", "public", "b", nil)},
+			[]int{1, 0},
+		},
+		"pairs fan-in bindings omitting their schema": {
+			[]tftypes.Value{binding("acmeCo/orders", "raw", "a", false), binding("acmeCo/orders", "raw", "b", false)},
+			[]tftypes.Value{binding("acmeCo/orders", nil, "a", nil), binding("acmeCo/orders", nil, "b", nil)},
+			[]int{0, 1},
+		},
+		"prefers the most specific binding": {
+			[]tftypes.Value{binding("acmeCo/orders", "custom", "orders", false), binding("acmeCo/orders", "raw", "orders", false)},
+			[]tftypes.Value{binding("acmeCo/orders", nil, "orders", nil), binding("acmeCo/orders", "custom", "orders", nil)},
+			[]int{1, 0},
+		},
+		"pairs the most specific binding when several are free": {
+			[]tftypes.Value{binding("acmeCo/orders", "custom", "orders", false)},
+			[]tftypes.Value{binding("acmeCo/orders", nil, "orders", nil), binding("acmeCo/orders", "custom", "orders", nil)},
+			[]int{1},
+		},
+		"takes a binding back for the planned one needing it": {
+			[]tftypes.Value{binding("acmeCo/orders", "public", "b", false), binding("acmeCo/orders", "public", "a", false)},
+			[]tftypes.Value{binding("acmeCo/orders", "public", nil, false), binding("acmeCo/orders", nil, "b", nil)},
+			[]int{1, 0},
+		},
+		"breaks a specificity tie by what each planned binding needs": {
+			[]tftypes.Value{binding("acmeCo/orders", "public", "b", false), binding("acmeCo/orders", "public", "a", false)},
+			[]tftypes.Value{binding("acmeCo/orders", "public", nil, nil), binding("acmeCo/orders", nil, "b", nil)},
+			[]int{1, 0},
+		},
+		"pairs an unknown value with the planned binding no known one matches": {
+			[]tftypes.Value{binding("acmeCo/orders", "public", "a", false), binding("acmeCo/orders", "public", tftypes.UnknownValue, false)},
+			[]tftypes.Value{binding("acmeCo/orders", "public", tftypes.UnknownValue, nil), binding("acmeCo/orders", "public", "a", nil)},
+			[]int{1, 0},
+		},
+		"pairs an unknown binding with the planned binding no known one matches": {
+			[]tftypes.Value{binding("acmeCo/users", "public", "users", false), binding("acmeCo/orders", "public", "a", false)},
+			[]tftypes.Value{unknownBinding, binding("acmeCo/orders", "public", "a", nil)},
+			[]int{0, 1},
+		},
+		"leaves a planned binding no configured one matches unpaired": {
+			[]tftypes.Value{binding("acmeCo/users", "public", "users", false), binding("acmeCo/orders", "public", "a", false)},
+			[]tftypes.Value{binding("acmeCo/orders", "public", "a", nil)},
+			[]int{-1, 0},
+		},
+		"nothing to pair": {nil, nil, []int{}},
+	}
+
+	for name, expected := range expectations {
+		for _, plannedReversed := range []bool{false, true} {
+			for _, configuredReversed := range []bool{false, true} {
+				var planned []tftypes.Value = slices.Clone(expected.planned)
+				var configured []tftypes.Value = slices.Clone(expected.configured)
+				var got []int = make([]int, len(planned))
+
+				if plannedReversed {
+					slices.Reverse(planned)
+				}
+
+				if configuredReversed {
+					slices.Reverse(configured)
+				}
+
+				for index, counterpart := range configuredCounterparts(planned, configured) {
+					if plannedReversed {
+						index = len(planned) - 1 - index
+					}
+
+					got[index] = -1
+
+					if paired(counterpart) {
+						got[index] = slices.IndexFunc(expected.configured, counterpart.Equal)
+					}
+				}
+
+				if !reflect.DeepEqual(got, expected.want) {
+					test.Errorf("%s (planned reversed: %t, configured reversed: %t): configuredCounterparts = %v, want %v", name, plannedReversed, configuredReversed, got, expected.want)
+				}
+			}
+		}
 	}
 }
 

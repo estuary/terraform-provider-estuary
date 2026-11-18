@@ -1304,7 +1304,7 @@ func TestResourceUpdateRequiresBackfillsOfStandardSwitches(test *testing.T) {
 
 		diagnostics := entry.validateMissingBackfills(entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))))
 
-		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), "resource.delta_updates of acmeCo/sales is true in Estuary")) {
+		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), "resource.delta_updates of acmeCo/sales (sales) is true in Estuary")) {
 			test.Errorf("%s: plan diagnostics = %v, want rejected %v", name, diagnostics, expected.rejected)
 		}
 

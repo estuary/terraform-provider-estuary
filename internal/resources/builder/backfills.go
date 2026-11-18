@@ -108,29 +108,32 @@ func resetBackfills(published []publishedBinding, requested []int, resets []stri
 	return backfilled
 }
 
-// publishedLabels returns the sorted labels of the published bindings at indexes, see bindingLabel: through their live
-// binding, which holds the resource path, else their planned one.
+// publishedLabels returns the sorted labels of the published bindings at indexes, see publishedLabel.
 func (pairing bindingPairing) publishedLabels(published []publishedBinding, indexes []int) []string {
 	var labels []string
 
-	live, found := pairing.readLive()
-
 	for _, index := range indexes {
-		var binding publishedBinding = published[index]
-
-		switch {
-		case found && binding.live != -1:
-			labels = append(labels, pairing.resourcePath.bindingLabel(live.value, live.bindings.values[binding.live]))
-		case binding.planned != -1:
-			labels = append(labels, pairing.resourcePath.bindingLabel(pairing.plan, pairing.planned.values[binding.planned]))
-		default:
-			labels = append(labels, catalog.BindingCollection(binding.document))
-		}
+		labels = append(labels, pairing.publishedLabel(published[index]))
 	}
 
 	slices.Sort(labels)
 
 	return labels
+}
+
+// publishedLabel returns the label of a published binding, see bindingLabel: through its live binding, which holds the
+// resource path, else its planned one.
+func (pairing bindingPairing) publishedLabel(binding publishedBinding) string {
+	live, found := pairing.readLive()
+
+	switch {
+	case found && binding.live != -1:
+		return pairing.resourcePath.bindingLabel(live.value, live.bindings.values[binding.live])
+	case binding.planned != -1:
+		return pairing.resourcePath.bindingLabel(pairing.plan, pairing.planned.values[binding.planned])
+	default:
+		return catalog.BindingCollection(binding.document)
+	}
 }
 
 // entryWide returns the indexes of the published bindings a raised entry trigger backfills: those bound live.
@@ -278,16 +281,16 @@ func validateBackfillTriggers(pairing bindingPairing, catalogType catalogType) d
 	diagnostics.Append(validateBackfillTrigger(path.Root(backfillAttribute).AtName(backfillTriggerAttribute), "the "+catalogType.name, pairing.plan, pairing.state)...)
 
 	for index, binding := range plannedBindings {
-		var collection string = bindingCollectionValue(binding)
+		var label string = pairing.resourcePath.bindingLabel(pairing.plan, binding)
 		var attributePath path.Path = path.Root(bindingsAttribute)
 
-		diagnostics.Append(validateBackfillTrigger(attributePath, collection, binding, priorBindings[index])...)
+		diagnostics.Append(validateBackfillTrigger(attributePath, label, binding, priorBindings[index])...)
 
 		if disabled(binding) && pairing.raises(binding, priorBindings[index]) {
 			diagnostics.AddAttributeError(attributePath, "Backfill trigger set or raised on a disabled binding",
 				fmt.Sprintf("backfill.trigger of %s is set or raised, which backfills the binding, but the binding is disabled, so there is "+
 					"nothing to backfill. To enable and backfill it, set disable = false or remove disable in the same change. Otherwise, "+
-					"leave the trigger as it was: unset, or at its current value.", collection))
+					"leave the trigger as it was: unset, or at its current value.", label))
 		}
 	}
 
@@ -304,8 +307,8 @@ func validateBackfillTrigger(attributePath path.Path, owner string, planned tfty
 
 	if !backfillSetting(planned, backfillTriggerAttribute).IsKnown() {
 		diagnostics.AddAttributeError(attributePath, "Backfill trigger unknown at plan time",
-			"backfill.trigger must be known at plan time: write a number in the configuration or use a variable. "+
-				"A value only known at apply time, such as timestamp(), would backfill on every apply.")
+			fmt.Sprintf("backfill.trigger of %s must be known at plan time: write a number in the configuration or use a variable. "+
+				"A value only known at apply time, such as timestamp(), would backfill on every apply.", owner))
 
 		return diagnostics
 	}
@@ -318,7 +321,7 @@ func validateBackfillTrigger(attributePath path.Path, owner string, planned tfty
 
 	if trigger < 1 {
 		diagnostics.AddAttributeError(attributePath, "Invalid backfill trigger",
-			fmt.Sprintf("backfill.trigger is %d, but it must be 1 or greater.", trigger))
+			fmt.Sprintf("backfill.trigger of %s is %d, but it must be 1 or greater.", owner, trigger))
 
 		return diagnostics
 	}
@@ -364,19 +367,17 @@ type missingBackfill struct {
 }
 
 // missingModeBackfills returns the mode changes, see modeBackfills, whose binding is neither backfilled nor reset.
-func missingModeBackfills(published []publishedBinding, changes map[int]string, backfills []int, resets []string) []missingBackfill {
+func (pairing bindingPairing) missingModeBackfills(published []publishedBinding, changes map[int]string, backfills []int, resets []string) []missingBackfill {
 	var missing []missingBackfill
 
 	for _, index := range slices.Sorted(maps.Keys(changes)) {
-		var collection string = catalog.BindingCollection(published[index].document)
-
-		if slices.Contains(backfills, index) || slices.Contains(resets, collection) {
+		if slices.Contains(backfills, index) || slices.Contains(resets, catalog.BindingCollection(published[index].document)) {
 			continue
 		}
 
 		missing = append(missing, missingBackfill{
 			summary: "Backfill mode changed without a backfill",
-			detail: "backfill.mode of " + collection + " changes " + changes[index] + ". The connector requires the binding " +
+			detail: "backfill.mode of " + pairing.publishedLabel(published[index]) + " changes " + changes[index] + ". The connector requires the binding " +
 				"to be backfilled when its mode changes: in the same change, set or raise its backfill.trigger, or set or raise " +
 				"the capture's, which backfills every enabled binding.",
 		})
@@ -387,7 +388,7 @@ func missingModeBackfills(published []publishedBinding, changes map[int]string, 
 
 // missingStandardUpdatesBackfills returns the enabled planned bindings switching from live delta updates, under key, to
 // standard updates without a backfill, which the connector rejects as it can't merge the rows a key already has.
-func missingStandardUpdatesBackfills(published []publishedBinding, live []any, key string, backfills []int) []missingBackfill {
+func (pairing bindingPairing) missingStandardUpdatesBackfills(published []publishedBinding, live []any, key string, backfills []int) []missingBackfill {
 	var missing []missingBackfill
 
 	if key == "" {
@@ -398,7 +399,6 @@ func missingStandardUpdatesBackfills(published []publishedBinding, live []any, k
 
 	for index, binding := range published {
 		var liveBinding map[string]any = binding.liveBinding(live)
-		var collection string = catalog.BindingCollection(binding.document)
 
 		delta, _ := catalog.BindingResource(binding.document)[key].(bool)
 		liveDelta, _ := catalog.BindingResource(liveBinding)[key].(bool)
@@ -409,7 +409,7 @@ func missingStandardUpdatesBackfills(published []publishedBinding, live []any, k
 
 		missing = append(missing, missingBackfill{
 			summary: "Delta updates disabled without a backfill",
-			detail: "resource." + attribute + " of " + collection + " is true in Estuary and false in the plan. The connector " +
+			detail: "resource." + attribute + " of " + pairing.publishedLabel(binding) + " is true in Estuary and false in the plan. The connector " +
 				"requires the binding to be backfilled when it switches from delta to standard updates, as the table holds several " +
 				"rows per key that standard updates can't merge: in the same change, set or raise its backfill.trigger, or set or " +
 				"raise the materialization's, which backfills every enabled binding.",

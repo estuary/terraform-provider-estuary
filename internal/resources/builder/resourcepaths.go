@@ -273,9 +273,17 @@ func bindingResourcePath(binding tftypes.Value) ([]string, bool) {
 	return path, true
 }
 
-// resourcePathKey joins a resource path with NULL, which resource names can't hold, empty without one.
+// resourcePathSeparator joins the parts of a resource path key: NULL, which resource names can't hold.
+const resourcePathSeparator string = "\x00"
+
+// resourcePathKey joins a resource path with resourcePathSeparator, empty without one.
 func resourcePathKey(path []string) string {
-	return strings.Join(path, "\x00")
+	return strings.Join(path, resourcePathSeparator)
+}
+
+// resourceName returns a resource path key as warnings show it, joined with dots.
+func resourceName(pathKey string) string {
+	return strings.ReplaceAll(pathKey, resourcePathSeparator, ".")
 }
 
 // withResourcePaths returns value with the resource_path of each binding replaced by what replace returns for it, given

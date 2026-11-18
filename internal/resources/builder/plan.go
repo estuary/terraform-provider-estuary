@@ -117,8 +117,8 @@ func newPlannedPublication(planned []any, live []any, keepUnmanaged bool, pairin
 
 	var changes map[int]string = modeBackfills(publication.published, live, catalogType.backfillModeKey)
 
-	publication.missing = append(missingModeBackfills(publication.published, changes, publication.backfills, publication.resets),
-		missingStandardUpdatesBackfills(publication.published, live, catalogType.deltaUpdatesKey, publication.backfills)...)
+	publication.missing = append(pairing.missingModeBackfills(publication.published, changes, publication.backfills, publication.resets),
+		pairing.missingStandardUpdatesBackfills(publication.published, live, catalogType.deltaUpdatesKey, publication.backfills)...)
 
 	for index := range publication.missing {
 		if pairing.recordsTriggers {

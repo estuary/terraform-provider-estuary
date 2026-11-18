@@ -2,7 +2,6 @@ package builder
 
 import (
 	"errors"
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -43,13 +42,51 @@ func (entryResource *entryResource[D, S]) warnDisabledLive(config tftypes.Value,
 	return diagnostics
 }
 
+// warnKeptFlags warns about the live shard flags state holds and the plan doesn't, which the plan shows as removed
+// while the apply keeps them, see keepLiveFlags.
+func (entryResource *entryResource[D, S]) warnKeptFlags(plan tftypes.Value, state tftypes.Value) diag.Diagnostics {
+	var diagnostics diag.Diagnostics
+	var stored, planned map[string]tftypes.Value
+	var kept []string
+	var storedFlags tftypes.Value = blockAttribute(blockAttribute(state, shardsAttribute, tftypes.DynamicPseudoType), flagsAttribute, tftypes.DynamicPseudoType)
+	var plannedFlags tftypes.Value = blockAttribute(blockAttribute(plan, shardsAttribute, tftypes.DynamicPseudoType), flagsAttribute, tftypes.DynamicPseudoType)
+
+	if storedFlags.IsNull() || storedFlags.As(&stored) != nil || !plannedFlags.IsKnown() {
+		return diagnostics
+	}
+
+	if !plannedFlags.IsNull() && plannedFlags.As(&planned) != nil {
+		return diagnostics
+	}
+
+	for flag := range stored {
+		if _, isPlanned := planned[flag]; !isPlanned {
+			kept = append(kept, flag)
+		}
+	}
+
+	if len(kept) == 0 {
+		return diagnostics
+	}
+
+	slices.Sort(kept)
+
+	diagnostics.AddAttributeWarning(path.Root(shardsAttribute), entryResource.warningSummary("Shard flags kept", plan),
+		"The plan shows these shard flags removed, but the apply keeps them, as Terraform never removes the flags Estuary "+
+			"runs the task with, such as enable-runtime-v2. They leave the state after the apply:\n\n- "+
+			strings.Join(kept, "\n- ")+"\n\nTo change one, set its value in shards.flags.")
+
+	return diagnostics
+}
+
 // plannedPublication is what publishing the plan does to the bindings: the published bindings, the indexes of the
-// entryWide ones and of those to backfill, the collections to reset, and the binding changes requiring a backfill no
-// backfill covers.
+// entryWide ones, of those to backfill and of those requesting a backfill, the collections to reset, and the binding
+// changes requiring a backfill no backfill covers.
 type plannedPublication struct {
 	published []publishedBinding
 	wide      []int
 	backfills []int
+	requested []int
 	resets    []string
 	missing   []missingBackfill
 }
@@ -76,12 +113,12 @@ func newPlannedPublication(planned []any, live []any, keepUnmanaged bool, pairin
 
 	publication.published = published
 	publication.wide = entryWide(publication.published)
-	publication.backfills, publication.resets = pairing.backfillRequests(publication.published, publication.wide)
+	publication.backfills, publication.requested, publication.resets = pairing.backfillRequests(publication.published, publication.wide)
 
 	var changes map[int]string = modeBackfills(publication.published, live, catalogType.backfillModeKey)
 
-	publication.missing = append(missingModeBackfills(publication.published, changes, publication.backfills, publication.resets),
-		missingStandardUpdatesBackfills(publication.published, live, catalogType.deltaUpdatesKey, publication.backfills)...)
+	publication.missing = append(pairing.missingModeBackfills(publication.published, changes, publication.backfills, publication.resets),
+		pairing.missingStandardUpdatesBackfills(publication.published, live, catalogType.deltaUpdatesKey, publication.backfills)...)
 
 	for index := range publication.missing {
 		if pairing.recordsTriggers {
@@ -155,13 +192,7 @@ func (entryResource *entryResource[D, S]) validateMissingBackfills(readPublicati
 	}
 
 	for _, change := range publication.missing {
-		var attributePath path.Path = path.Root(bindingsAttribute).AtListIndex(change.binding)
-
-		for _, name := range change.attribute {
-			attributePath = attributePath.AtName(name)
-		}
-
-		diagnostics.AddAttributeError(attributePath, change.summary, change.detail)
+		diagnostics.AddAttributeError(path.Root(bindingsAttribute), change.summary, change.detail)
 	}
 
 	return diagnostics
@@ -171,29 +202,35 @@ func (entryResource *entryResource[D, S]) validateMissingBackfills(readPublicati
 // tables. Failing to read the live bindings skips the warning.
 func (entryResource *entryResource[D, S]) warnDataflowResets(pairing bindingPairing, readPublication publicationReader) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
-	var resets []string
+	var publication plannedPublication
 	var plan tftypes.Value = pairing.plan
 
 	if pairing.raisesTriggers() {
-		publication, found := readPublication()
+		var found bool
 
-		if !found {
+		if publication, found = readPublication(); !found {
 			return diagnostics
 		}
-
-		resets = publication.resets
 	}
 
-	if len(resets) == 0 {
+	if len(publication.resets) == 0 {
 		return entryResource.warnPendingResets(pairing)
 	}
 
-	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Dataflow reset", plan),
-		entryResource.resetCause(pairing)+"\n\n- "+strings.Join(resets, "\n- ")+"\n\n"+
-			"Each collection's data is replaced by a fresh backfill from the source, and its inferred schema is cleared. Every "+
-			"materialization of these collections is backfilled too, which truncates its destination tables, and the apply fails "+
-			"if one has on_incompatible_schema_change = \"abort\". Derivations reading these collections are validated in the "+
-			"same publication, so the apply also fails if one relies on fields that only the inferred schemas had.")
+	var detail string = entryResource.resetCause(pairing) + "\n\n- " + strings.Join(publication.resets, "\n- ") + "\n\n"
+
+	if shared := resetBackfills(publication.published, publication.requested, publication.resets); len(shared) > 0 {
+		detail += "Estuary backfills every binding of a reset collection, so these bindings sharing those collections are " +
+			"backfilled too, though their trigger isn't set or raised. Disabled ones backfill once enabled:\n\n- " +
+			strings.Join(pairing.publishedLabels(publication.published, shared), "\n- ") + "\n\n"
+	}
+
+	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Dataflow reset", plan), detail+
+		"Each collection's data is replaced by a fresh backfill from the source, and its inferred schema is cleared. Every "+
+		"binding of these collections in other captures and materializations is backfilled too, which truncates the "+
+		"materializations' destination tables, and the apply fails if one has on_incompatible_schema_change = \"abort\". "+
+		"Derivations reading these collections are validated in the same publication, so the apply also fails if one relies "+
+		"on fields that only the inferred schemas had.")
 
 	return diagnostics
 }
@@ -208,7 +245,8 @@ func (entryResource *entryResource[D, S]) resetCause(pairing bindingPairing) str
 	}
 
 	return "These bindings have a set or raised backfill.trigger and use backfill.strategy = \"dataflowReset\", so the apply " +
-		"resets their collections. The other bindings of the " + entryResource.catalogType.name + " aren't backfilled:"
+		"resets their collections. The other bindings of the " + entryResource.catalogType.name + " aren't backfilled, " +
+		"unless they share a reset collection:"
 }
 
 // warnBindingBackfills warns, when the plan sets or raises binding backfill triggers but not the entry one, about every
@@ -230,8 +268,9 @@ func (entryResource *entryResource[D, S]) warnBindingBackfills(pairing bindingPa
 	diagnostics.AddAttributeWarning(path.Root(bindingsAttribute), entryResource.warningSummary("Backfill of bindings", pairing.plan),
 		"These bindings have a set or raised backfill.trigger, so the apply backfills them:\n\n- "+
 			strings.Join(bindingCollections(publication.published, publication.backfills), "\n- ")+"\n\n"+
-			"The other bindings of the "+entryResource.catalogType.name+" aren't backfilled. A trigger set on a binding Terraform "+
-			"already manages backfills it: to keep a binding as it is, leave its trigger unset.")
+			"The other bindings of the "+entryResource.catalogType.name+" aren't backfilled, unless a dataflow reset of their "+
+			"collection covers them. A trigger set on a binding Estuary already has, including one Terraform takes "+
+			"over, backfills it: to keep a binding as it is, leave its trigger unset.")
 
 	return diagnostics
 }
@@ -269,19 +308,14 @@ func (entryResource *entryResource[D, S]) warnEntryBackfill(pairing bindingPairi
 	return diagnostics
 }
 
-// warnPendingResets warns, when the plan changes a backfill block without resetting, about the bindings whose strategy
-// resolves to dataflowReset, so a later raise of a trigger doesn't reset them unnoticed.
+// warnPendingResets warns, when the plan doesn't reset, about the bindings whose backfill block it changes and whose
+// strategy resolves to dataflowReset, see pendingResets, so a later raise of a trigger doesn't reset them unnoticed.
 func (entryResource *entryResource[D, S]) warnPendingResets(pairing bindingPairing) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
 	var plan tftypes.Value = pairing.plan
+	var pending []string = pairing.pendingResets()
 
-	if !pairing.backfillChanged() {
-		return diagnostics
-	}
-
-	pending, err := pendingResets(plan)
-
-	if err != nil || len(pending) == 0 {
+	if len(pending) == 0 {
 		return diagnostics
 	}
 
@@ -353,6 +387,61 @@ func (entryResource *entryResource[D, S]) validateKeepUnmanagedBindings(plan tft
 			"To fix it, either:\n"+
 			"- remove keep_unmanaged_bindings = false, so Terraform keeps the bindings Estuary adds (the default), or\n"+
 			"- remove "+generator+", so Estuary stops adding bindings and Terraform manages them all.")
+
+	return diagnostics
+}
+
+// validateDuplicateResources rejects bindings bound to the same resource, which Estuary rejects even when disabled,
+// comparing resource paths and the keys computed from resources. It skips bindings whose resource is unknown.
+func (entryResource *entryResource[D, S]) validateDuplicateResources(plan tftypes.Value) diag.Diagnostics {
+	var diagnostics diag.Diagnostics
+	var resourcePath resourcePath = entryResource.catalogType.resourcePath
+	var exact map[string][]int = map[string][]int{}
+	var computed map[string][]int = map[string][]int{}
+	var reported map[string]bool = map[string]bool{}
+	var duplicates []string
+
+	planned, err := resourcePath.entryBindings(plan)
+
+	if err != nil {
+		return diagnostics
+	}
+
+	for index, key := range planned.keys {
+		if key.exact != "" {
+			exact[key.exact] = append(exact[key.exact], index)
+		}
+
+		if key.path != "" {
+			computed[key.path] = append(computed[key.path], index)
+		}
+	}
+
+	for _, groups := range []map[string][]int{exact, computed} {
+		for _, key := range slices.Sorted(maps.Keys(groups)) {
+			var labels []string
+
+			if len(groups[key]) < 2 {
+				continue
+			}
+
+			for _, index := range groups[key] {
+				labels = append(labels, resourcePath.bindingLabel(plan, planned.values[index]))
+			}
+
+			if line := "- " + strings.Join(labels, ", "); !reported[line] {
+				reported[line] = true
+				duplicates = append(duplicates, line)
+			}
+		}
+	}
+
+	if len(duplicates) > 0 {
+		diagnostics.AddAttributeError(path.Root(bindingsAttribute), entryResource.warningSummary("Bindings bound to the same resource", plan),
+			"Each binding of a "+entryResource.catalogType.name+" must have its own resource, but these bindings share one, "+
+				"so Estuary would reject the apply:\n\n"+strings.Join(duplicates, "\n")+"\n\nTo fix it, give each binding "+
+				"its own resource, such as another table name, or remove the extra bindings.")
+	}
 
 	return diagnostics
 }
@@ -473,8 +562,9 @@ func (entryResource *entryResource[D, S]) warnRemovedBindings(pairing bindingPai
 }
 
 // warnTakenOverBindings warns about the unmanaged live bindings the apply takes over and updates in place, listing the
-// changed fields: those a planned binding has the collection and resource path of, whether new or moved from the
-// resource it was published on, as plans show neither as a takeover. Failing to read the live spec skips the warning.
+// changed fields and set triggers: those a planned binding has the collection and resource path of, whether new or
+// moved from the resource it was published on, as plans show neither as a takeover. Failing to read the live spec
+// skips the warning.
 func (entryResource *entryResource[D, S]) warnTakenOverBindings(pairing bindingPairing) diag.Diagnostics {
 	var diagnostics diag.Diagnostics
 	var plan tftypes.Value = pairing.plan
@@ -490,24 +580,32 @@ func (entryResource *entryResource[D, S]) warnTakenOverBindings(pairing bindingP
 		return diagnostics
 	}
 
+	var triggerPriors []tftypes.Value = pairing.triggerPriors()
+
 	for index, binding := range pairing.planned.values {
-		var collection string = bindingCollectionValue(binding)
+		var label string = pairing.resourcePath.bindingLabel(plan, binding)
 		var liveIndex int = live.lives[index]
 
 		if liveIndex == -1 || live.managed[liveIndex] != -1 {
 			continue
 		}
 
-		changes, err := entryResource.codec.BindingChanges(bindingsPath.WithElementKeyInt(index), binding, live.bindings.values[liveIndex])
+		changes, err := entryResource.codec.BindingChanges(bindingPath(binding), binding, live.bindings.values[liveIndex])
 
 		if err != nil {
 			continue
 		}
 
-		var line string = fmt.Sprintf("- %s (bindings[%d]): no field changes", collection, index)
+		var line string = "- " + label + ": no field changes"
 
 		if len(changes) > 0 {
-			line = fmt.Sprintf("- %s (bindings[%d]):\n    %s", collection, index, strings.Join(changes, "\n    "))
+			line = "- " + label + ":\n    " + strings.Join(changes, "\n    ")
+		}
+
+		if raises := pairing.raises(binding, triggerPriors[index]); raises && bindingStrategy(plan, binding) == dataflowResetStrategy {
+			line += "\n    Its backfill.trigger is set and its backfill.strategy is \"dataflowReset\", so the apply resets its collection."
+		} else if raises {
+			line += "\n    Its backfill.trigger is set, so the apply backfills it."
 		}
 
 		if pairing.priors[index] != -1 {

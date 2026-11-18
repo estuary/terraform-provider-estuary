@@ -273,25 +273,35 @@ func bindingResourcePath(binding tftypes.Value) ([]string, bool) {
 	return path, true
 }
 
-// resourcePathKey joins a resource path with NULL, which resource names can't hold, empty without one.
+// resourcePathSeparator joins the parts of a resource path key: NULL, which resource names can't hold.
+const resourcePathSeparator string = "\x00"
+
+// resourcePathKey joins a resource path with resourcePathSeparator, empty without one.
 func resourcePathKey(path []string) string {
-	return strings.Join(path, "\x00")
+	return strings.Join(path, resourcePathSeparator)
+}
+
+// resourceName returns a resource path key as warnings show it, joined with dots.
+func resourceName(pathKey string) string {
+	return strings.ReplaceAll(pathKey, resourcePathSeparator, ".")
 }
 
 // withResourcePaths returns value with the resource_path of each binding replaced by what replace returns for it, given
-// the binding index and value.
+// the binding index, see bindings, and value.
 func withResourcePaths(value tftypes.Value, replace func(index int, binding tftypes.Value) tftypes.Value) (tftypes.Value, error) {
+	items, _, err := bindings(value)
+
+	if err != nil {
+		return value, err
+	}
+
 	return tftypes.Transform(value, func(path *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
 		var steps []tftypes.AttributePathStep = path.Steps()
 		var attributes map[string]tftypes.Value
 
-		if len(steps) != 2 || steps[0] != tftypes.AttributeName(bindingsAttribute) || !current.IsKnown() || current.IsNull() {
-			return current, nil
-		}
+		binding, isBinding := bindingElement(steps)
 
-		index, isIndex := steps[1].(tftypes.ElementKeyInt)
-
-		if !isIndex {
+		if len(steps) != 2 || !isBinding || !current.IsKnown() || current.IsNull() {
 			return current, nil
 		}
 
@@ -303,7 +313,7 @@ func withResourcePaths(value tftypes.Value, replace func(index int, binding tfty
 			return current, nil
 		}
 
-		attributes[resourcePathAttribute] = replace(int(index), current)
+		attributes[resourcePathAttribute] = replace(bindingIndex(items, binding), current)
 
 		return tftypes.NewValue(current.Type(), attributes), nil
 	})

@@ -123,7 +123,7 @@ Consumers connect to Estuary with these settings, see each consumer's page linke
 | `target_naming` | Object | No | How Estuary names the topics of the bindings it adds. A change only names the bindings added from then on: existing ones keep their schema and table. See [`target_naming`](#target_naming). |
 | `on_incompatible_schema_change` | String | No | What an automated change, such as a capture discovery, does when it's incompatible with a materialized binding: `backfill` (default) backfills the affected bindings, `disableBinding` disables them, `disableTask` disables the materialization, and `abort` stops the automated change. Bindings can override it. See [Schema Evolution](https://docs.estuary.dev/concepts/advanced/evolutions/#what-do-schema-evolutions-do). |
 | `config` | Object | Yes | Authentication and topic settings Kafka consumers see. See [`config`](#config). |
-| `bindings` | List of Objects | Yes | Materialized collections, one topic per binding. See [`bindings`](#bindings). |
+| `bindings` | Set of Objects | Yes | Materialized collections, one topic per binding. Their order doesn't matter, as Estuary identifies a binding by its resource path, so plans show only the bindings added, removed or changed. See [`bindings`](#bindings). |
 | `backfill` | Object | No | Backfill control of the whole materialization. See [`backfill`](#backfill). |
 | `shards` | Dynamic | No | Shard settings of the materialization, with Estuary's own keys, e.g. `{ logLevel = "debug", disable = true }`. See [Shard Settings](../../../docs/guides/task-settings.md#shard-settings). |
 | `keep_unmanaged_bindings` | Bool | No | Leaves the live bindings your configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. `false` manages every binding, removing undeclared ones. Can't be `false` with `source.capture`. Defaults to `true`. A provider control Estuary never sees. See [Bindings](../../../docs/guides/bindings.md). |
@@ -193,7 +193,7 @@ Backfill control of the binding. See [Backfill Control](../../../docs/guides/bac
 
 | Attribute | Type | Required | Description |
 |---|---|---|---|
-| `trigger` | Number | No | Set or raise it to backfill the binding. Setting it when the binding is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
+| `trigger` | Number | No | Set or raise it to backfill the binding. Setting it on a binding Estuary doesn't have yet, when the materialization is created, or in the first apply after an import, backfills nothing, while setting it on an existing binding Terraform takes over backfills it. At least 1, can't be lowered, and can't be set or raised on a disabled binding. See [Backfill Control](../../../docs/guides/backfills.md#backfill-control). |
 
 ### `bindings.resource`
 

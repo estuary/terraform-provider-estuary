@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"gopkg.in/yaml.v3"
 )
@@ -86,19 +88,19 @@ func TestMaterializationCodecSchema(test *testing.T) {
 		"source fields_recommended":  {path.Root("source").AtName("fields_recommended"), schema.StringAttribute{}, false},
 		"target_naming strategy":     {path.Root("target_naming").AtName("strategy"), schema.StringAttribute{}, true},
 		"incompatible schema change": {path.Root("on_incompatible_schema_change"), schema.StringAttribute{}, false},
-		"bindings":                   {path.Root("bindings"), schema.ListNestedAttribute{}, true},
-		"binding source":             {path.Root("bindings").AtListIndex(0).AtName("source"), schema.StringAttribute{}, true},
-		"binding fields":             {path.Root("bindings").AtListIndex(0).AtName("fields"), schema.SingleNestedAttribute{}, false},
-		"binding fields exclude":     {path.Root("bindings").AtListIndex(0).AtName("fields").AtName("exclude"), schema.ListAttribute{}, false},
-		"binding fields recommended": {path.Root("bindings").AtListIndex(0).AtName("fields").AtName("recommended"), schema.StringAttribute{}, true},
-		"binding fields group_by":    {path.Root("bindings").AtListIndex(0).AtName("fields").AtName("group_by"), schema.ListAttribute{}, false},
-		"binding not_before":         {path.Root("bindings").AtListIndex(0).AtName("not_before"), schema.StringAttribute{}, false},
-		"binding disable":            {path.Root("bindings").AtListIndex(0).AtName("disable"), schema.BoolAttribute{}, false},
-		"binding priority":           {path.Root("bindings").AtListIndex(0).AtName("priority"), schema.Int64Attribute{}, false},
-		"binding fields require":     {path.Root("bindings").AtListIndex(0).AtName("fields").AtName("require"), schema.SetAttribute{}, false},
-		"binding backfill":           {path.Root("bindings").AtListIndex(0).AtName("backfill"), schema.SingleNestedAttribute{}, false},
-		"binding backfill trigger":   {path.Root("bindings").AtListIndex(0).AtName("backfill").AtName("trigger"), schema.Int64Attribute{}, false},
-		"binding name":               {path.Root("bindings").AtListIndex(0).AtName("name"), schema.StringAttribute{}, false},
+		"bindings":                   {path.Root("bindings"), schema.SetNestedAttribute{}, true},
+		"binding source":             {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("source"), schema.StringAttribute{}, true},
+		"binding fields":             {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("fields"), schema.SingleNestedAttribute{}, false},
+		"binding fields exclude":     {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("fields").AtName("exclude"), schema.ListAttribute{}, false},
+		"binding fields recommended": {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("fields").AtName("recommended"), schema.StringAttribute{}, true},
+		"binding fields group_by":    {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("fields").AtName("group_by"), schema.ListAttribute{}, false},
+		"binding not_before":         {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("not_before"), schema.StringAttribute{}, false},
+		"binding disable":            {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("disable"), schema.BoolAttribute{}, false},
+		"binding priority":           {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("priority"), schema.Int64Attribute{}, false},
+		"binding fields require":     {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("fields").AtName("require"), schema.SetAttribute{}, false},
+		"binding backfill":           {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("backfill"), schema.SingleNestedAttribute{}, false},
+		"binding backfill trigger":   {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("backfill").AtName("trigger"), schema.Int64Attribute{}, false},
+		"binding name":               {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("name"), schema.StringAttribute{}, false},
 		"backfill":                   {path.Root("backfill"), schema.SingleNestedAttribute{}, false},
 		"backfill trigger":           {path.Root("backfill").AtName("trigger"), schema.Int64Attribute{}, false},
 	}
@@ -203,11 +205,15 @@ func TestMaterializationCodecRoundTrip(test *testing.T) {
 				test.Errorf("round trip = %s\n%s\nwant %s\n%s", roundTripName, roundTripPublished, name, published)
 			}
 
-			for index, binding := range spec.Bindings {
-				bindingName, err := attributeValue(value, tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(index).WithAttributeName("name"))
+			items, _, err := bindings(value)
 
-				if err != nil || !bindingName.Equal(tftypes.NewValue(tftypes.String, binding.Source.Name)) {
-					test.Errorf("bindings[%d].name = %v (%v), want the source %s", index, bindingName, err, binding.Source.Name)
+			if err != nil || len(items) != len(spec.Bindings) {
+				test.Fatalf("bindings = %v (%v), want %d", items, err, len(spec.Bindings))
+			}
+
+			for index, binding := range spec.Bindings {
+				if bindingName := bindingAttribute(items[index], bindingNameAttribute); !bindingName.Equal(tftypes.NewValue(tftypes.String, binding.Source.Name)) {
+					test.Errorf("bindings[%d].name = %v, want the source %s", index, bindingName, binding.Source.Name)
 				}
 			}
 		})
@@ -498,6 +504,98 @@ func TestMaterializationWarnsAboutSourceCaptureBindings(test *testing.T) {
 	}
 }
 
+func TestMaterializationImportLeavesUndeclaredBindingsUnmanaged(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var configureResp resource.ConfigureResponse
+	var sourceCapture string = "acmeCo/source-postgres"
+	var backend *testBackend = &testBackend{live: map[string]any{
+		"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
+		"source":   map[string]any{"deltaUpdates": true},
+		"bindings": []any{
+			map[string]any{"resource": map[string]any{"table": "orders", "_meta": map[string]any{"path": []any{"orders"}}}, "source": "acmeCo/orders"},
+			map[string]any{"resource": map[string]any{"table": "users", "_meta": map[string]any{"path": []any{"users"}}}, "source": "acmeCo/users"},
+		},
+	}}
+	var declared MaterializationSpec[testConfig, testResource] = MaterializationSpec[testConfig, testResource]{
+		Endpoint: endpoint.ConnectorSpec[testConfig]{Connector: endpoint.Connector[testConfig]{Image: testNamedConnector.Image, Config: testConfig{Host: "db.example.com"}}},
+		Bindings: []materialization.Binding[testResource]{{Resource: testResource{Table: "orders"}, Source: materialization.BindingSource{Name: "acmeCo/orders"}}},
+	}
+	var linked MaterializationSpec[testConfig, testResource] = declared
+
+	linked.Source = &materialization.Source{Capture: &sourceCapture}
+
+	entry := NewMaterialization[testConfig, testResource](testNamedConnector)().(*entryResource[materializationDocument[testConfig, testResource], MaterializationSpec[testConfig, testResource]])
+
+	entry.Configure(ctx, resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: backend, Tenant: "acmeCo/"}}, &configureResp)
+
+	var importResp resource.ImportStateResponse = resource.ImportStateResponse{
+		State: tfsdk.State{Schema: entry.codec.Schema(), Raw: tftypes.NewValue(entry.codec.valueType, nil)},
+	}
+
+	entry.ImportState(ctx, resource.ImportStateRequest{ID: "acmeCo/warehouse/source-test"}, &importResp)
+
+	if importResp.Diagnostics.HasError() {
+		test.Fatalf("import: %v", importResp.Diagnostics)
+	}
+
+	var imported tftypes.Value = importResp.State.Raw
+
+	if items, _, err := bindings(imported); err != nil || len(items) != 0 {
+		test.Errorf("imported bindings = %v (%v), want none without a source capture too", items, err)
+	}
+
+	linkedPlan, err := entry.codec.Value("acmeCo/warehouse", linked)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	managedPlan, err := entry.codec.Value("acmeCo/warehouse", declared)
+
+	if err == nil {
+		managedPlan, err = withValue(managedPlan, keepUnmanagedBindingsPath, false)
+	}
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var readLive liveReader = entry.newLiveReader(ctx, imported)
+
+	if warnings := entry.warnRemovedBindings(testPairing(test, entry.catalogType.resourcePath, linkedPlan, imported, readLive)); len(warnings) != 0 {
+		test.Errorf("warnings = %v, want no removed bindings when linking the source capture", warnings)
+	}
+
+	warnings := entry.warnUnmanagedBindingsRemoval(testPairing(test, entry.catalogType.resourcePath, managedPlan, imported, readLive))
+
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), "- acmeCo/users") || strings.Contains(warnings[0].Detail(), "acmeCo/orders") {
+		test.Errorf("warnings = %v, want only the undeclared users binding listed with keep_unmanaged_bindings = false", warnings)
+	}
+
+	var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+	entry.Update(ctx, resource.UpdateRequest{
+		Plan:  tfsdk.Plan{Schema: entry.codec.Schema(), Raw: linkedPlan},
+		State: tfsdk.State{Schema: entry.codec.Schema(), Raw: imported},
+	}, &updateResp)
+
+	if updateResp.Diagnostics.HasError() {
+		test.Fatalf("update: %v", updateResp.Diagnostics)
+	}
+
+	var published []string
+
+	for _, binding := range catalog.Bindings(backend.published) {
+		table, _ := catalog.BindingResource(binding)["table"].(string)
+
+		published = append(published, table)
+	}
+
+	if !reflect.DeepEqual(published, []string{"orders", "users"}) {
+		test.Errorf("published tables = %v, want orders taken over in place and the undeclared users kept", published)
+	}
+}
+
 func TestMaterializationReadShowsLostFieldDepth(test *testing.T) {
 	var ctx context.Context = context.Background()
 	var linked string = "acmeCo/source-postgres"
@@ -758,8 +856,8 @@ func TestMaterializationTakeoverWarningKeepsEstuaryFields(test *testing.T) {
 		trigger any
 		want    string
 	}{
-		"lists no change for a recorded trigger": {1, "- acmeCo/users (bindings[0]): no field changes\n"},
-		"lists no change without a trigger":      {nil, "- acmeCo/users (bindings[0]): no field changes\n"},
+		"lists no change for a recorded trigger": {1, "- acmeCo/users: no field changes\n"},
+		"lists no change without a trigger":      {nil, "- acmeCo/users: no field changes\n"},
 	} {
 		plan, err := withValue(live, bindingsPath.WithElementKeyInt(0).WithAttributeName(backfillAttribute),
 			map[string]tftypes.Value{backfillTriggerAttribute: tftypes.NewValue(tftypes.Number, expected.trigger)})
@@ -776,7 +874,7 @@ func TestMaterializationTakeoverWarningKeepsEstuaryFields(test *testing.T) {
 
 		warnings := entry.warnTakenOverBindings(testPairing(test, entry.catalogType.resourcePath, plan, state, readLive))
 
-		if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), expected.want) || strings.Contains(warnings[0].Detail(), "bindings[0].fields") {
+		if len(warnings) != 1 || !strings.Contains(warnings[0].Detail(), expected.want) || strings.Contains(warnings[0].Detail(), "    fields.") {
 			test.Errorf("%s: warnings = %v, want %q without fields", name, warnings, expected.want)
 		}
 	}
@@ -839,16 +937,19 @@ func TestPlanBindingSchemasOmitted(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	for _, index := range []int{2, 3} {
-		var unreadSchema *tftypes.AttributePath = bindingsPath.WithElementKeyInt(index).WithAttributeName(bindingResourceAttribute).WithAttributeName("schema")
+	unreadBindings, _, err := bindings(unread)
 
-		if schema, err := attributeValue(unread, unreadSchema); err != nil || schema.IsKnown() {
-			test.Errorf("planned schema of binding %d with an unreadable live spec = %v (%v), want unknown, not a target_naming one replacing the live schema", index, schema, err)
+	if err != nil || len(unreadBindings) != 5 {
+		test.Fatalf("bindings = %v (%v), want 5", unreadBindings, err)
+	}
+
+	for _, index := range []int{2, 3} {
+		if schema := resourceString(unreadBindings[index], "schema"); schema.IsKnown() {
+			test.Errorf("planned schema of binding %d with an unreadable live spec = %v, want unknown, not a target_naming one replacing the live schema", index, schema)
 		}
 	}
 
 	var sessionsSource *tftypes.AttributePath = bindingsPath.WithElementKeyInt(3).WithAttributeName(bindingSourceAttribute)
-	var sessionsSchema *tftypes.AttributePath = bindingsPath.WithElementKeyInt(3).WithAttributeName(bindingResourceAttribute).WithAttributeName("schema")
 
 	unknownConfig, err := withValue(config, sessionsSource, tftypes.UnknownValue)
 
@@ -862,14 +963,89 @@ func TestPlanBindingSchemasOmitted(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	if schema, err := attributeValue(unknownCollection, sessionsSchema); err != nil || schema.IsKnown() {
-		test.Errorf("planned schema of a binding with an unknown collection = %v (%v), want unknown", schema, err)
+	unknownBindings, _, err := bindings(unknownCollection)
+
+	if err != nil || len(unknownBindings) != 5 {
+		test.Fatalf("bindings = %v (%v), want 5", unknownBindings, err)
 	}
 
-	resource, _ := entry.codec.Schema().Attributes[bindingsAttribute].(schema.ListNestedAttribute).NestedObject.Attributes[bindingResourceAttribute].(schema.SingleNestedAttribute)
+	if schema := resourceString(unknownBindings[3], "schema"); schema.IsKnown() {
+		test.Errorf("planned schema of a binding with an unknown collection = %v, want unknown", schema)
+	}
+
+	resource, _ := entry.codec.Schema().Attributes[bindingsAttribute].(schema.SetNestedAttribute).NestedObject.Attributes[bindingResourceAttribute].(schema.SingleNestedAttribute)
 
 	if schemaName, _ := resource.Attributes["schema"].(schema.StringAttribute); !schemaName.Optional || !schemaName.Computed {
 		test.Errorf("resource schema attribute = %+v, want optional and computed", schemaName)
+	}
+}
+
+func TestPlanBindingSchemasPairsTheMostSpecificBinding(test *testing.T) {
+	var spec MaterializationSpec[testWarehouseConfig, testSchemaResource] = MaterializationSpec[testWarehouseConfig, testSchemaResource]{
+		Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com"}}},
+		SpecOptions: materialization.SpecOptions{
+			TargetNaming: &materialization.TargetNaming{Strategy: materialization.TargetNamingMatchSourceStructure, SchemaTemplate: "raw_{{schema}}"},
+		},
+	}
+
+	entry := NewMaterialization[testWarehouseConfig, testSchemaResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testSchemaResource], MaterializationSpec[testWarehouseConfig, testSchemaResource]])
+
+	binding := func(schema string) materialization.Binding[testSchemaResource] {
+		return materialization.Binding[testSchemaResource]{
+			Resource: testSchemaResource{Table: "orders", Schema: schema},
+			Source:   materialization.BindingSource{Name: "acmeCo/sales/orders"},
+			Fields:   &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited},
+		}
+	}
+
+	value := func(bindings ...materialization.Binding[testSchemaResource]) tftypes.Value {
+		var current MaterializationSpec[testWarehouseConfig, testSchemaResource] = spec
+
+		current.Bindings = bindings
+
+		converted, err := entry.codec.Value("warehouse", current)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	var empty tftypes.Value = value()
+	var config tftypes.Value = value(binding(""), binding("custom"))
+
+	expectations := map[string]tftypes.Value{
+		"in configuration order": value(binding(""), binding("custom")),
+		"in reverse order":       value(binding("custom"), binding("")),
+	}
+
+	for name, plan := range expectations {
+		var schemas []string
+
+		planned, err := entry.catalogType.planBindings(plan, config, testPairing(test, entry.catalogType.resourcePath, plan, empty, func() (tftypes.Value, bool) { return empty, true }))
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		items, _, err := bindings(planned)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		for _, item := range items {
+			schema, _ := known[string](resourceString(item, "schema"))
+
+			schemas = append(schemas, schema)
+		}
+
+		slices.Sort(schemas)
+
+		if !reflect.DeepEqual(schemas, []string{"custom", "raw_sales"}) {
+			test.Errorf("%s: planned schemas = %q, want the configured custom kept and target_naming for the binding omitting it", name, schemas)
+		}
 	}
 }
 
@@ -965,6 +1141,80 @@ func TestWarnMovedTables(test *testing.T) {
 	}
 }
 
+func TestValidateDuplicateResources(test *testing.T) {
+	entry := NewMaterialization[testWarehouseConfig, testWarehouseResource](testNamedConnector)().(*entryResource[materializationDocument[testWarehouseConfig, testWarehouseResource], MaterializationSpec[testWarehouseConfig, testWarehouseResource]])
+
+	binding := func(collection string, schema string, table string, disable bool) materialization.Binding[testWarehouseResource] {
+		return materialization.Binding[testWarehouseResource]{
+			Resource:       testWarehouseResource{Table: table, Schema: schema},
+			Source:         materialization.BindingSource{Name: "acmeCo/sales/" + collection},
+			BindingOptions: materialization.BindingOptions{Disable: disable, Fields: &materialization.BindingFields{Recommended: materialization.FieldDepthUnlimited}},
+		}
+	}
+
+	value := func(bindings ...materialization.Binding[testWarehouseResource]) tftypes.Value {
+		converted, err := entry.codec.Value("warehouse", MaterializationSpec[testWarehouseConfig, testWarehouseResource]{
+			Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com", DefaultSchema: "public"}}},
+			Bindings: bindings,
+		})
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		return converted
+	}
+
+	expectations := map[string]struct {
+		plan       tftypes.Value
+		duplicates []string
+	}{
+		"two collections to one table": {
+			plan:       value(binding("orders", "raw", "orders", true), binding("orders_v2", "raw", "orders", true), binding("users", "raw", "users", false)),
+			duplicates: []string{"acmeCo/sales/orders (raw.orders)", "acmeCo/sales/orders_v2 (raw.orders)"},
+		},
+		"one collection to one table twice, one disabled": {
+			plan:       value(binding("orders", "raw", "orders", true), binding("orders", "raw", "orders", false)),
+			duplicates: []string{"acmeCo/sales/orders (raw.orders), acmeCo/sales/orders (raw.orders)"},
+		},
+		"the endpoint schema omitted": {
+			plan:       value(binding("orders", "", "orders", false), binding("orders_v2", "public", "orders", false)),
+			duplicates: []string{"acmeCo/sales/orders (public.orders)", "acmeCo/sales/orders_v2 (public.orders)"},
+		},
+		"names differing only in case": {
+			plan:       value(binding("orders", "raw", "orders", false), binding("orders_v2", "RAW", "ORDERS", false)),
+			duplicates: []string{"acmeCo/sales/orders (raw.orders)", "acmeCo/sales/orders_v2 (RAW.ORDERS)"},
+		},
+		"distinct tables": {
+			plan: value(binding("orders", "raw", "orders", false), binding("orders", "raw", "orders_history", true), binding("orders", "public", "orders", false)),
+		},
+	}
+
+	for name, expectation := range expectations {
+		diagnostics := entry.validateDuplicateResources(expectation.plan)
+
+		if expectation.duplicates == nil {
+			if len(diagnostics) != 0 {
+				test.Errorf("%s: diagnostics = %v, want none", name, diagnostics)
+			}
+
+			continue
+		}
+
+		if len(diagnostics) != 1 || !diagnostics.HasError() {
+			test.Errorf("%s: diagnostics = %v, want one error", name, diagnostics)
+
+			continue
+		}
+
+		for _, label := range expectation.duplicates {
+			if !strings.Contains(diagnostics[0].Detail(), label) {
+				test.Errorf("%s: detail = %q, want it to name %s", name, diagnostics[0].Detail(), label)
+			}
+		}
+	}
+}
+
 func TestSchemaNameRequiresDefaultNamespace(test *testing.T) {
 	if _, err := newCodec[materializationDocument[testConfig, testSchemaResource]](testNamedConnector, materializationType[testConfig, testSchemaResource]()); err == nil || !strings.Contains(err.Error(), "x-default-namespace") {
 		test.Errorf("codec of a schema resource without a default namespace config = %v, want an x-default-namespace error", err)
@@ -1054,15 +1304,15 @@ func TestResourceUpdateRequiresBackfillsOfStandardSwitches(test *testing.T) {
 
 		diagnostics := entry.validateMissingBackfills(entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))))
 
-		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), "resource.delta_updates of acmeCo/sales is true in Estuary")) {
+		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), "resource.delta_updates of acmeCo/sales (sales) is true in Estuary")) {
 			test.Errorf("%s: plan diagnostics = %v, want rejected %v", name, diagnostics, expected.rejected)
 		}
 
 		if len(diagnostics) == 1 {
 			var attributePath path.Path = diagnostics[0].(diag.DiagnosticWithPath).Path()
 
-			if !attributePath.Equal(path.Root("bindings").AtListIndex(0).AtName("resource").AtName("delta_updates")) {
-				test.Errorf("%s: diagnostic path = %s, want bindings[0].resource.delta_updates", name, attributePath)
+			if !attributePath.Equal(path.Root("bindings")) {
+				test.Errorf("%s: diagnostic path = %s, want bindings", name, attributePath)
 			}
 		}
 
@@ -1181,7 +1431,7 @@ func TestWarnTakenOverBindingsOfMovedBindings(test *testing.T) {
 
 	moved := entry.warnTakenOverBindings(testPairing(test, entry.catalogType.resourcePath, value(binding("orders_dashboard", materialization.FieldDepthUnlimited)), state, readLive))
 
-	if len(moved) != 1 || !strings.Contains(moved[0].Detail(), "- acmeCo/orders (bindings[0]):") || !strings.Contains(moved[0].Detail(), "previous resource is removed") {
+	if len(moved) != 1 || !strings.Contains(moved[0].Detail(), "- acmeCo/orders (public.orders_dashboard):") || !strings.Contains(moved[0].Detail(), "previous resource is removed") {
 		test.Errorf("warnings = %v, want the dashboard binding listed as taken over by the moved binding", moved)
 	}
 

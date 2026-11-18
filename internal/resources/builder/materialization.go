@@ -154,9 +154,9 @@ func materializationResourcePath(schemaName string, tableName string, namespaceN
 // adjustMaterializationAttributes makes binding fields and the resource schemaName attribute computed, as plans fill
 // in the omitted ones, and documents that changing the schemaName or tableName attributes moves the binding.
 func adjustMaterializationAttributes(attributes map[string]schema.Attribute, schemaName string, tableName string) {
-	bindings, isList := attributes[bindingsAttribute].(schema.ListNestedAttribute)
+	bindings, isSet := attributes[bindingsAttribute].(schema.SetNestedAttribute)
 
-	if !isList {
+	if !isSet {
 		return
 	}
 
@@ -190,7 +190,7 @@ func adjustMaterializationAttributes(attributes map[string]schema.Attribute, sch
 
 // omittedAttribute is a binding attribute plans fill in when the configuration omits it.
 type omittedAttribute struct {
-	index    func(path *tftypes.AttributePath) (int, bool)                                           // binding index of a path to it
+	element  func(path *tftypes.AttributePath) (tftypes.Value, bool)                                 // binding of a path to it
 	value    func(binding tftypes.Value, attributeType tftypes.Type) tftypes.Value                   // its value in a binding
 	fallback func(collection string, isRead bool, attributeType tftypes.Type) (tftypes.Value, error) // its value when neither state nor live holds it
 }
@@ -199,18 +199,28 @@ type omittedAttribute struct {
 // spec for bindings Terraform takes over, else as its fallback, told whether the live spec was read. Pairing pairs the
 // bindings of plan, in the same order.
 func planOmitted(attribute omittedAttribute, plan tftypes.Value, config tftypes.Value, pairing bindingPairing) (tftypes.Value, error) {
-	configured, _, err := bindings(config)
+	configBindings, _, err := bindings(config)
 
 	if err != nil {
 		return plan, err
 	}
 
+	items, _, err := bindings(plan)
+
+	if err != nil {
+		return plan, err
+	}
+
+	var configured []tftypes.Value = configuredCounterparts(items, configBindings)
+
 	planned, stored := pairing.priorCounterparts()
 
 	return tftypes.Transform(plan, func(attributePath *tftypes.AttributePath, current tftypes.Value) (tftypes.Value, error) {
-		index, isAttribute := attribute.index(attributePath)
+		binding, isAttribute := attribute.element(attributePath)
 
-		if !isAttribute || index >= len(configured) || index >= len(planned) || !attribute.value(configured[index], current.Type()).IsNull() {
+		var index int = bindingIndex(items, binding)
+
+		if !isAttribute || index == -1 || index >= len(planned) || !paired(configured[index]) || !attribute.value(configured[index], current.Type()).IsNull() {
 			return current, nil
 		}
 
@@ -234,8 +244,8 @@ func planOmitted(attribute omittedAttribute, plan tftypes.Value, config tftypes.
 // of an existing entry whose live spec can't be read plan none, so an unread live selection is never replaced.
 func planBindingFields(plan tftypes.Value, config tftypes.Value, pairing bindingPairing) (tftypes.Value, error) {
 	return planOmitted(omittedAttribute{
-		index: func(path *tftypes.AttributePath) (int, bool) {
-			return bindingAttributeIndex(path, bindingFieldsAttribute)
+		element: func(path *tftypes.AttributePath) (tftypes.Value, bool) {
+			return bindingAttributeElement(path, bindingFieldsAttribute)
 		},
 		value: func(binding tftypes.Value, attributeType tftypes.Type) tftypes.Value {
 			return blockAttribute(binding, bindingFieldsAttribute, attributeType)
@@ -257,8 +267,8 @@ func planBindingSchemas(schemaName string, plan tftypes.Value, config tftypes.Va
 	naming, isKnown := targetNaming(plan)
 
 	return planOmitted(omittedAttribute{
-		index: func(path *tftypes.AttributePath) (int, bool) {
-			return bindingResourceAttributeIndex(path, schemaName)
+		element: func(path *tftypes.AttributePath) (tftypes.Value, bool) {
+			return bindingResourceAttributeElement(path, schemaName)
 		},
 		value: func(binding tftypes.Value, _ tftypes.Type) tftypes.Value {
 			return resourceString(binding, schemaName)

@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
@@ -38,8 +39,8 @@ func TestResourceUpdateBackfillTriggers(test *testing.T) {
 		"publishes nothing without a raise":                 {2, 2, nil, true, nil, nil},
 		"publishes nothing when removed":                    {2, nil, nil, true, nil, nil},
 		"resets with the live counter":                      {1, 2, "dataflowReset", true, 4, []string{"acmeCo/orders"}},
-		"records the trigger of a binding taken over":       {nil, 1, "incremental", false, nil, nil},
-		"records the reset trigger of a binding taken over": {nil, 3, "dataflowReset", false, nil, nil},
+		"backfills a binding taken over with a set trigger": {nil, 1, "incremental", false, 5, nil},
+		"resets a binding taken over with a set trigger":    {nil, 3, "dataflowReset", false, 4, []string{"acmeCo/orders"}},
 		"keeps the live counter of a binding taken over":    {nil, nil, nil, false, nil, nil},
 	}
 
@@ -118,7 +119,7 @@ func TestResourceUpdateBackfillTriggers(test *testing.T) {
 			test.Errorf("%s: warnings = %v, want a dataflow reset warning %v", name, warnings, expected.resets != nil)
 		}
 
-		if reset && !strings.Contains(warnings[0].Detail(), "The other bindings of the capture aren't backfilled") {
+		if reset && !strings.Contains(warnings[0].Detail(), "The other bindings of the capture aren't backfilled, unless they share a reset collection") {
 			test.Errorf("%s: warning = %q, want it limited to the triggered bindings", name, warnings[0].Detail())
 		}
 
@@ -128,6 +129,22 @@ func TestResourceUpdateBackfillTriggers(test *testing.T) {
 
 		if warned := len(warnings) == 1 && warnings[0].Summary() == "Backfill of bindings in acmeCo/movies/source-test" && strings.Contains(warnings[0].Detail(), "- acmeCo/orders\n\n"); warned != backfilled || len(warnings) > 1 {
 			test.Errorf("%s: warnings = %v, want a binding backfill warning %v", name, warnings, backfilled)
+		}
+
+		warnings = entry.warnTakenOverBindings(pairing)
+
+		var line string
+
+		switch {
+		case expected.managed || expected.published == nil:
+		case expected.resets != nil:
+			line = "Its backfill.trigger is set and its backfill.strategy is \"dataflowReset\", so the apply resets its collection."
+		default:
+			line = "Its backfill.trigger is set, so the apply backfills it."
+		}
+
+		if warned := len(warnings) == 1 && strings.Contains(warnings[0].Detail(), "Its backfill.trigger is set"); warned != (line != "") || (warned && !strings.Contains(warnings[0].Detail(), line)) {
+			test.Errorf("%s: warnings = %v, want the takeover warning naming the backfill %q", name, warnings, line)
 		}
 	}
 }
@@ -285,6 +302,78 @@ func TestRaisesTrigger(test *testing.T) {
 	}
 }
 
+func TestTriggerPriors(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	expectations := map[string]struct {
+		recordsTriggers bool
+		raises          map[string]bool
+	}{
+		"backfills only the binding taken over": {false, map[string]bool{"acmeCo/orders": false, "acmeCo/users": true, "acmeCo/events": false}},
+		"records every trigger after an import": {true, map[string]bool{"acmeCo/orders": false, "acmeCo/users": false, "acmeCo/events": false}},
+	}
+
+	for name, expected := range expectations {
+		var backend *testBackend = &testBackend{live: liveCapture(
+			map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders", "backfill": 4},
+			map[string]any{"resource": map[string]any{"table": "users"}, "target": "acmeCo/users", "backfill": 2},
+		)}
+		var prior CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var planned CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+		entry := newTestCaptureEntry(backend)
+
+		prior.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"}}
+		planned.Bindings = []capture.Binding[testResource]{
+			{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"},
+			{Resource: testResource{Table: "users"}, Target: "acmeCo/users"},
+			{Resource: testResource{Table: "events"}, Target: "acmeCo/events"},
+		}
+
+		priorValue, err := entry.codec.Value("movies", prior)
+
+		if err == nil {
+			priorValue, err = withValue(priorValue, testBackfillBlockPath, map[string]tftypes.Value{
+				"trigger":  tftypes.NewValue(tftypes.Number, 1),
+				"strategy": tftypes.NewValue(tftypes.String, nil),
+			})
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		planValue, err := entry.codec.Value("movies", planned)
+
+		for index := range planned.Bindings {
+			if err == nil {
+				planValue, err = withValue(planValue, tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(index).WithAttributeName("backfill"), map[string]tftypes.Value{
+					"trigger":  tftypes.NewValue(tftypes.Number, 1),
+					"strategy": tftypes.NewValue(tftypes.String, nil),
+				})
+			}
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		pairing := testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))
+
+		pairing.recordsTriggers = expected.recordsTriggers
+
+		var raises map[string]bool = map[string]bool{}
+
+		for index, prior := range pairing.triggerPriors() {
+			raises[bindingCollectionValue(pairing.planned.values[index])] = pairing.raises(pairing.planned.values[index], prior)
+		}
+
+		if !reflect.DeepEqual(raises, expected.raises) {
+			test.Errorf("%s: raises = %v, want %v", name, raises, expected.raises)
+		}
+	}
+}
+
 func TestResourceUpdateBackfillsOneBindingOfASharedCollection(test *testing.T) {
 	var ctx context.Context = context.Background()
 	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
@@ -350,6 +439,77 @@ func TestResourceUpdateBackfillsOneBindingOfASharedCollection(test *testing.T) {
 
 	if bindings := backend.published["bindings"]; !reflect.DeepEqual(bindings, want) {
 		test.Errorf("published bindings = %v, want both kept in place with their own metadata and only the archive backfilled", bindings)
+	}
+}
+
+func TestWarnDataflowResetsListsBindingsSharingTheCollection(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var archivePath *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(1).WithAttributeName("backfill")
+
+	expectations := map[string]struct {
+		archive any
+		want    string
+	}{
+		"lists a binding without a raised trigger": {nil, "backfilled too, though their trigger isn't set or raised. Disabled ones backfill once enabled:\n\n- acmeCo/orders (orders_archive)\n\n"},
+		"skips a binding raising its own trigger":  {"incremental", ""},
+	}
+
+	for name, expected := range expectations {
+		var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var backend *testBackend = &testBackend{live: liveCapture(
+			map[string]any{"resource": map[string]any{"table": "orders", "_meta": map[string]any{"path": []any{"orders"}}}, "target": "acmeCo/orders", "backfill": 3},
+			map[string]any{"resource": map[string]any{"table": "orders_archive", "_meta": map[string]any{"path": []any{"orders_archive"}}}, "target": "acmeCo/orders", "backfill": 7},
+			map[string]any{"resource": map[string]any{"table": "users", "_meta": map[string]any{"path": []any{"users"}}}, "target": "acmeCo/users"},
+		)}
+
+		entry := newTestCaptureEntry(backend)
+
+		spec.Bindings = []capture.Binding[testResource]{
+			{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"},
+			{Resource: testResource{Table: "orders_archive"}, Target: "acmeCo/orders"},
+			{Resource: testResource{Table: "users"}, Target: "acmeCo/users"},
+		}
+
+		priorValue, err := entry.codec.Value("movies", spec)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		planValue, err := withValue(priorValue, testBackfillBlockPath, map[string]tftypes.Value{
+			"trigger":  tftypes.NewValue(tftypes.Number, 1),
+			"strategy": tftypes.NewValue(tftypes.String, "dataflowReset"),
+		})
+
+		if err == nil && expected.archive != nil {
+			planValue, err = withValue(planValue, archivePath, map[string]tftypes.Value{
+				"trigger":  tftypes.NewValue(tftypes.Number, 1),
+				"strategy": tftypes.NewValue(tftypes.String, expected.archive),
+			})
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		pairing := testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))
+
+		warnings := entry.warnDataflowResets(pairing, entry.newPublicationReader(pairing))
+
+		if len(warnings) != 1 {
+			test.Fatalf("%s: warnings = %v, want one dataflow reset warning", name, warnings)
+		}
+
+		var detail string = warnings[0].Detail()
+		var listed bool = strings.Contains(detail, "backfilled too, though their trigger isn't set or raised")
+
+		if expected.want != "" && !strings.Contains(detail, expected.want) || expected.want == "" && listed {
+			test.Errorf("%s: warning = %q, want shared bindings listed %q", name, detail, expected.want)
+		}
+
+		if strings.Contains(detail, "(users)") || strings.Contains(detail, "- acmeCo/orders (orders)\n") {
+			test.Errorf("%s: warning = %q, want neither the resetting binding nor the users one listed as backfilled", name, detail)
+		}
 	}
 }
 
@@ -420,8 +580,8 @@ func TestValidateBackfillTriggers(test *testing.T) {
 			test.Errorf("%s: errors = %v, want none", name, diagnostics)
 		}
 
-		if expected.summary != "" && (len(diagnostics) != 1 || diagnostics[0].Summary() != expected.summary) {
-			test.Errorf("%s: errors = %v, want %q", name, diagnostics, expected.summary)
+		if expected.summary != "" && (len(diagnostics) != 1 || diagnostics[0].Summary() != expected.summary || !strings.Contains(diagnostics[0].Detail(), "acmeCo/orders (orders)")) {
+			test.Errorf("%s: errors = %v, want %q naming the binding by collection and resource", name, diagnostics, expected.summary)
 		}
 	}
 }
@@ -614,8 +774,8 @@ func TestCaptureBackfillModeInBackfillBlock(test *testing.T) {
 
 	entry.Configure(ctx, resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: backend, Tenant: "acmeCo/"}}, &configureResp)
 
-	_, resourceDiagnostics := entry.codec.Schema().AttributeAtPath(ctx, path.Root("bindings").AtListIndex(0).AtName("resource").AtName("mode"))
-	mode, blockDiagnostics := entry.codec.Schema().AttributeAtPath(ctx, path.Root("bindings").AtListIndex(0).AtName("backfill").AtName("mode"))
+	_, resourceDiagnostics := entry.codec.Schema().AttributeAtPath(ctx, path.Root("bindings").AtSetValue(types.StringValue("")).AtName("resource").AtName("mode"))
+	mode, blockDiagnostics := entry.codec.Schema().AttributeAtPath(ctx, path.Root("bindings").AtSetValue(types.StringValue("")).AtName("backfill").AtName("mode"))
 
 	if !resourceDiagnostics.HasError() || blockDiagnostics.HasError() || reflect.TypeOf(mode) != reflect.TypeOf(schema.StringAttribute{}) {
 		test.Fatalf("mode = %T (%v), want it in the binding backfill block only", mode, blockDiagnostics)
@@ -635,7 +795,13 @@ func TestCaptureBackfillModeInBackfillBlock(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	blockMode, err := attributeValue(value, testBackfillBlockPath.WithAttributeName("mode"))
+	items, _, err := bindings(value)
+
+	if err != nil || len(items) != 1 {
+		test.Fatalf("bindings = %v (%v), want one", items, err)
+	}
+
+	blockMode, err := attributeValue(value, bindingPath(items[0]).WithAttributeName(backfillAttribute).WithAttributeName("mode"))
 
 	if err != nil || !blockMode.Equal(tftypes.NewValue(tftypes.String, "Precise")) {
 		test.Errorf("backfill.mode = %v (%v), want the resource mode", blockMode, err)
@@ -1069,6 +1235,73 @@ func TestWarnPendingResetsOfAddedBindings(test *testing.T) {
 	}
 }
 
+func TestWarnPendingResetsSkipsUnchangedBindings(test *testing.T) {
+	var ctx context.Context = context.Background()
+
+	expectations := map[string]struct {
+		strategy any
+		warn     bool
+	}{
+		"leaves unchanged reset bindings when another binding changes": {"incremental", false},
+		"lists only the changed binding set to dataflowReset":          {"dataflowReset", true},
+	}
+
+	for name, expected := range expectations {
+		var backend *testBackend = &testBackend{live: liveCapture(map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders", "backfill": 2})}
+		var prior CaptureSpec[testConfig, testResource] = testCaptureSpec
+		var planned CaptureSpec[testConfig, testResource] = testCaptureSpec
+
+		entry := newTestCaptureEntry(backend)
+
+		prior.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"}}
+		planned.Bindings = []capture.Binding[testResource]{
+			{Resource: testResource{Table: "orders"}, Target: "acmeCo/orders"},
+			{Resource: testResource{Table: "users"}, Target: "acmeCo/users"},
+		}
+
+		priorValue, err := entry.codec.Value("movies", prior)
+
+		if err == nil {
+			priorValue, err = withValue(priorValue, testBackfillBlockPath, map[string]tftypes.Value{
+				"trigger":  tftypes.NewValue(tftypes.Number, 1),
+				"strategy": tftypes.NewValue(tftypes.String, "dataflowReset"),
+			})
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		planValue, err := entry.codec.Value("movies", planned)
+
+		if err == nil {
+			planValue, err = withValue(planValue, testBackfillBlockPath, map[string]tftypes.Value{
+				"trigger":  tftypes.NewValue(tftypes.Number, 1),
+				"strategy": tftypes.NewValue(tftypes.String, "dataflowReset"),
+			})
+		}
+
+		if err == nil {
+			planValue, err = withValue(planValue, tftypes.NewAttributePath().WithAttributeName("bindings").WithElementKeyInt(1).WithAttributeName("backfill"), map[string]tftypes.Value{
+				"trigger":  tftypes.NewValue(tftypes.Number, 1),
+				"strategy": tftypes.NewValue(tftypes.String, expected.strategy),
+			})
+		}
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		pairing := testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))
+
+		warnings := entry.warnDataflowResets(pairing, entry.newPublicationReader(pairing))
+
+		if warned := len(warnings) == 1 && strings.Contains(warnings[0].Detail(), "- acmeCo/users") && !strings.Contains(warnings[0].Detail(), "acmeCo/orders"); warned != expected.warn || len(warnings) > 1 || (!expected.warn && len(warnings) > 0) {
+			test.Errorf("%s: warnings = %v, want a dataflow reset strategy warning listing users only %v", name, warnings, expected.warn)
+		}
+	}
+}
+
 func TestResourceUpdateRequiresBackfillsOfChangedModes(test *testing.T) {
 	var ctx context.Context = context.Background()
 
@@ -1082,14 +1315,14 @@ func TestResourceUpdateRequiresBackfillsOfChangedModes(test *testing.T) {
 		rejected     bool
 		sales        any
 	}{
-		"rejects a taken over binding without a trigger":  {false, nil, nil, nil, nil, nil, true, nil},
-		"rejects a taken over binding with a new trigger": {false, nil, 1, nil, nil, nil, true, nil},
-		"rejects a managed binding without a raise":       {true, 1, 1, nil, nil, nil, true, nil},
-		"backfills a managed binding with a raise":        {true, 1, 2, nil, nil, nil, false, 4},
-		"backfills a managed binding with a set trigger":  {true, nil, 1, nil, nil, nil, false, 4},
-		"backfills a binding with the capture trigger":    {true, nil, nil, 1, 2, nil, false, 4},
-		"backfills a binding with a set capture trigger":  {true, nil, nil, nil, 1, nil, false, 4},
-		"resets a binding without backfilling it again":   {true, 1, 2, nil, nil, "dataflowReset", false, 3},
+		"rejects a taken over binding without a trigger":    {false, nil, nil, nil, nil, nil, true, nil},
+		"backfills a taken over binding with a set trigger": {false, nil, 1, nil, nil, nil, false, 4},
+		"rejects a managed binding without a raise":         {true, 1, 1, nil, nil, nil, true, nil},
+		"backfills a managed binding with a raise":          {true, 1, 2, nil, nil, nil, false, 4},
+		"backfills a managed binding with a set trigger":    {true, nil, 1, nil, nil, nil, false, 4},
+		"backfills a binding with the capture trigger":      {true, nil, nil, 1, 2, nil, false, 4},
+		"backfills a binding with a set capture trigger":    {true, nil, nil, nil, 1, nil, false, 4},
+		"resets a binding without backfilling it again":     {true, 1, 2, nil, nil, "dataflowReset", false, 3},
 	}
 
 	for name, expected := range expectations {
@@ -1166,7 +1399,7 @@ func TestResourceUpdateRequiresBackfillsOfChangedModes(test *testing.T) {
 
 		diagnostics := entry.validateMissingBackfills(entry.newPublicationReader(testPairing(test, entry.catalogType.resourcePath, planValue, priorValue, entry.newLiveReader(ctx, priorValue))))
 
-		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), `changes "" -> "Normal"`)) {
+		if diagnostics.HasError() != expected.rejected || (expected.rejected && !strings.Contains(diagnostics[0].Detail(), `backfill.mode of acmeCo/sales (public.sales) changes "" -> "Normal"`)) {
 			test.Errorf("%s: plan diagnostics = %v, want rejected %v", name, diagnostics, expected.rejected)
 		}
 

@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"maps"
 	"reflect"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
@@ -39,6 +40,7 @@ func (entryResource *entryResource[D, S]) mergeLive(ctx context.Context, name st
 	}
 
 	keepUnmanagedKeys(document, priorDocument, live)
+	keepLiveFlags(document, live)
 
 	resets, err := entryResource.mergeLiveBindings(name, document, live, keepUnmanaged, recordsTriggers, plan, prior)
 
@@ -60,6 +62,61 @@ func keepUnmanagedKeys(document map[string]any, priorDocument map[string]any, li
 			document[key] = value
 		}
 	}
+}
+
+// keepLiveFlags copies the live shard flags the plan doesn't set, such as the runtime ones Estuary sets, which Terraform
+// never removes.
+func keepLiveFlags(document map[string]any, live map[string]any) {
+	var liveFlags map[string]any = utils.Lookup(live, catalog.ShardsKey, catalog.ShardFlagsKey)
+
+	if len(liveFlags) == 0 {
+		return
+	}
+
+	shards, isShards := document[catalog.ShardsKey].(map[string]any)
+
+	if !isShards {
+		shards = map[string]any{}
+		document[catalog.ShardsKey] = shards
+	}
+
+	if shards[catalog.ShardFlagsKey] == nil {
+		shards[catalog.ShardFlagsKey] = map[string]any{}
+	}
+
+	flags, isFlags := shards[catalog.ShardFlagsKey].(map[string]any)
+
+	if !isFlags {
+		return
+	}
+
+	for flag, value := range liveFlags {
+		if _, planned := flags[flag]; !planned {
+			flags[flag] = value
+		}
+	}
+}
+
+// withoutFlags returns a copy of spec without shard flags, spec itself when it has none.
+func withoutFlags(spec map[string]any) map[string]any {
+	shards, isShards := spec[catalog.ShardsKey].(map[string]any)
+
+	if _, hasFlags := shards[catalog.ShardFlagsKey]; !isShards || !hasFlags {
+		return spec
+	}
+
+	var copied map[string]any = maps.Clone(spec)
+	var kept map[string]any = maps.Clone(shards)
+
+	delete(kept, catalog.ShardFlagsKey)
+
+	copied[catalog.ShardsKey] = kept
+
+	if len(kept) == 0 {
+		delete(copied, catalog.ShardsKey)
+	}
+
+	return copied
 }
 
 // mergeLiveBindings sets the published bindings, see newPlannedPublication, with the live resource metadata and

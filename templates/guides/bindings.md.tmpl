@@ -6,7 +6,7 @@ description: |-
 
 # Bindings
 
-A binding links one resource, such as a MongoDB collection or a PostgreSQL table, to one Estuary collection: the `target` of a capture binding, or the `source` of a materialization binding. The read-only `name` shows the collection in plans. As in Estuary and the dashboard, a binding is identified by its resource path alone, such as the schema and table of a materialization binding, which the read-only `resource_path` shows. Several bindings can share a collection, such as a materialization writing one collection to two tables, each with its own resource path. Changing a binding's collection keeps the binding. Terraform only updates the live binding with the resource path of a declared one, never another binding of its collection, such as one added from the dashboard.
+A binding links one resource, such as a MongoDB collection or a PostgreSQL table, to one Estuary collection: the `target` of a capture binding, or the `source` of a materialization binding. The read-only `name` shows the collection in plans. As in Estuary and the dashboard, a binding is identified by its resource path alone, such as the schema and table of a materialization binding, which the read-only `resource_path` shows. Several bindings can share a collection, such as a materialization writing one collection to two tables, each with its own resource path, so `name` isn't unique: key maps of bindings by resource. Changing a binding's collection keeps the binding. Terraform only updates the live binding with the resource path of a declared one, never another binding of its collection, such as one added from the dashboard.
 
 **Resource paths.** Estuary gives each binding its resource path when it validates the binding, filling in defaults such as the schema `target_naming` names. A plan that adds a materialization binding or changes one's resource validates the planned bindings without publishing anything, so their `resource_path` is known before the apply. That validation needs the destination to be reachable during `terraform plan`, and fails the plan when Estuary rejects the bindings, as the apply would. Captures need no validation, as their resource declares its path. A new materialization shows its resource paths as known after apply.
 
@@ -19,17 +19,19 @@ A binding links one resource, such as a MongoDB collection or a PostgreSQL table
 | `true` (default) | The declared bindings | Kept and not shown in plans. |
 | `false` | Every binding | Removed by the next apply, after a plan warning listing them. Can't be used with `auto_discover` or `source.capture`, as each apply would remove what Estuary adds back. |
 
-**Default capture target.** A capture binding without `target` keeps its current collection. A new one gets the collection the connector's discovery names, such as `acmeCo/mongodb/shop/users` for `shop.users` in `acmeCo/mongodb/source-mongodb`. That discovery runs during `terraform plan`, so the source must be reachable. Set `target` to skip it.
+**Default capture target.** A capture binding without `target` keeps its current collection. A new one gets the collection the connector's discovery names, such as `acmeCo/mongodb/shop/users` for `shop.users` in `acmeCo/mongodb/source-mongodb`. That discovery runs during `terraform plan`, so the source must be reachable, and the plan fails when it can't name a target. When the configuration depends on values known only after another resource's apply, discovery runs during the apply instead. Set `target` to skip it.
+
+**New collections.** When a capture binding targets a collection Estuary doesn't have yet, the apply discovers the capture and creates that collection from the discovered schema, as the dashboard does, so the source must be reachable during the apply too. A `target` naming another collection gets the schema discovery gives its resource. The apply fails when discovery doesn't find a binding's resource. Existing collections, such as those kept after a capture was destroyed, are used as they are, and other discovered resources aren't added, not even as disabled bindings. The exception is creating a capture with `auto_discover.add_new_bindings = true`: as in the dashboard, it adds every discovered resource and publishes every discovered collection, existing ones included.
 
 **Default destination schema.** A materialization binding without its schema (`schema`, or `namespace` for Iceberg) keeps its current one. A new one gets the schema `target_naming` names, as in the dashboard, else the endpoint default such as `config.schema`. Changing `target_naming` only names bindings added from then on.
 
 **Moving a binding to another table.** Changing an existing binding's schema or table makes the connector materialize it into a new table and leave the old one in place. Set or raise the binding's `backfill.trigger` to fill the new table from the start of its collection. The apply fails if the new table already exists in the destination.
 
-**Bindings Estuary adds.** Creating a capture with `auto_discover.add_new_bindings = true` adds a binding for every discovered resource you didn't declare, and later discoveries keep adding new ones. A materialization with `source.capture` gets a binding for every collection of that capture you didn't declare. Those materialization bindings get only `source.delta_updates`, `source.fields_recommended` and `target_naming`: declare a binding to give it its own settings.
+**Bindings Estuary adds.** Creating a capture with `auto_discover.add_new_bindings = true` adds a binding for every discovered resource you didn't declare, and later discoveries keep adding new ones. With `add_new_bindings = false`, Estuary's later discoveries add new resources as disabled bindings instead. Terraform doesn't manage either kind: they're kept unless `keep_unmanaged_bindings = false`, and the data source lists them in `live_bindings`. A materialization with `source.capture` gets a binding for every collection of that capture you didn't declare. Those materialization bindings get only `source.delta_updates`, `source.fields_recommended` and `target_naming`: declare a binding to give it its own settings.
 
 **Removing a binding.** With `add_new_bindings = true` or `source.capture`, Estuary may add a removed binding back. Set `disable = true` instead to stop it for good.
 
-**Taking over a binding.** Declaring a binding that already exists in Estuary updates it in place. The plan shows it as added, and a warning lists the fields the apply changes.
+**Taking over a binding.** Declaring a binding that already exists in Estuary updates it in place. The plan shows it as added, and a warning lists the fields the apply changes. A `backfill.trigger` set on it backfills it in the same apply, as the plan warns.
 
 ```hcl
 # Manage every binding, without discovery
@@ -75,6 +77,10 @@ resource "estuary_materialization_postgres" "shop" {
 }
 ```
 
+## Binding Order
+
+`bindings` is a set: its order doesn't matter, as Estuary identifies a binding by its resource path. Plans show only the bindings added, removed or changed. A changed binding shows as removed and added again, as Terraform shows changes to sets, while the apply updates it in place. Sets have no index, so reference bindings with `for` expressions, such as `[for binding in estuary_source_mongodb.shop.bindings : binding.target]`.
+
 ## Every Live Binding
 
 A capture resource only holds the bindings you declare. Its data source, such as `data "estuary_source_mongodb"`, lists every live binding of a capture in `live_bindings`, including those discovery or the dashboard added:
@@ -82,6 +88,8 @@ A capture resource only holds the bindings you declare. Its data source, such as
 ```hcl
 data "estuary_source_mongodb" "shop" {
   name = estuary_source_mongodb.shop.name # or the name of a capture managed elsewhere
+
+  depends_on = [estuary_source_mongodb.shop] # read after the capture's changes are applied
 }
 
 resource "estuary_materialization_postgres" "shop" {
@@ -96,7 +104,7 @@ resource "estuary_materialization_postgres" "shop" {
 ```
 
 - Empty live values are left out, so test optional fields like `binding.disable != true`.
-- When the capture has changes, the data source is read after the capture's apply, so everything built from it shows as known after apply.
+- `depends_on` makes Terraform read the data source after the capture's apply whenever the capture has changes, so everything built from it shows as known after apply. Without it, Terraform reads it during the plan, as its name is known, which fails while the capture is still to be created.
 - Bindings that discovery adds later show up on the next plan.
 - Reading fails when the capture doesn't exist.
 - Terraform reads every declared data source, so declare one only where something uses it.

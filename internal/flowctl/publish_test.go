@@ -103,7 +103,7 @@ func TestMaterializationFilesKeepConnectorConfigInline(test *testing.T) {
 	}
 }
 
-func TestPublishDiscoveredCaptureDiscoversBeforePublishing(test *testing.T) {
+func TestPublishCaptureWithAllBindingsDiscoversBeforePublishing(test *testing.T) {
 	var calls string = filepath.Join(test.TempDir(), "calls")
 	var client *Client = fakeFlowctl(test, "#!/bin/sh\necho \"$*\" >> \"$FLOWCTL_CALLS\"\n")
 
@@ -121,7 +121,7 @@ func TestPublishDiscoveredCaptureDiscoversBeforePublishing(test *testing.T) {
 		},
 	}
 
-	if err := client.PublishDiscoveredCapture(context.Background(), "acmeCo/mongodb/source-mongodb", spec, nil); err != nil {
+	if err := client.PublishCapture(context.Background(), "acmeCo/mongodb/source-mongodb", spec, nil, &catalog.Discovery{AllBindings: true}); err != nil {
 		test.Fatal(err)
 	}
 
@@ -144,15 +144,189 @@ func TestPublishDiscoveredCaptureDiscoversBeforePublishing(test *testing.T) {
 	}
 }
 
-func TestPublishDiscoveredCaptureMarksARefusedDiscoveryAsConflict(test *testing.T) {
+func TestPublishCaptureWithAllBindingsMarksARefusedDiscoveryAsConflict(test *testing.T) {
 	var client *Client = fakeFlowctl(test, "#!/bin/sh\necho 'This spec was updated while you were editing (expected publication ID 0000000000000000, actual 16903f684180027b)' >&2\nexit 1\n")
 
 	spec := capture.Spec[endpoint.ConnectorSpec[map[string]any], map[string]any]{
 		AutoDiscover: &capture.AutoDiscover{AddNewBindings: true},
 	}
 
-	if err := client.PublishDiscoveredCapture(context.Background(), "acmeCo/mongodb/source-mongodb", spec, nil); !errors.Is(err, catalog.ErrPublicationConflict) {
+	if err := client.PublishCapture(context.Background(), "acmeCo/mongodb/source-mongodb", spec, nil, &catalog.Discovery{AllBindings: true}); !errors.Is(err, catalog.ErrPublicationConflict) {
 		test.Errorf("error = %v, want a publication conflict, as the discovery of an existing capture is refused", err)
+	}
+}
+
+func TestPublishCaptureDiscoversOnlyForMissingCollections(test *testing.T) {
+	expectations := map[string]struct {
+		pulled    string
+		calls     []string
+		wantError string
+	}{
+		"existing collection": {"collections:\n  acmeCo/orders: { key: [/id] }\n", []string{"catalog pull-specs --name=acmeCo/orders", "catalog publish"}, ""},
+		"missing collection":  {"", []string{"catalog pull-specs --name=acmeCo/orders", "discover"}, "discovery found no resource for the bindings targeting acmeCo/orders"},
+	}
+
+	for name, expected := range expectations {
+		var calls string = filepath.Join(test.TempDir(), "calls")
+		var client *Client = fakeFlowctl(test, "#!/bin/sh\necho \"$*\" >> \"$FLOWCTL_CALLS\"\n"+
+			"if [ \"$2\" = pull-specs ] && [ -n \"$FLOWCTL_PULLED\" ]; then\n"+
+			"  while [ $# -gt 0 ]; do if [ \"$1\" = --target ]; then printf \"$FLOWCTL_PULLED\" > \"$2\"; fi; shift; done\n"+
+			"fi\n")
+
+		test.Setenv("FLOWCTL_CALLS", calls)
+		test.Setenv("FLOWCTL_PULLED", expected.pulled)
+
+		spec := catalog.RawCapture{
+			"bindings": []any{map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"}},
+		}
+
+		err := client.PublishCapture(context.Background(), "acmeCo/source-postgres", spec, nil, &catalog.Discovery{Collections: []string{"acmeCo/orders"}})
+
+		if expected.wantError == "" && err != nil || expected.wantError != "" && (err == nil || !strings.Contains(err.Error(), expected.wantError)) {
+			test.Errorf("%s: error = %v, want %q", name, err, expected.wantError)
+		}
+
+		content, err := os.ReadFile(calls)
+
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var lines []string = strings.Split(strings.TrimSpace(string(content)), "\n")
+
+		if len(lines) != len(expected.calls) {
+			test.Fatalf("%s: calls = %q, want %q", name, lines, expected.calls)
+		}
+
+		for index, prefix := range expected.calls {
+			if !strings.HasPrefix(lines[index], prefix) {
+				test.Errorf("%s: call %d = %q, want it to start with %q", name, index, lines[index], prefix)
+			}
+		}
+	}
+}
+
+func TestPublishCaptureDiscoversMissingCollectionsOfAnExistingCapture(test *testing.T) {
+	var name string = "acmeCo/mongodb/source-mongodb"
+	var missingCheck string = "[catalog][pull-specs][--name=acmeCo/mongodb/shop/users][--overwrite][--target][$WORKSPACE/flow.yaml]"
+	var discovery string = "[discover][--data-plane=ops/dp/private/acmeCo/example-data-plane][--source][$WORKSPACE/flow.yaml]"
+	var resetsPull string = "[catalog][pull-specs][--name=acmeCo/mongodb/shop/orders][--overwrite][--target][$WORKSPACE/resets/flow.yaml]"
+	var publication string = "[catalog][publish][--source][$WORKSPACE/flow.yaml][--auto-approve][--init-data-plane=ops/dp/private/acmeCo/example-data-plane]"
+
+	expectations := map[string]struct {
+		resets []string
+		calls  []string
+	}{
+		"without resets": {nil, []string{missingCheck, discovery, publication}},
+		"with resets":    {[]string{"acmeCo/mongodb/shop/orders"}, []string{missingCheck, discovery, resetsPull, publication}},
+	}
+
+	script, err := os.ReadFile(filepath.Join("testdata", "discovering-flowctl.sh"))
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	testdata, err := filepath.Abs("testdata")
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	for caseName, expected := range expectations {
+		var identifier mongodb.Spec
+
+		_, record := recordFlowctl(test)
+
+		var client *Client = fakeFlowctl(test, string(script))
+
+		client.dataPlane = "ops/dp/private/acmeCo/example-data-plane"
+
+		test.Setenv("FLOWCTL_DISCOVERED", filepath.Join(testdata, "discovered.yaml"))
+		test.Setenv("FLOWCTL_PULLED", filepath.Join(testdata, "pulled-orders.yaml"))
+
+		spec := catalog.RawCapture{
+			"endpoint": map[string]any{"connector": map[string]any{"image": "ghcr.io/estuary/source-mongodb:v3", "config": map[string]any{"address": "mongodb://db"}}},
+			"bindings": []any{
+				map[string]any{"resource": map[string]any{"database": "shop", "collection": "users"}, "target": "acmeCo/mongodb/shop/users"},
+				map[string]any{"resource": map[string]any{"database": "shop", "collection": "orders"}, "target": "acmeCo/mongodb/shop/orders"},
+			},
+		}
+
+		if err := client.PublishCapture(context.Background(), name, spec, expected.resets, &catalog.Discovery{Identifier: identifier, Collections: []string{"acmeCo/mongodb/shop/users"}}); err != nil {
+			test.Fatalf("%s: %v", caseName, err)
+		}
+
+		assertCommandLines(test, record.commandLines(test), expected.calls)
+
+		var published map[string]any = readPublished(test, record.published)
+		var bindings []any = catalog.Bindings(utils.Lookup(published, "captures", name))
+		var collections map[string]any = utils.Lookup(published, "collections")
+
+		if len(bindings) != 2 || catalog.BindingCollection(bindings[0]) != "acmeCo/mongodb/shop/users" || catalog.BindingResource(bindings[0])["_meta"] == nil ||
+			catalog.BindingCollection(bindings[1]) != "acmeCo/mongodb/shop/orders" {
+			test.Errorf("%s: published bindings = %v, want only the declared ones, with the discovered metadata", caseName, bindings)
+		}
+
+		if _, defined := collections["acmeCo/mongodb/shop/users"]; !defined || len(collections) != 1 {
+			test.Errorf("%s: published collections = %v, want only the missing acmeCo/mongodb/shop/users", caseName, collections)
+		}
+
+		if imports, _ := published["import"].([]any); len(expected.resets) == 0 && len(imports) > 0 || len(expected.resets) > 0 && (len(imports) != 1 || imports[0] != "resets/flow.yaml") {
+			test.Errorf("%s: published imports = %v, want the resets file imported only with resets", caseName, published["import"])
+		}
+
+		if len(expected.resets) == 0 {
+			continue
+		}
+
+		if reset := utils.Lookup(readPublished(test, record.resets), "collections", "acmeCo/mongodb/shop/orders"); reset["reset"] != true || reset[catalog.ExpectPubIDKey] != nil {
+			test.Errorf("%s: published resets = %v, want acmeCo/mongodb/shop/orders reset and without its publication ID", caseName, reset)
+		}
+	}
+}
+
+func TestWithDeclaredBindingsKeepsOnlyTheDeclaredOnes(test *testing.T) {
+	var identifier mongodb.Spec
+	var name string = "acmeCo/mongodb/source-mongodb"
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml": `captures:
+  acmeCo/mongodb/source-mongodb:
+    bindings:
+      - resource: { _meta: { path: [shop, users] }, database: shop, collection: users }
+        target: acmeCo/mongodb/shop/users
+      - resource: { database: shop, collection: orders }
+        target: acmeCo/mongodb/shop/orders
+collections:
+  acmeCo/mongodb/shop/users: { key: [/_id], writeSchema: users.write.schema.yaml }
+  acmeCo/mongodb/shop/orders: { key: [/_id], writeSchema: orders.write.schema.yaml }
+`,
+	})
+	var declared []any = []any{
+		map[string]any{"resource": map[string]any{"database": "shop", "collection": "users"}, "target": "acmeCo/users"},
+	}
+
+	if err := withDeclaredBindings(tree, name, declared, identifier, false); err != nil {
+		test.Fatalf("withDeclaredBindings: %v", err)
+	}
+
+	var bindings []any = catalog.Bindings(tree.capture(name))
+
+	if len(bindings) != 1 || catalog.BindingCollection(bindings[0]) != "acmeCo/users" || catalog.BindingResource(bindings[0])["_meta"] == nil {
+		test.Errorf("bindings = %v, want only the declared one, with the discovered metadata", bindings)
+	}
+
+	keepCollections(tree, []string{"acmeCo/users"})
+
+	var collections map[string]any = tree.files["flow.yaml"]["collections"].(map[string]any)
+	users, defined := collections["acmeCo/users"].(map[string]any)
+
+	if !defined || len(collections) != 1 || users["writeSchema"] != "users.write.schema.yaml" {
+		test.Errorf("collections = %v, want only acmeCo/users, defined from the discovered users collection", collections)
+	}
+
+	if err := requireCollections(tree, []string{"acmeCo/users", "acmeCo/missing"}); err == nil || !strings.Contains(err.Error(), "acmeCo/missing") || strings.Contains(err.Error(), "acmeCo/users") {
+		test.Errorf("requireCollections error = %v, want only acmeCo/missing named as undefined", err)
 	}
 }
 
@@ -228,7 +402,7 @@ captures:
 		map[string]any{"resource": map[string]any{"database": "shop", "collection": "missing"}, "target": "acmeCo/missing"},
 	}
 
-	if err := withDeclaredBindings(tree, name, declared, identifier); err != nil {
+	if err := withDeclaredBindings(tree, name, declared, identifier, true); err != nil {
 		test.Fatalf("withDeclaredBindings: %v", err)
 	}
 
@@ -275,7 +449,7 @@ func TestWithDeclaredBindingsReplacesEachDiscoveredBindingOnce(test *testing.T) 
 		map[string]any{"resource": map[string]any{"path": "/refunds", "idFromHeader": "X-Id"}, "target": "acmeCo/http/events"},
 	}
 
-	if err := withDeclaredBindings(tree, name, declared, nil); err != nil {
+	if err := withDeclaredBindings(tree, name, declared, nil, true); err != nil {
 		test.Fatalf("withDeclaredBindings: %v", err)
 	}
 
@@ -304,7 +478,7 @@ func TestWithDeclaredBindingsMatchesSharedTargetsByResource(test *testing.T) {
 		map[string]any{"resource": map[string]any{"path": "/members"}, "target": "acmeCo/http/users"},
 	}
 
-	if err := withDeclaredBindings(tree, name, declared, nil); err != nil {
+	if err := withDeclaredBindings(tree, name, declared, nil, true); err != nil {
 		test.Fatalf("withDeclaredBindings: %v", err)
 	}
 
@@ -344,7 +518,7 @@ collections:
 		map[string]any{"resource": map[string]any{"path": "/refunds"}, "target": "acmeCo/http/events"},
 	}
 
-	if err := withDeclaredBindings(tree, name, declared, nil); err != nil {
+	if err := withDeclaredBindings(tree, name, declared, nil, true); err != nil {
 		test.Fatalf("withDeclaredBindings: %v", err)
 	}
 
@@ -371,7 +545,8 @@ func TestWithDeclaredBindingsDefinesSharedTargetsInDeclarationOrder(test *testin
 		map[string]any{"resource": map[string]any{"database": "shop", "collection": "orders"}, "target": "acmeCo/merged"},
 	}
 
-	for range 20 {
+	for attempt := range 20 {
+		var allBindings bool = attempt%2 == 0
 		var tree *catalogTree = writeTree(test, map[string]string{
 			"flow.yaml": `captures:
   acmeCo/mongodb/source-mongodb:
@@ -386,16 +561,83 @@ collections:
 `,
 		})
 
-		if err := withDeclaredBindings(tree, name, declared, identifier); err != nil {
+		if err := withDeclaredBindings(tree, name, declared, identifier, allBindings); err != nil {
 			test.Fatalf("withDeclaredBindings: %v", err)
 		}
+
+		keepCollections(tree, []string{"acmeCo/merged"})
 
 		var collections map[string]any = tree.files["flow.yaml"]["collections"].(map[string]any)
 		merged, _ := collections["acmeCo/merged"].(map[string]any)
 
+		if bindings := catalog.Bindings(tree.capture(name)); len(bindings) != 2 {
+			test.Fatalf("bindings = %v, want both declared bindings targeting acmeCo/merged", bindings)
+		}
+
 		if len(collections) != 1 || merged["writeSchema"] != "users.write.schema.yaml" {
 			test.Fatalf("collections = %v, want only acmeCo/merged, defined from the first declared binding's users collection", collections)
 		}
+	}
+}
+
+func TestWithDeclaredBindingsRenamesOverAnUndeclaredResourceCollection(test *testing.T) {
+	var identifier mongodb.Spec
+	var name string = "acmeCo/mongodb/source-mongodb"
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml": `captures:
+  acmeCo/mongodb/source-mongodb:
+    bindings:
+      - resource: { database: shop, collection: users }
+        target: acmeCo/mongodb/shop/users
+      - resource: { database: shop, collection: orders }
+        target: acmeCo/mongodb/shop/orders
+collections:
+  acmeCo/mongodb/shop/users: { key: [/_id], writeSchema: users.write.schema.yaml }
+  acmeCo/mongodb/shop/orders: { key: [/_id], writeSchema: orders.write.schema.yaml }
+`,
+	})
+	var declared []any = []any{
+		map[string]any{"resource": map[string]any{"database": "shop", "collection": "users"}, "target": "acmeCo/mongodb/shop/orders"},
+	}
+
+	if err := withDeclaredBindings(tree, name, declared, identifier, false); err != nil {
+		test.Fatalf("withDeclaredBindings: %v", err)
+	}
+
+	var collections map[string]any = tree.files["flow.yaml"]["collections"].(map[string]any)
+	orders, _ := collections["acmeCo/mongodb/shop/orders"].(map[string]any)
+
+	if len(collections) != 1 || orders["writeSchema"] != "users.write.schema.yaml" {
+		test.Errorf("collections = %v, want only acmeCo/mongodb/shop/orders, defined from the users resource it captures", collections)
+	}
+}
+
+func TestWithDeclaredBindingsRenamesWithoutThePublicationID(test *testing.T) {
+	var identifier mongodb.Spec
+	var name string = "acmeCo/mongodb/source-mongodb"
+	var tree *catalogTree = writeTree(test, map[string]string{
+		"flow.yaml": `captures:
+  acmeCo/mongodb/source-mongodb:
+    bindings:
+      - resource: { database: shop, collection: users }
+        target: acmeCo/mongodb/shop/users
+collections:
+  acmeCo/mongodb/shop/users: { key: [/_id], writeSchema: users.write.schema.yaml, expectPubId: 16acf7decf00006b }
+`,
+	})
+	var declared []any = []any{
+		map[string]any{"resource": map[string]any{"database": "shop", "collection": "users"}, "target": "acmeCo/mongodb/extras"},
+	}
+
+	if err := withDeclaredBindings(tree, name, declared, identifier, false); err != nil {
+		test.Fatalf("withDeclaredBindings: %v", err)
+	}
+
+	var collections map[string]any = tree.files["flow.yaml"]["collections"].(map[string]any)
+	extras, _ := collections["acmeCo/mongodb/extras"].(map[string]any)
+
+	if _, found := extras["expectPubId"]; found || extras["writeSchema"] != "users.write.schema.yaml" {
+		test.Errorf("acmeCo/mongodb/extras = %v, want the users schema without the publication ID of acmeCo/mongodb/shop/users", extras)
 	}
 }
 
@@ -416,7 +658,7 @@ func TestWithDeclaredBindingsRejectsAmbiguousBindings(test *testing.T) {
 		map[string]any{"resource": map[string]any{"path": "/b2"}, "target": "acmeCo/http/events"},
 	}
 
-	if err := withDeclaredBindings(tree, name, declared, nil); err == nil || !strings.Contains(err.Error(), "2 declared bindings of acmeCo/http/events") {
+	if err := withDeclaredBindings(tree, name, declared, nil, true); err == nil || !strings.Contains(err.Error(), "2 declared bindings of acmeCo/http/events") {
 		test.Errorf("withDeclaredBindings error = %v, want the ambiguous bindings of acmeCo/http/events rejected", err)
 	}
 }

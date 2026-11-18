@@ -81,11 +81,11 @@ func TestCaptureCodecSchema(test *testing.T) {
 		"schemas":          {path.Root("config").AtName("schemas"), schema.ListAttribute{}, false, false, false},
 		"tunnel":           {path.Root("config").AtName("tunnel"), schema.SingleNestedAttribute{}, false, false, false},
 		"labels":           {path.Root("config").AtName("labels"), schema.MapAttribute{}, false, false, false},
-		"bindings":         {path.Root("bindings"), schema.ListNestedAttribute{}, true, false, false},
+		"bindings":         {path.Root("bindings"), schema.SetNestedAttribute{}, true, false, false},
 		"auto_discover":    {path.Root("auto_discover"), schema.SingleNestedAttribute{}, false, false, false},
-		"binding resource": {path.Root("bindings").AtListIndex(0).AtName("resource"), schema.SingleNestedAttribute{}, true, false, false},
-		"binding target":   {path.Root("bindings").AtListIndex(0).AtName("target"), schema.StringAttribute{}, false, false, false},
-		"binding name":     {path.Root("bindings").AtListIndex(0).AtName("name"), schema.StringAttribute{}, false, false, false},
+		"binding resource": {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("resource"), schema.SingleNestedAttribute{}, true, false, false},
+		"binding target":   {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("target"), schema.StringAttribute{}, false, false, false},
+		"binding name":     {path.Root("bindings").AtSetValue(types.StringValue("")).AtName("name"), schema.StringAttribute{}, false, false, false},
 	}
 
 	for name, expected := range expectations {
@@ -112,11 +112,11 @@ func TestCaptureCodecSchema(test *testing.T) {
 		test.Errorf("host description = %q, want the description tag", host.GetDescription())
 	}
 
-	if target, _ := codec.Schema().AttributeAtPath(ctx, path.Root("bindings").AtListIndex(0).AtName("target")); !target.IsComputed() {
+	if target, _ := codec.Schema().AttributeAtPath(ctx, path.Root("bindings").AtSetValue(types.StringValue("")).AtName("target")); !target.IsComputed() {
 		test.Error("binding target is not computed, want the discovery name as default")
 	}
 
-	if bindingName, _ := codec.Schema().AttributeAtPath(ctx, path.Root("bindings").AtListIndex(0).AtName("name")); !bindingName.IsComputed() || bindingName.IsOptional() {
+	if bindingName, _ := codec.Schema().AttributeAtPath(ctx, path.Root("bindings").AtSetValue(types.StringValue("")).AtName("name")); !bindingName.IsComputed() || bindingName.IsOptional() {
 		test.Error("binding name is not computed only, want the provider to set it")
 	}
 

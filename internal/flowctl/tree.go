@@ -153,6 +153,19 @@ func (tree *catalogTree) collections(name string) map[string]any {
 	return nil
 }
 
+// undefinedCollections returns the collections of names no file holds, in order.
+func (tree *catalogTree) undefinedCollections(names []string) []string {
+	var undefined []string
+
+	for _, name := range names {
+		if _, _, found := tree.entry(collectionsKey, name); !found {
+			undefined = append(undefined, name)
+		}
+	}
+
+	return undefined
+}
+
 // names returns the sorted names of every capture, collection and materialization of the tree.
 func (tree *catalogTree) names() []string {
 	var names []string

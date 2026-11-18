@@ -48,8 +48,24 @@ func newTestCaptureEntry(backend *testBackend) *testCaptureEntry {
 	return entry
 }
 
-// withValue returns value with the attribute at path set to raw, nil being null.
+// withValue returns value with the attribute at path set to raw, nil being null. A binding index in path addresses the
+// binding at that index of value, see bindings.
 func withValue(value tftypes.Value, path *tftypes.AttributePath, raw any) (tftypes.Value, error) {
+	var steps []tftypes.AttributePathStep = path.Steps()
+
+	if len(steps) > 1 && steps[0] == tftypes.AttributeName(bindingsAttribute) {
+		if index, isIndex := steps[1].(tftypes.ElementKeyInt); isIndex {
+			items, _, err := bindings(value)
+
+			if err != nil || int(index) >= len(items) {
+				return value, fmt.Errorf("value has no binding %d: %v", index, err)
+			}
+
+			steps[1] = tftypes.ElementKeyValue(items[index])
+			path = tftypes.NewAttributePathWithSteps(steps)
+		}
+	}
+
 	return withAttribute(value, path, func(current tftypes.Value) tftypes.Value {
 		return tftypes.NewValue(current.Type(), raw)
 	})
@@ -65,7 +81,7 @@ type testBackend struct {
 	validated   []catalog.RawMaterialization
 	discovered  map[string]map[string]any
 	discovers   []catalog.RawCapture
-	discover    bool
+	discovery   *catalog.Discovery
 	resets      []string
 	publishErr  error
 	validateErr error
@@ -86,17 +102,11 @@ func (backend *testBackend) ResourcePaths(_ context.Context, _ string, spec cata
 	return paths, backend.validateErr
 }
 
-func (backend *testBackend) PublishCapture(_ context.Context, name string, spec catalog.CaptureSpec, resets []string) error {
+func (backend *testBackend) PublishCapture(_ context.Context, name string, spec catalog.CaptureSpec, resets []string, discovery *catalog.Discovery) error {
 	backend.resets = resets
+	backend.discovery = discovery
 
 	backend.published = spec.(catalog.RawCapture)
-
-	return backend.publishErr
-}
-
-func (backend *testBackend) PublishDiscoveredCapture(_ context.Context, name string, spec catalog.CaptureSpec, _ catalog.BindingsIdentifier) error {
-	backend.published = spec.(catalog.RawCapture)
-	backend.discover = true
 
 	return backend.publishErr
 }
@@ -208,18 +218,20 @@ func TestResourcePublishesPlannedBindingsWithoutMerge(test *testing.T) {
 	plain.Bindings = discovering.Bindings
 
 	expectations := map[string]struct {
-		spec     CaptureSpec[testConfig, testResource]
-		create   bool
-		reads    int
-		discover bool
+		spec      CaptureSpec[testConfig, testResource]
+		create    bool
+		reads     int
+		live      string
+		discovery *catalog.Discovery
 	}{
-		"create with auto discover":    {discovering, true, 0, true},
-		"create without auto discover": {plain, true, 0, false},
-		"update without auto discover": {plain, false, 1, false},
+		"create with auto discover":                    {discovering, true, 0, "acmeCo/events", &catalog.Discovery{Collections: []string{"acmeCo/orders"}, AllBindings: true}},
+		"create without auto discover":                 {plain, true, 0, "acmeCo/events", &catalog.Discovery{Collections: []string{"acmeCo/orders"}}},
+		"update adding a collection":                   {plain, false, 1, "acmeCo/events", &catalog.Discovery{Collections: []string{"acmeCo/orders"}}},
+		"update targeting a live binding's collection": {plain, false, 1, "acmeCo/orders", nil},
 	}
 
 	for name, expected := range expectations {
-		var backend *testBackend = &testBackend{live: map[string]any{"bindings": []any{map[string]any{"target": "acmeCo/events"}}}}
+		var backend *testBackend = &testBackend{live: map[string]any{"bindings": []any{map[string]any{"target": expected.live}}}}
 
 		entry := newTestCaptureEntry(backend)
 
@@ -252,8 +264,12 @@ func TestResourcePublishesPlannedBindingsWithoutMerge(test *testing.T) {
 			test.Errorf("%s: read %v and published %v, want %d reads and only the planned bindings", name, backend.reads, backend.published["bindings"], expected.reads)
 		}
 
-		if backend.discover != expected.discover {
-			test.Errorf("%s: published with discovery %v, want %v", name, backend.discover, expected.discover)
+		if discovery := backend.discovery; discovery != nil {
+			discovery.Identifier = nil
+		}
+
+		if !reflect.DeepEqual(backend.discovery, expected.discovery) {
+			test.Errorf("%s: published with discovery %+v, want %+v", name, backend.discovery, expected.discovery)
 		}
 	}
 }
@@ -666,11 +682,9 @@ func TestResourceStoresTheCatalogName(test *testing.T) {
 func TestResourceImportStateReadsLiveSpec(test *testing.T) {
 	var ctx context.Context = context.Background()
 	var discovering CaptureSpec[testConfig, testResource] = testCaptureSpec
-	var managed CaptureSpec[testConfig, testResource] = testCaptureSpec
 	var sharded CaptureSpec[testConfig, testResource] = testCaptureSpec
 
 	discovering.AutoDiscover = &capture.AutoDiscover{AddNewBindings: true, EvolveIncompatibleCollections: true}
-	managed.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "users"}, Target: "acmeCo/users"}}
 	sharded.Shards = catalog.Shards{"disable": true, "logLevel": "debug", "hotStandbys": int64(1)}
 
 	expectations := map[string]struct {
@@ -686,12 +700,12 @@ func TestResourceImportStateReadsLiveSpec(test *testing.T) {
 			},
 			want: discovering,
 		},
-		"imports managed bindings without their metadata": {
+		"leaves bindings unmanaged without discovery": {
 			live: map[string]any{
 				"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
 				"bindings": []any{map[string]any{"resource": map[string]any{"table": "users", "_meta": map[string]any{"path": []any{"users"}}}, "target": "acmeCo/users"}},
 			},
-			want: managed,
+			want: testCaptureSpec,
 		},
 		"warns about unmanaged fields": {
 			live: map[string]any{

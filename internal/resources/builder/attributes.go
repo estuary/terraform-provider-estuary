@@ -11,6 +11,7 @@ const (
 	imageAttribute                 string = "image"
 	disableAttribute               string = "disable"
 	shardsAttribute                string = "shards"
+	flagsAttribute                 string = "flags"
 	bindingsAttribute              string = "bindings"
 	liveBindingsAttribute          string = "live_bindings"
 	keepUnmanagedBindingsAttribute string = "keep_unmanaged_bindings"

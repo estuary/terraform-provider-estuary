@@ -47,7 +47,7 @@ resource "estuary_materialization_dekaf_imply_polaris" "analytics" {
 
 ### Required
 
-- `bindings` (Attributes List) Materialized collections, one topic per binding. (see [below for nested schema](#nestedatt--bindings))
+- `bindings` (Attributes Set) Materialized collections, one topic per binding. Their order doesn't matter, as Estuary identifies a binding by its resource path, so plans show only the bindings added, removed or changed. (see [below for nested schema](#nestedatt--bindings))
 - `config` (Attributes) Authentication and topic settings Kafka consumers see. (see [below for nested schema](#nestedatt--config))
 - `name` (String) Catalog name of the materialization (e.g., shop). The provider adds the tenant in front and the connector name at the end, unless they're already there. Changing the resulting catalog name, through name or the provider tenant, replaces the materialization.
 
@@ -100,7 +100,7 @@ Required:
 
 Optional:
 
-- `trigger` (Number) Set or raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter. Setting it when the binding or the materialization is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding.
+- `trigger` (Number) Set or raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter. Setting it on a binding Estuary doesn't have yet, when the materialization is created, or in the first apply after an import, backfills nothing, while setting it on an existing binding Terraform takes over backfills it. At least 1, can't be lowered, and can't be set or raised on a disabled binding.
 
 
 <a id="nestedatt--bindings--fields"></a>
@@ -137,7 +137,7 @@ Read-Only:
 
 Optional:
 
-- `trigger` (Number) Set or raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter. Setting it when the binding or the materialization is added, or in the first apply after an import, backfills nothing. At least 1, can't be lowered, and can't be set or raised on a disabled binding.
+- `trigger` (Number) Set or raise it to backfill the binding, or every enabled binding of the materialization: each binding is materialized again from its collection. A provider control Estuary never sees, not its backfill counter: each set or raise adds one to the live counter. Setting it on a binding Estuary doesn't have yet, when the materialization is created, or in the first apply after an import, backfills nothing, while setting it on an existing binding Terraform takes over backfills it. At least 1, can't be lowered, and can't be set or raised on a disabled binding.
 
 
 <a id="nestedatt--source"></a>

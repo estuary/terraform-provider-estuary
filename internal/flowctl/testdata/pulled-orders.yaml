@@ -1,0 +1,2 @@
+collections:
+  acmeCo/mongodb/shop/orders: { key: [/_id], expectPubId: "0011" }

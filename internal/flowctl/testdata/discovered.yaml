@@ -1,0 +1,19 @@
+captures:
+  acmeCo/mongodb/source-mongodb:
+    endpoint: { connector: { image: ghcr.io/estuary/source-mongodb:v3, config: { address: mongodb://db } } }
+    bindings:
+      - resource: { _meta: { path: [shop, users] }, database: shop, collection: users }
+        target: acmeCo/mongodb/shop/users
+
+      - resource: { database: shop, collection: orders }
+        target: acmeCo/mongodb/shop/orders
+
+      - resource: { database: shop, collection: audit }
+        target: acmeCo/mongodb/shop/audit
+
+collections:
+  acmeCo/mongodb/shop/users: { key: [/_id], schema: { type: object } }
+
+  acmeCo/mongodb/shop/orders: { key: [/_id], schema: { type: object }, expectPubId: "0011" }
+
+  acmeCo/mongodb/shop/audit: { key: [/_id], schema: { type: object } }

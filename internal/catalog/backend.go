@@ -12,8 +12,9 @@ var ErrPublicationConflict error = errors.New("the live spec changed since it wa
 
 type secretsKey struct{}
 
-// Session is the backend, tenant and data plane shared by the provider's resources. DataPlane is the one new entries
-// are created in unless they set their own, empty for the default of the storage mapping.
+// Session is the backend, tenant and data plane shared by the provider's resources. DataPlane is the provider
+// data_plane, else ESTUARY_DATA_PLANE, that new entries are created in unless they set their own, empty leaving the
+// choice to the storage mapping.
 type Session struct {
 	Backend   Backend
 	Tenant    string

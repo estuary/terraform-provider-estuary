@@ -126,7 +126,7 @@ func (entryResource *entryResource[D, S]) resolveTargets(ctx context.Context, un
 }
 
 // discoverTargets returns discovered targets by resource path, discovering without bindings or autoDiscover so every
-// resource is returned.
+// resource is returned, on the planned data plane, see plannedDataPlane.
 func (entryResource *entryResource[D, S]) discoverTargets(ctx context.Context, backend catalog.Backend, plan tftypes.Value, config tftypes.Value) (map[string]string, error) {
 	var targets map[string]string = map[string]string{}
 
@@ -160,7 +160,7 @@ func (entryResource *entryResource[D, S]) discoverTargets(ctx context.Context, b
 
 	ctx = catalog.WithSecrets(ctx, entryResource.codec.secrets.values(value)...)
 
-	discovered, err := backend.DiscoverCapture(ctx, entryResource.catalogName(name), catalog.RawCapture{catalog.EndpointKey: document[catalog.EndpointKey], catalog.BindingsKey: []any{}})
+	discovered, err := backend.DiscoverCapture(ctx, entryResource.catalogName(name), plannedDataPlane(plan), catalog.RawCapture{catalog.EndpointKey: document[catalog.EndpointKey], catalog.BindingsKey: []any{}})
 
 	if err != nil {
 		return nil, fmt.Errorf("discovering the default binding targets: %w", err)

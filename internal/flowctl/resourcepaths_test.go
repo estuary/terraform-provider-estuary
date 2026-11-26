@@ -41,7 +41,7 @@ func TestResourcePathsCommandLines(test *testing.T) {
 
 	test.Setenv("FLOWCTL_PULLED", validated)
 
-	paths, err := client.ResourcePaths(context.Background(), "acmeCo/materialize-postgres", spec)
+	paths, err := client.ResourcePaths(context.Background(), "acmeCo/materialize-postgres", testDataPlane, spec)
 
 	if err != nil {
 		test.Fatal(err)
@@ -54,7 +54,7 @@ func TestResourcePathsCommandLines(test *testing.T) {
 	assertCommandLines(test, record.commandLines(test), []string{
 		"[draft][create]",
 		"[draft][author][--source][$WORKSPACE/flow.yaml]",
-		"[draft][test]",
+		"[draft][test][--init-data-plane=" + testDataPlane + "]",
 		"[draft][develop][--target][$WORKSPACE/validated/flow.yaml]",
 		"[draft][delete]",
 	})
@@ -73,7 +73,7 @@ func TestResourcePathsDeletesTheDraftOnFailure(test *testing.T) {
 
 	test.Setenv("FLOWCTL_PULLED", validated)
 
-	if _, err := client.ResourcePaths(context.Background(), "acmeCo/materialize-postgres", spec); err == nil || !strings.Contains(err.Error(), "has 0 bindings, not the 1 validated") {
+	if _, err := client.ResourcePaths(context.Background(), "acmeCo/materialize-postgres", testDataPlane, spec); err == nil || !strings.Contains(err.Error(), "has 0 bindings, not the 1 validated") {
 		test.Errorf("error = %v, want the missing binding reported", err)
 	}
 
@@ -90,7 +90,7 @@ func TestResourcePathsUsesAPrivateFlowctlHome(test *testing.T) {
 	test.Setenv("FLOWCTL_CALLS", calls)
 	test.Setenv("TMPDIR", temporary)
 
-	_, _ = client.ResourcePaths(context.Background(), "acmeCo/materialize-postgres", catalog.RawMaterialization(map[string]any{"bindings": []any{}}))
+	_, _ = client.ResourcePaths(context.Background(), "acmeCo/materialize-postgres", "", catalog.RawMaterialization(map[string]any{"bindings": []any{}}))
 
 	content, err := os.ReadFile(calls)
 

@@ -12,10 +12,12 @@ var ErrPublicationConflict error = errors.New("the live spec changed since it wa
 
 type secretsKey struct{}
 
-// Session is the backend and tenant shared by the provider's resources.
+// Session is the backend, tenant and data plane shared by the provider's resources. DataPlane is the one new entries
+// are created in unless they set their own, empty for the default of the storage mapping.
 type Session struct {
-	Backend Backend
-	Tenant  string
+	Backend   Backend
+	Tenant    string
+	DataPlane string
 }
 
 // Discovery is what a capture publication takes from discovery: the specs of those Collections Estuary doesn't have
@@ -28,13 +30,17 @@ type Discovery struct {
 
 // Backend publishes, reads, deletes and discovers catalog entries by full catalog name. ResourcePaths validates a
 // materialization without publishing it and returns the resource path Estuary gives each binding, in order.
+// DataPlane names the data plane the specs a publication or validation creates are created in, and the one discovery
+// runs on, empty leaving the choice to Estuary. Live entries keep their data plane, which ReadDataPlane returns by
+// name, empty when the entry doesn't exist or the name can't be read.
 type Backend interface {
-	PublishCapture(ctx context.Context, name string, spec CaptureSpec, resets []string, discovery *Discovery) error
-	PublishMaterialization(ctx context.Context, name string, spec MaterializationSpec) error
+	PublishCapture(ctx context.Context, name string, dataPlane string, spec CaptureSpec, resets []string, discovery *Discovery) error
+	PublishMaterialization(ctx context.Context, name string, dataPlane string, spec MaterializationSpec) error
 	ReadSpec(ctx context.Context, name string) (map[string]any, error)
+	ReadDataPlane(ctx context.Context, name string) (string, error)
 	DeleteCatalogEntry(ctx context.Context, name string) error
-	DiscoverCapture(ctx context.Context, name string, spec CaptureSpec) (map[string]map[string]any, error)
-	ResourcePaths(ctx context.Context, name string, spec MaterializationSpec) ([][]string, error)
+	DiscoverCapture(ctx context.Context, name string, dataPlane string, spec CaptureSpec) (map[string]map[string]any, error)
+	ResourcePaths(ctx context.Context, name string, dataPlane string, spec MaterializationSpec) ([][]string, error)
 }
 
 // WithSecrets returns ctx carrying the secret values backends must mask.

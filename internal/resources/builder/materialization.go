@@ -43,8 +43,8 @@ type MaterializationBinding[R any] struct {
 	Backfill                   *MaterializationBackfill                   `yaml:"backfill,omitempty" description:"Backfill control of the binding."`
 }
 
-func publishMaterialization(ctx context.Context, backend catalog.Backend, name string, document map[string]any, _ publication) error {
-	return backend.PublishMaterialization(ctx, name, catalog.RawMaterialization(document))
+func publishMaterialization(ctx context.Context, backend catalog.Backend, name string, document map[string]any, publication publication) error {
+	return backend.PublishMaterialization(ctx, name, publication.dataPlane, catalog.RawMaterialization(document))
 }
 
 // NewMaterialization returns the resource factory of a connector materialization.

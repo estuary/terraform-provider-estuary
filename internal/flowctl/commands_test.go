@@ -31,6 +31,9 @@ done
 echo "$line" >> "$FLOWCTL_CALLS"
 `
 
+// testDataPlane is the data plane tests publish, discover and validate on.
+const testDataPlane string = "ops/dp/private/acmeCo/example-data-plane"
+
 // dashName starts with a dash, which flowctl would read as a flag if passed as its own argument.
 const dashName string = "-acmeCo/orders"
 
@@ -62,8 +65,6 @@ func recordFlowctl(test *testing.T) (*Client, recording) {
 		test.Fatal(err)
 	}
 
-	client.dataPlane = "ops/dp/private/acmeCo/example-data-plane"
-
 	return client, record
 }
 
@@ -93,7 +94,7 @@ func TestPublishCaptureCommandLines(test *testing.T) {
 		"bindings": []any{map[string]any{"resource": map[string]any{"collection": "orders"}, "target": dashName}},
 	})
 
-	if err := client.PublishCapture(context.Background(), "acmeCo/source-mongodb", spec, []string{dashName}, nil); err != nil {
+	if err := client.PublishCapture(context.Background(), "acmeCo/source-mongodb", testDataPlane, spec, []string{dashName}, nil); err != nil {
 		test.Fatal(err)
 	}
 
@@ -128,7 +129,7 @@ func TestPublishCaptureResetsCollectionsSharingALastSegment(test *testing.T) {
 
 	test.Setenv("FLOWCTL_PULLED", pulled)
 
-	if err := client.PublishCapture(context.Background(), "acmeCo/source-mysql", spec, []string{"acmeCo/mysql/sales", "acmeCo/postgres/sales"}, nil); err != nil {
+	if err := client.PublishCapture(context.Background(), "acmeCo/source-mysql", testDataPlane, spec, []string{"acmeCo/mysql/sales", "acmeCo/postgres/sales"}, nil); err != nil {
 		test.Fatal(err)
 	}
 
@@ -172,7 +173,7 @@ func TestPublishMaterializationCommandLines(test *testing.T) {
 		"bindings": []any{map[string]any{"resource": map[string]any{"table": "orders"}, "source": dashName}},
 	})
 
-	if err := client.PublishMaterialization(context.Background(), "acmeCo/materialize-postgres", spec); err != nil {
+	if err := client.PublishMaterialization(context.Background(), "acmeCo/materialize-postgres", testDataPlane, spec); err != nil {
 		test.Fatal(err)
 	}
 
@@ -204,7 +205,7 @@ func TestReadDeleteAndDiscoverCommandLines(test *testing.T) {
 		test.Fatal(err)
 	}
 
-	if _, err := client.DiscoverCapture(context.Background(), dashName, spec); err != nil {
+	if _, err := client.DiscoverCapture(context.Background(), dashName, testDataPlane, spec); err != nil {
 		test.Fatal(err)
 	}
 
@@ -218,13 +219,16 @@ func TestReadDeleteAndDiscoverCommandLines(test *testing.T) {
 func TestCommandLinesWithoutDataPlane(test *testing.T) {
 	client, record := recordFlowctl(test)
 
-	client.dataPlane = ""
+	if err := client.PublishMaterialization(context.Background(), "acmeCo/materialize-postgres", "", catalog.RawMaterialization(map[string]any{})); err != nil {
+		test.Fatal(err)
+	}
 
-	if err := client.PublishMaterialization(context.Background(), "acmeCo/materialize-postgres", catalog.RawMaterialization(map[string]any{})); err != nil {
+	if _, err := client.DiscoverCapture(context.Background(), "acmeCo/source-mongodb", "", catalog.RawCapture(map[string]any{"bindings": []any{}})); err != nil {
 		test.Fatal(err)
 	}
 
 	assertCommandLines(test, record.commandLines(test), []string{
 		"[catalog][publish][--source][$WORKSPACE/flow.yaml][--auto-approve]",
+		"[discover][--source][$WORKSPACE/flow.yaml]",
 	})
 }

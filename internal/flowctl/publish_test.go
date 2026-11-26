@@ -107,8 +107,6 @@ func TestPublishCaptureWithAllBindingsDiscoversBeforePublishing(test *testing.T)
 	var calls string = filepath.Join(test.TempDir(), "calls")
 	var client *Client = fakeFlowctl(test, "#!/bin/sh\necho \"$*\" >> \"$FLOWCTL_CALLS\"\n")
 
-	client.dataPlane = "ops/dp/private/acmeCo/example-data-plane"
-
 	test.Setenv("FLOWCTL_CALLS", calls)
 
 	spec := capture.Spec[endpoint.ConnectorSpec[map[string]any], map[string]any]{
@@ -121,7 +119,7 @@ func TestPublishCaptureWithAllBindingsDiscoversBeforePublishing(test *testing.T)
 		},
 	}
 
-	if err := client.PublishCapture(context.Background(), "acmeCo/mongodb/source-mongodb", spec, nil, &catalog.Discovery{AllBindings: true}); err != nil {
+	if err := client.PublishCapture(context.Background(), "acmeCo/mongodb/source-mongodb", testDataPlane, spec, nil, &catalog.Discovery{AllBindings: true}); err != nil {
 		test.Fatal(err)
 	}
 
@@ -151,7 +149,7 @@ func TestPublishCaptureWithAllBindingsMarksARefusedDiscoveryAsConflict(test *tes
 		AutoDiscover: &capture.AutoDiscover{AddNewBindings: true},
 	}
 
-	if err := client.PublishCapture(context.Background(), "acmeCo/mongodb/source-mongodb", spec, nil, &catalog.Discovery{AllBindings: true}); !errors.Is(err, catalog.ErrPublicationConflict) {
+	if err := client.PublishCapture(context.Background(), "acmeCo/mongodb/source-mongodb", "", spec, nil, &catalog.Discovery{AllBindings: true}); !errors.Is(err, catalog.ErrPublicationConflict) {
 		test.Errorf("error = %v, want a publication conflict, as the discovery of an existing capture is refused", err)
 	}
 }
@@ -180,7 +178,7 @@ func TestPublishCaptureDiscoversOnlyForMissingCollections(test *testing.T) {
 			"bindings": []any{map[string]any{"resource": map[string]any{"table": "orders"}, "target": "acmeCo/orders"}},
 		}
 
-		err := client.PublishCapture(context.Background(), "acmeCo/source-postgres", spec, nil, &catalog.Discovery{Collections: []string{"acmeCo/orders"}})
+		err := client.PublishCapture(context.Background(), "acmeCo/source-postgres", "", spec, nil, &catalog.Discovery{Collections: []string{"acmeCo/orders"}})
 
 		if expected.wantError == "" && err != nil || expected.wantError != "" && (err == nil || !strings.Contains(err.Error(), expected.wantError)) {
 			test.Errorf("%s: error = %v, want %q", name, err, expected.wantError)
@@ -240,8 +238,6 @@ func TestPublishCaptureDiscoversMissingCollectionsOfAnExistingCapture(test *test
 
 		var client *Client = fakeFlowctl(test, string(script))
 
-		client.dataPlane = "ops/dp/private/acmeCo/example-data-plane"
-
 		test.Setenv("FLOWCTL_DISCOVERED", filepath.Join(testdata, "discovered.yaml"))
 		test.Setenv("FLOWCTL_PULLED", filepath.Join(testdata, "pulled-orders.yaml"))
 
@@ -253,7 +249,7 @@ func TestPublishCaptureDiscoversMissingCollectionsOfAnExistingCapture(test *test
 			},
 		}
 
-		if err := client.PublishCapture(context.Background(), name, spec, expected.resets, &catalog.Discovery{Identifier: identifier, Collections: []string{"acmeCo/mongodb/shop/users"}}); err != nil {
+		if err := client.PublishCapture(context.Background(), name, testDataPlane, spec, expected.resets, &catalog.Discovery{Identifier: identifier, Collections: []string{"acmeCo/mongodb/shop/users"}}); err != nil {
 			test.Fatalf("%s: %v", caseName, err)
 		}
 

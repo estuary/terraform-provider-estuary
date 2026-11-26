@@ -35,6 +35,8 @@ The provider authenticates with an Estuary refresh token, from the dashboard und
 | `data_plane` | `ESTUARY_DATA_PLANE` |
 | `backend` | `ESTUARY_BACKEND` |
 
+The provider `data_plane` is the default for the captures and materializations it creates. A resource can set its own `data_plane`, see [Use Several Data Planes](https://registry.terraform.io/providers/estuary/estuary/latest/docs/guides/multiple-environments#use-several-data-planes).
+
 An attribute set in the provider block overrides its environment variable. Every attribute must be known at plan time: a value only known after apply, such as another resource's attribute, fails the plan.
 
 {{ .SchemaMarkdown | trimspace }}

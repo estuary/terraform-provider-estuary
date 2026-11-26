@@ -87,7 +87,7 @@ func fakeFlowctl(test *testing.T, script string) *Client {
 		test.Fatal(err)
 	}
 
-	return NewClient(binary, "<api-token>", "")
+	return NewClient(binary, "<api-token>")
 }
 
 func TestPublishLogsNoSecret(test *testing.T) {
@@ -95,7 +95,7 @@ func TestPublishLogsNoSecret(test *testing.T) {
 	var client *Client = fakeFlowctl(test, "#!/bin/sh\nexit 0\n")
 	var ctx context.Context = catalog.WithSecrets(tflogtest.RootLogger(context.Background(), &output), logSecrets...)
 
-	if err := client.PublishCapture(ctx, "acmeCo/capture", logSpec(), nil, nil); err != nil {
+	if err := client.PublishCapture(ctx, "acmeCo/capture", "", logSpec(), nil, nil); err != nil {
 		test.Fatal(err)
 	}
 
@@ -107,7 +107,7 @@ func TestDiscoverLogsNoSecret(test *testing.T) {
 	var client *Client = fakeFlowctl(test, "#!/bin/sh\neval spec=\\${$#}\necho 'captures: {}' > \"$spec\"\n")
 	var ctx context.Context = catalog.WithSecrets(tflogtest.RootLogger(context.Background(), &output), logSecrets...)
 
-	if _, err := client.DiscoverCapture(ctx, "acmeCo/capture", logSpec()); err != nil {
+	if _, err := client.DiscoverCapture(ctx, "acmeCo/capture", "", logSpec()); err != nil {
 		test.Fatal(err)
 	}
 
@@ -119,7 +119,7 @@ func TestDiscoverLogsMaskSensitiveKeys(test *testing.T) {
 	var client *Client = fakeFlowctl(test, "#!/bin/sh\neval spec=\\${$#}\necho 'captures: {}' > \"$spec\"\n")
 	var ctx context.Context = catalog.WithSecrets(tflogtest.RootLogger(context.Background(), &output), logSecrets[2])
 
-	if _, err := client.DiscoverCapture(ctx, "acmeCo/capture", logSpec()); err != nil {
+	if _, err := client.DiscoverCapture(ctx, "acmeCo/capture", "", logSpec()); err != nil {
 		test.Fatal(err)
 	}
 

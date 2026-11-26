@@ -60,8 +60,9 @@ func validatedPaths(tree *catalogTree, name string, count int) ([][]string, erro
 }
 
 // ResourcePaths validates the materialization in a private draft, see draftEnvironment, publishing nothing, and
-// returns the resource path Estuary gives each binding, in order. The draft is deleted afterwards.
-func (client *Client) ResourcePaths(ctx context.Context, name string, spec catalog.MaterializationSpec) ([][]string, error) {
+// returns the resource path Estuary gives each binding, in order. The specs the draft would create are validated on
+// dataPlane. The draft is deleted afterwards.
+func (client *Client) ResourcePaths(ctx context.Context, name string, dataPlane string, spec catalog.MaterializationSpec) ([][]string, error) {
 	var paths [][]string
 
 	document, err := utils.YAMLDocument(spec)
@@ -105,7 +106,7 @@ func (client *Client) ResourcePaths(ctx context.Context, name string, spec catal
 
 		for _, arguments := range [][]string{
 			{"draft", "author", "--source", filepath.Join(directory, specFile)},
-			{"draft", "test"},
+			withDataPlane([]string{"draft", "test"}, "--init-data-plane", dataPlane),
 			{"draft", "develop", "--target", target},
 		} {
 			if _, err := client.execCommandIn(ctx, environment, arguments...); err != nil {

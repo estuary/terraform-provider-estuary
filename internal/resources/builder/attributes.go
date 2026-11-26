@@ -8,6 +8,7 @@ import (
 const (
 	nameAttribute                  string = "name"
 	catalogNameAttribute           string = "catalog_name"
+	dataPlaneAttribute             string = "data_plane"
 	imageAttribute                 string = "image"
 	disableAttribute               string = "disable"
 	shardsAttribute                string = "shards"
@@ -48,6 +49,7 @@ const (
 // Paths of the entry attributes read by path.
 var (
 	catalogNamePath           *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(catalogNameAttribute)
+	dataPlanePath             *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(dataPlaneAttribute)
 	shardsPath                *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(shardsAttribute)
 	backfillPath              *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(backfillAttribute)
 	bindingsPath              *tftypes.AttributePath = tftypes.NewAttributePath().WithAttributeName(bindingsAttribute)

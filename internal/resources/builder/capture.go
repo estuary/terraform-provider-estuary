@@ -236,7 +236,7 @@ func publishCapture(ctx context.Context, backend catalog.Backend, name string, d
 		}
 	}
 
-	return backend.PublishCapture(ctx, name, catalog.RawCapture(document), publication.resets, discovery)
+	return backend.PublishCapture(ctx, name, publication.dataPlane, catalog.RawCapture(document), publication.resets, discovery)
 }
 
 // addedCollections returns the collections bindings target that no live binding does, in order.

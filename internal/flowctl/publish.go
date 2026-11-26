@@ -328,10 +328,10 @@ func materializationFiles(name string, spec catalog.MaterializationSpec) (map[st
 	return map[string][]byte{specFile: content, dekafConfigFile: config}, nil
 }
 
-// publish publishes files after the optional prepare step completes them, the data plane applying only to new entries.
+// publish publishes files after the optional prepare step completes them, dataPlane applying only to new entries.
 // A refused publication ID fails as a conflict, see publicationError, whether the publication or the prepare step,
 // such as the discovery of a new capture, is refused.
-func (client *Client) publish(ctx context.Context, files map[string][]byte, prepare func(ctx context.Context, directory string) error) error {
+func (client *Client) publish(ctx context.Context, files map[string][]byte, dataPlane string, prepare func(ctx context.Context, directory string) error) error {
 	ctx, cancel := client.connectorContext(ctx, "Publishing spec", files)
 
 	defer cancel()
@@ -343,7 +343,7 @@ func (client *Client) publish(ctx context.Context, files map[string][]byte, prep
 			}
 		}
 
-		_, err := client.execCommand(ctx, client.withDataPlane([]string{"catalog", "publish", "--source", filepath.Join(directory, specFile), "--auto-approve"}, "--init-data-plane")...)
+		_, err := client.execCommand(ctx, withDataPlane([]string{"catalog", "publish", "--source", filepath.Join(directory, specFile), "--auto-approve"}, "--init-data-plane", dataPlane)...)
 
 		return publicationError(err)
 	})
@@ -372,10 +372,11 @@ func (err conflictError) Unwrap() error {
 	return err.error
 }
 
-// addDiscovered discovers the binding-less capture and lays the declared bindings over it, failing on missing collections
-// discovery doesn't define. Without discovery.AllBindings, it keeps only declared bindings and missing collections.
-func (client *Client) addDiscovered(ctx context.Context, directory string, name string, declared []any, discovery catalog.Discovery, missing []string) error {
-	tree, err := client.discover(ctx, directory)
+// addDiscovered discovers the binding-less capture on dataPlane and lays the declared bindings over it, failing on
+// missing collections discovery doesn't define. Without discovery.AllBindings, it keeps only declared bindings and
+// missing collections.
+func (client *Client) addDiscovered(ctx context.Context, directory string, name string, dataPlane string, declared []any, discovery catalog.Discovery, missing []string) error {
+	tree, err := client.discover(ctx, directory, dataPlane)
 
 	if err != nil {
 		return err
@@ -457,8 +458,9 @@ func (client *Client) addResets(ctx context.Context, directory string, collectio
 }
 
 // PublishCapture publishes the capture spec, dataflow resetting the resets collections. With discovery, it discovers
-// the capture first, as the dashboard does, to define the collections Estuary doesn't have yet.
-func (client *Client) PublishCapture(ctx context.Context, name string, spec catalog.CaptureSpec, resets []string, discovery *catalog.Discovery) error {
+// the capture first, as the dashboard does, to define the collections Estuary doesn't have yet. DataPlane is the one
+// the discovery runs on and the capture and collections Estuary doesn't have yet are created in.
+func (client *Client) PublishCapture(ctx context.Context, name string, dataPlane string, spec catalog.CaptureSpec, resets []string, discovery *catalog.Discovery) error {
 	var missing []string
 	var err error
 
@@ -477,7 +479,7 @@ func (client *Client) PublishCapture(ctx context.Context, name string, spec cata
 			return err
 		}
 
-		return client.publish(ctx, files, client.addResetsStep(resets))
+		return client.publish(ctx, files, dataPlane, client.addResetsStep(resets))
 	}
 
 	document, err := utils.YAMLDocument(spec)
@@ -499,8 +501,8 @@ func (client *Client) PublishCapture(ctx context.Context, name string, spec cata
 
 	var addResets func(ctx context.Context, directory string) error = client.addResetsStep(resets)
 
-	return client.publish(ctx, files, func(ctx context.Context, directory string) error {
-		if err := client.addDiscovered(ctx, directory, name, declared, *discovery, missing); err != nil || addResets == nil {
+	return client.publish(ctx, files, dataPlane, func(ctx context.Context, directory string) error {
+		if err := client.addDiscovered(ctx, directory, name, dataPlane, declared, *discovery, missing); err != nil || addResets == nil {
 			return err
 		}
 
@@ -529,13 +531,13 @@ func (client *Client) missingCollections(ctx context.Context, names []string) ([
 	return missing, err
 }
 
-// PublishMaterialization publishes the materialization spec.
-func (client *Client) PublishMaterialization(ctx context.Context, name string, spec catalog.MaterializationSpec) error {
+// PublishMaterialization publishes the materialization spec, a new one being created in dataPlane.
+func (client *Client) PublishMaterialization(ctx context.Context, name string, dataPlane string, spec catalog.MaterializationSpec) error {
 	files, err := materializationFiles(name, spec)
 
 	if err != nil {
 		return err
 	}
 
-	return client.publish(ctx, files, nil)
+	return client.publish(ctx, files, dataPlane, nil)
 }

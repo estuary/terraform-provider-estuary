@@ -20,7 +20,7 @@ import (
 
 // publication is what publishing an entry does besides its spec: allDiscovered adds every discovered binding, matched
 // through identifier, liveBindings are the live ones it replaces, and resets lists the collections it dataflow resets.
-// DataPlane is the one of the entry, see plannedDataPlane, which the specs it creates are created in.
+// DataPlane is the planned one of the entry, which the specs it creates are created in.
 type publication struct {
 	dataPlane     string
 	allDiscovered bool
@@ -102,7 +102,7 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 		}
 	}
 
-	// Shards go first: targets discover from the planned spec, which converts only once no computed value is unknown.
+	// Shards go before the targets, which discover from the planned spec, which converts only once no computed value is unknown.
 	if err == nil {
 		planned, err = planShards(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)
 	}
@@ -166,7 +166,7 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 		return
 	}
 
-	if planName.IsUnknown() || entryResource.catalogName(planName.ValueString()) != entryResource.storedCatalogName(modifyPlanReq.State.Raw, stateName.ValueString()) {
+	if entryResource.replacesEntry(planned, modifyPlanReq.State.Raw) {
 		modifyPlanResp.RequiresReplace = append(modifyPlanResp.RequiresReplace, path.Root(nameAttribute), path.Root(catalogNameAttribute))
 		modifyPlanResp.Diagnostics.Append(entryResource.warnTenantChange(modifyPlanReq.State.Raw, stateName.ValueString(), planName)...)
 		return

@@ -9,14 +9,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 )
 
-// planDataPlane plans data_plane. An entry not created yet, or the new one a catalog name change replaces it with, is
-// created in the configured data plane, else in the provider one, else in the one Estuary picks, known after the
-// apply. A live entry keeps its data plane, the one state holds: the provider one never applies to it, and configuring
-// another one fails, as Estuary can't move it. While state holds none, the configured one is accepted.
+// planDataPlane plans data_plane: for a new entry, a replacing one included, the configured one, else the provider
+// one, else unknown, and for a live entry the state one, failing on another configured one, as Estuary can't move it.
 func (entryResource *entryResource[D, S]) planDataPlane(plan tftypes.Value, config tftypes.Value, state tftypes.Value) (tftypes.Value, diag.Diagnostics, error) {
 	var diagnostics diag.Diagnostics
 	var configured tftypes.Value = blockAttribute(config, dataPlaneAttribute, tftypes.String)
-	var planned tftypes.Value = configured
+	var dataPlane tftypes.Value = configured
 
 	live, isLive := known[string](blockAttribute(state, dataPlaneAttribute, tftypes.String))
 	wanted, isConfigured := known[string](configured)
@@ -25,12 +23,12 @@ func (entryResource *entryResource[D, S]) planDataPlane(plan tftypes.Value, conf
 	case !configured.IsKnown():
 	case !exists(state) || entryResource.replacesEntry(plan, state):
 		if !isConfigured && entryResource.session != nil && entryResource.session.DataPlane != "" {
-			planned = tftypes.NewValue(tftypes.String, entryResource.session.DataPlane)
+			dataPlane = tftypes.NewValue(tftypes.String, entryResource.session.DataPlane)
 		} else if !isConfigured {
-			planned = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+			dataPlane = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
 		}
 	case !isConfigured:
-		planned = blockAttribute(state, dataPlaneAttribute, tftypes.String)
+		dataPlane = blockAttribute(state, dataPlaneAttribute, tftypes.String)
 	case isLive && wanted != live:
 		diagnostics.AddAttributeError(path.Root(dataPlaneAttribute), "Data plane of a live "+entryResource.catalogType.name+" can't change",
 			"This "+entryResource.catalogType.name+" runs in the data plane "+live+", but data_plane is set to "+wanted+". "+
@@ -41,14 +39,14 @@ func (entryResource *entryResource[D, S]) planDataPlane(plan tftypes.Value, conf
 	}
 
 	planned, err := withAttribute(plan, dataPlanePath, func(tftypes.Value) tftypes.Value {
-		return planned
+		return dataPlane
 	})
 
 	return planned, diagnostics, err
 }
 
-// replacesEntry reports whether plan moves the entry in state to another catalog name, unknown ones included, which
-// replaces it with a new entry, see ModifyPlan. Plan holds its planned catalog name, see planCatalogName.
+// replacesEntry reports whether the planned catalog name, see planCatalogName, is unknown or another than the one state
+// addresses, which replaces the entry.
 func (entryResource *entryResource[D, S]) replacesEntry(plan tftypes.Value, state tftypes.Value) bool {
 	name, _ := known[string](blockAttribute(state, nameAttribute, tftypes.String))
 	planned, isKnown := known[string](blockAttribute(plan, catalogNameAttribute, tftypes.String))
@@ -56,11 +54,9 @@ func (entryResource *entryResource[D, S]) replacesEntry(plan tftypes.Value, stat
 	return !isKnown || planned != entryResource.storedCatalogName(state, name)
 }
 
-// plannedDataPlane returns the data plane planDataPlane planned, which publications, discoveries and dry runs name to
-// Estuary, empty while it's null or unknown, leaving the choice to Estuary: the one of the live entry, else the first
-// of the storage mapping.
-func plannedDataPlane(plan tftypes.Value) string {
-	dataPlane, _ := known[string](blockAttribute(plan, dataPlaneAttribute, tftypes.String))
+// plannedDataPlane returns the data_plane of value, empty while null or unknown, which leaves the choice to Estuary.
+func plannedDataPlane(value tftypes.Value) string {
+	dataPlane, _ := known[string](blockAttribute(value, dataPlaneAttribute, tftypes.String))
 
 	return dataPlane
 }

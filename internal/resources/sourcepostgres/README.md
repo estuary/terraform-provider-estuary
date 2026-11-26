@@ -179,6 +179,7 @@ resource "estuary_source_aurora_postgres" "private" {
 |---|---|---|---|
 | `name` | String | Yes | Capture name (e.g., `aurora`). The provider `tenant` is added in front and the connector name of the resource (e.g., `/source-amazon-aurora-postgres`) at the end, unless they're already there. |
 | `catalog_name` | String | Read-only | Catalog name the capture was created or imported under, with the tenant and connector name. Refreshes and deletions address it, so a provider `tenant` change replaces the capture. |
+| `data_plane` | String | No | Data plane the capture runs in (e.g., `ops/dp/public/example-data-plane`), defaulting to the provider `data_plane` when the capture is created. Estuary can't move a live capture, so setting another data plane than it runs in fails the plan. See [Use Several Data Planes](../../../docs/guides/multiple-environments.md#use-several-data-planes). |
 | `image` | String | No | Connector image. Defaults to the default image of the resource, see the table above, and only its tag can change. See [Connector Versions](../../../docs/guides/task-settings.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the database for new tables and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Connection, authentication and replication settings of the database. See [`config`](#config). |

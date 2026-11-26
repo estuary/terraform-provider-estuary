@@ -85,10 +85,8 @@ func prefixes(name string) []string {
 	return prefixes
 }
 
-// ReadDataPlane returns the name of the data plane the live entry runs in, empty when no entry has the name or the
-// control plane doesn't show the name of its data plane. The entry holds only the ID of its data plane: the name is
-// read from the data planes the token can read, else from the storage mappings of the entry's prefixes, which miss a
-// data plane removed from them since. Names are cached by ID, as data planes aren't renamed.
+// ReadDataPlane returns the name of the data plane the live entry runs in, empty without an entry or a name. The name
+// of its data plane ID is read, once, from the data planes, else from the storage mappings of the entry's prefixes.
 func (client *Client) ReadDataPlane(ctx context.Context, name string) (string, error) {
 	var id string
 

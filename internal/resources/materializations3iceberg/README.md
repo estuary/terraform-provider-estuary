@@ -188,6 +188,7 @@ resource "estuary_materialization_s3_iceberg" "minio" {
 |---|---|---|---|
 | `name` | String | Yes | Materialization name (e.g., `lake/events`). The provider `tenant` is added in front and `/materialize-s3-iceberg` at the end, unless they're already there. |
 | `catalog_name` | String | Read-only | Catalog name the materialization was created or imported under, with the tenant and connector name. Refreshes and deletions address it, so a provider `tenant` change replaces the materialization. |
+| `data_plane` | String | No | Data plane the materialization runs in (e.g., `ops/dp/public/example-data-plane`), defaulting to the provider `data_plane` when the materialization is created. Estuary can't move a live materialization, so setting another data plane than it runs in fails the plan. See [Use Several Data Planes](../../../docs/guides/multiple-environments.md#use-several-data-planes). |
 | `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/materialize-s3-iceberg:v2`, and only its tag can change. See [Connector Versions](../../../docs/guides/task-settings.md#connector-versions). |
 | `source` | Object | No | Settings of the bindings Estuary adds, optionally following a capture. See [`source`](#source). |
 | `target_naming` | Object | No | How Estuary names the tables of the bindings it adds. A change only names the bindings added from then on: existing ones keep their schema and table. See [`target_naming`](#target_naming). |

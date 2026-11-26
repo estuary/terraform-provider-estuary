@@ -75,8 +75,8 @@ func (estuaryProvider *EstuaryProvider) Schema(_ context.Context, _ provider.Sch
 				Optional:    true,
 			},
 			"data_plane": schema.StringAttribute{
-				Description: "Data plane that new captures and materializations are created in, unless they set their own data_plane " +
-					"(e.g., ops/dp/public/example-data-plane). Required for BYOC or a non-default public data plane, unless every " +
+				Description: "Data plane (e.g., ops/dp/public/example-data-plane) that new captures and materializations are created " +
+					"in, unless they set their own data_plane. Required for BYOC or a non-default public data plane, unless every " +
 					"resource sets its own. Defaults to the first data plane of your storage mapping. Existing captures and " +
 					"materializations keep their data plane, so changing this affects only the ones created afterwards. Can also be " +
 					"set through ESTUARY_DATA_PLANE.",

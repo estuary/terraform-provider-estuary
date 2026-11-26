@@ -410,33 +410,63 @@ func TestResourceDataPlaneOfPlanTimeDiscovery(test *testing.T) {
 }
 
 func TestResourceDataPlaneOfPublishTimeDiscovery(test *testing.T) {
-	var backend *testBackend = &testBackend{live: liveCapture()}
+	var ctx context.Context = context.Background()
 	var spec CaptureSpec[testConfig, testResource] = testCaptureSpec
 
 	spec.Bindings = []capture.Binding[testResource]{{Resource: testResource{Table: "users"}, Target: "acmeCo/users"}}
 
-	entry := newDataPlaneEntry(backend, providerDataPlane)
-
-	plan, err := entry.codec.Value("movies", spec)
-
-	if err == nil {
-		plan, err = withValue(plan, dataPlanePath, ownDataPlane)
+	expectations := map[string]struct {
+		create  bool
+		planned any
+		want    string
+	}{
+		"a new capture on its data plane":             {true, ownDataPlane, ownDataPlane},
+		"a new capture where Estuary picks":           {true, tftypes.UnknownValue, ""},
+		"a live capture on the data plane it runs in": {false, liveDataPlane, liveDataPlane},
+		"a live capture state holds no data plane of": {false, nil, ""},
 	}
 
-	if err != nil {
-		test.Fatal(err)
-	}
+	for name, expected := range expectations {
+		var backend *testBackend = &testBackend{live: liveCapture()}
 
-	var createResp resource.CreateResponse = resource.CreateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+		entry := newDataPlaneEntry(backend, providerDataPlane)
 
-	entry.Create(context.Background(), resource.CreateRequest{Plan: tfsdk.Plan{Schema: entry.codec.Schema(), Raw: plan}}, &createResp)
+		value, err := entry.codec.Value("movies", spec)
 
-	if createResp.Diagnostics.HasError() {
-		test.Fatalf("create: %v", createResp.Diagnostics)
-	}
+		if err == nil {
+			value, err = withValue(value, dataPlanePath, expected.planned)
+		}
 
-	if backend.discovery == nil || !reflect.DeepEqual(backend.dataPlanes, []string{ownDataPlane}) {
-		test.Errorf("discovery = %v on %q, want the capture discovered and published on its data plane", backend.discovery, backend.dataPlanes)
+		if err != nil {
+			test.Fatal(err)
+		}
+
+		var plan tfsdk.Plan = tfsdk.Plan{Schema: entry.codec.Schema(), Raw: value}
+		var failed bool
+
+		if expected.create {
+			var createResp resource.CreateResponse = resource.CreateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+			entry.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+
+			failed = createResp.Diagnostics.HasError()
+		} else {
+			var updateResp resource.UpdateResponse = resource.UpdateResponse{State: tfsdk.State{Schema: entry.codec.Schema()}}
+
+			entry.Update(ctx, resource.UpdateRequest{Plan: plan, State: tfsdk.State{Schema: entry.codec.Schema(), Raw: dataPlaneState(test, entry, "movies", expected.planned)}}, &updateResp)
+
+			failed = updateResp.Diagnostics.HasError()
+		}
+
+		if failed {
+			test.Errorf("%s: the apply failed", name)
+			continue
+		}
+
+		if backend.discovery == nil || !reflect.DeepEqual(backend.dataPlanes, []string{expected.want}) {
+			test.Errorf("%s: discovery = %v on %q, want the capture discovered and published once on %q, never the provider one",
+				name, backend.discovery, backend.dataPlanes, expected.want)
+		}
 	}
 }
 

@@ -107,7 +107,7 @@ func (entry *entry[D, S]) readLiveValue(ctx context.Context, name string, catalo
 	}
 
 	if sealed == nil {
-		return tftypes.Value{}, fmt.Errorf("Estuary has no %s named %s", entry.catalogType.name, catalogName)
+		return tftypes.Value{}, fmt.Errorf("Estuary has no %s named %s", entry.catalogType.name, catalogName) //nolint:staticcheck // ST1005: Estuary is a proper noun.
 	}
 
 	live, _, err := entry.codec.liveValue(name, sealed)

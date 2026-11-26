@@ -59,6 +59,17 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+      # gofmt -l exits 0 even when it lists files, so the step fails on any output.
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+
+          if [ -n "$unformatted" ]; then
+            echo "Run gofmt -w on these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Vet
         run: go vet ./...
 
@@ -69,3 +80,24 @@ jobs:
 
       - name: Test
         run: go test -race -count=1 ./...
+
+  # golangci-lint is built from tools/golangci-lint.mod with the Go that
+  # go.mod asks for. A release binary built with an older Go refuses to lint
+  # this module. It runs apart from Go Tests so the build adds no time there.
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: needs.changes.outputs.has_code == 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Lint
+        run: |
+          go tool -modfile=tools/golangci-lint.mod golangci-lint --version
+          go tool -modfile=tools/golangci-lint.mod golangci-lint run ./...

@@ -194,7 +194,7 @@ func (secrets secrets) withoutLiveSecrets(value tftypes.Value) (tftypes.Value, [
 func (secrets secrets) credentialPaths(value tftypes.Value) []string {
 	var paths []string
 
-	tftypes.Walk(value, func(valuePath *tftypes.AttributePath, current tftypes.Value) (bool, error) {
+	_ = tftypes.Walk(value, func(valuePath *tftypes.AttributePath, current tftypes.Value) (bool, error) {
 		if text, credentials, restricted := secrets.restricted(valuePath, current); restricted && translator.HoldsCredentials(text, credentials) {
 			paths = append(paths, attributePath(valuePath).String())
 		}
@@ -238,7 +238,7 @@ func (secrets secrets) nullHashes(value tftypes.Value) (tftypes.Value, error) {
 func (secrets secrets) values(value tftypes.Value) []string {
 	var values []string
 
-	tftypes.Walk(value, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
+	_ = tftypes.Walk(value, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
 		var text string
 
 		if secrets.writeOnly(path) && current.IsKnown() && !current.IsNull() && current.As(&text) == nil && text != "" {
@@ -327,7 +327,7 @@ func (secrets secrets) removed(config tftypes.Value, state tftypes.Value) ([]*tf
 		return nil, nil
 	}
 
-	tftypes.Walk(state, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
+	_ = tftypes.Walk(state, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
 		secretPath, isHash := secrets.secretPath(path)
 
 		if !isHash || current.IsNull() {
@@ -402,7 +402,7 @@ func (secrets secrets) changed(plan tftypes.Value, prior tftypes.Value) bool {
 func (secrets secrets) hashes(value tftypes.Value) map[string]tftypes.Value {
 	var hashes map[string]tftypes.Value = map[string]tftypes.Value{}
 
-	tftypes.Walk(value, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
+	_ = tftypes.Walk(value, func(path *tftypes.AttributePath, current tftypes.Value) (bool, error) {
 		if _, isHash := secrets.secretPath(path); isHash && !current.IsNull() {
 			hashes[path.String()] = current
 		}

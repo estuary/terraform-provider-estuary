@@ -157,7 +157,7 @@ resource "estuary_source_rds_postgres" "private" {
 
 - `auto_discover` (Attributes) Periodically checks the source for new resources and schema changes. (see [below for nested schema](#nestedatt--auto_discover))
 - `backfill` (Attributes) Backfill control of the whole capture. (see [below for nested schema](#nestedatt--backfill))
-- `data_plane` (String) Data plane the capture runs in (e.g., ops/dp/public/example-data-plane), which must be one your storage mapping lists. Set it to create the capture in another data plane than the provider data_plane, which it defaults to, else to the first data plane of your storage mapping. Read from Estuary once the capture exists, as Estuary can't move a live capture to another data plane: setting another one than it runs in fails the plan, and Estuary support can migrate it instead. Changing the provider data_plane, or removing this attribute, leaves an existing capture as it is.
+- `data_plane` (String) Data plane the capture runs in (e.g., ops/dp/public/example-data-plane), defaulting to the provider data_plane when the capture is created. Estuary can't move a live capture, so setting another data plane than it runs in fails the plan.
 - `image` (String) Connector image, defaulting to ghcr.io/estuary/source-amazon-rds-postgres:v3. Only the tag can change, e.g. ghcr.io/estuary/source-amazon-rds-postgres:dev.
 - `keep_unmanaged_bindings` (Boolean) Keeps the live bindings the configuration doesn't declare, such as those Estuary or the dashboard adds, untouched. False manages every binding, removing undeclared ones, and conflicts with auto_discover. Defaults to true. A provider control Estuary never sees.
 - `shards` (Dynamic) Shard settings of the capture, with Estuary keys such as logLevel and disable.

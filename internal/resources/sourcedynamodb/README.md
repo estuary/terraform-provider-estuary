@@ -136,6 +136,7 @@ resource "estuary_source_dynamodb" "local" {
 |---|---|---|---|
 | `name` | String | Yes | Capture name (e.g., `dynamodb`). The provider `tenant` is added in front and `/source-dynamodb` at the end, unless they're already there. |
 | `catalog_name` | String | Read-only | Catalog name the capture was created or imported under, with the tenant and connector name. Refreshes and deletions address it, so a provider `tenant` change replaces the capture. |
+| `data_plane` | String | No | Data plane the capture runs in (e.g., `ops/dp/public/example-data-plane`), defaulting to the provider `data_plane` when the capture is created. Estuary can't move a live capture, so setting another data plane than it runs in fails the plan. See [Use Several Data Planes](../../../docs/guides/multiple-environments.md#use-several-data-planes). |
 | `image` | String | No | Connector image. Defaults to `ghcr.io/estuary/source-dynamodb:v1`, and only its tag can change. See [Connector Versions](../../../docs/guides/task-settings.md#connector-versions). |
 | `auto_discover` | Object | No | Periodically checks the region for new tables and schema changes. See [`auto_discover`](#auto_discover). |
 | `config` | Object | Yes | Region, authentication and advanced settings of the capture. See [`config`](#config). |

@@ -131,7 +131,14 @@ func (entryResource *entryResource[D, S]) validatedResourcePaths(ctx context.Con
 		catalog.KeepResourceMeta(live, binding)
 	}
 
-	validated, err := backend.ResourcePaths(ctx, catalogName, plannedDataPlane(plan), catalog.RawMaterialization(document))
+	var dataPlane string = plannedDataPlane(plan)
+
+	// A replaced entry plans the data plane of the new one, while the dry run validates the live one.
+	if entryResource.replacesEntry(plan, state) {
+		dataPlane = plannedDataPlane(state)
+	}
+
+	validated, err := backend.ResourcePaths(ctx, catalogName, dataPlane, catalog.RawMaterialization(document))
 
 	if err != nil {
 		return nil, fmt.Errorf("validating the planned bindings of %s to read their resource paths: %w", catalogName, err)

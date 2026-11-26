@@ -133,8 +133,6 @@ Estuary can't move a live capture or materialization to another data plane, so t
 - Setting a resource's `data_plane` to another one than it runs in fails the plan, and nothing is published or replaced. To move it, ask Estuary support to migrate it, which keeps its state, then set `data_plane` to the data plane it runs in.
 - Replacing a resource by changing its catalog name creates a new capture or materialization, in the data plane a new one gets.
 
-Keep a materialization in the data plane of the collections it reads: Estuary doesn't support reading collections across data planes.
-
 ## Share Pipelines with Modules
 
 Write a repeated pipeline once as a module, and call it once per pipeline:

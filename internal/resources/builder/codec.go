@@ -126,12 +126,9 @@ func newCodec[D Document[D, S], S any](connector Connector, catalogType catalogT
 	}
 
 	attributes[dataPlaneAttribute] = schema.StringAttribute{
-		Description: "Data plane the " + catalogType.name + " runs in (e.g., ops/dp/public/example-data-plane), which must be " +
-			"one your storage mapping lists. Set it to create the " + catalogType.name + " in another data plane than the " +
-			"provider data_plane, which it defaults to, else to the first data plane of your storage mapping. Read from " +
-			"Estuary once the " + catalogType.name + " exists, as Estuary can't move a live " + catalogType.name + " to another " +
-			"data plane: setting another one than it runs in fails the plan, and Estuary support can migrate it instead. " +
-			"Changing the provider data_plane, or removing this attribute, leaves an existing " + catalogType.name + " as it is.",
+		Description: "Data plane the " + catalogType.name + " runs in (e.g., ops/dp/public/example-data-plane), defaulting to " +
+			"the provider data_plane when the " + catalogType.name + " is created. Estuary can't move a live " + catalogType.name +
+			", so setting another data plane than it runs in fails the plan.",
 		Optional: true,
 		Computed: true,
 		Validators: []validator.String{

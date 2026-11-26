@@ -11,6 +11,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/capture"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/common/endpoint"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/materialization"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -265,7 +266,7 @@ func TestResourceDataPlaneChangeFailsThePlan(test *testing.T) {
 
 	modifyPlanResp := planDataPlaneOf(test, entry, dataPlaneState(test, entry, "movies", liveDataPlane), "movies", ownDataPlane, true)
 
-	var failures = modifyPlanResp.Diagnostics.Errors()
+	var failures diag.Diagnostics = modifyPlanResp.Diagnostics.Errors()
 
 	if len(failures) != 1 {
 		test.Fatalf("diagnostics = %v, want one error", modifyPlanResp.Diagnostics)
@@ -528,5 +529,136 @@ func TestResourceDataPlaneOfTheMaterializationDryRun(test *testing.T) {
 
 	if !reflect.DeepEqual(backend.dataPlanes, []string{liveDataPlane}) {
 		test.Errorf("validated on %q, want once on the data plane the materialization runs in, not the provider one", backend.dataPlanes)
+	}
+}
+
+func TestResourceDataPlaneUnknownInTheConfigurationStaysUnknown(test *testing.T) {
+	for name, created := range map[string]bool{"a new task": true, "a live task": false} {
+		var backend *testBackend = &testBackend{live: liveCapture()}
+
+		entry := newDataPlaneEntry(backend, providerDataPlane)
+
+		var state tftypes.Value = noState(entry)
+
+		if !created {
+			state = dataPlaneState(test, entry, "movies", liveDataPlane)
+		}
+
+		modifyPlanResp := planDataPlaneOf(test, entry, state, "movies", tftypes.UnknownValue, false)
+
+		if modifyPlanResp.Diagnostics.HasError() {
+			test.Errorf("%s: %v, want no error before the configured data plane is known", name, modifyPlanResp.Diagnostics)
+			continue
+		}
+
+		if got := blockAttribute(modifyPlanResp.Plan.Raw, dataPlaneAttribute, tftypes.String); got.IsKnown() {
+			test.Errorf("%s: planned data_plane = %v, want it unknown, not the provider or state one", name, got)
+		}
+	}
+}
+
+func TestResourceDataPlaneOfAnUnknownCatalogNameIsANewTask(test *testing.T) {
+	entry := newDataPlaneEntry(&testBackend{live: liveCapture()}, providerDataPlane)
+
+	var state tftypes.Value = dataPlaneState(test, entry, "movies", liveDataPlane)
+
+	plan, err := withValue(state, catalogNamePath, tftypes.UnknownValue)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	planned, diagnostics, err := entry.planDataPlane(plan, tftypes.Value{}, state)
+
+	if err != nil || diagnostics.HasError() {
+		test.Fatalf("error = %v, diagnostics = %v", err, diagnostics)
+	}
+
+	if got := blockAttribute(planned, dataPlaneAttribute, tftypes.String); !got.Equal(tftypes.NewValue(tftypes.String, providerDataPlane)) {
+		test.Errorf("planned data_plane = %v, want the provider one of the new task replacing the entry", got)
+	}
+}
+
+func TestResourceDataPlaneImportStoresNoneWhenUnread(test *testing.T) {
+	for name, readErr := range map[string]error{"the read fails": errors.New("control plane unreachable"), "Estuary names none": nil} {
+		entry := newDataPlaneEntry(&testBackend{live: liveCapture(), dataPlaneErr: readErr}, providerDataPlane)
+
+		var importResp resource.ImportStateResponse = resource.ImportStateResponse{State: tfsdk.State{Schema: entry.codec.Schema(), Raw: noState(entry)}}
+
+		entry.ImportState(context.Background(), resource.ImportStateRequest{ID: "acmeCo/movies/source-test"}, &importResp)
+
+		if importResp.Diagnostics.HasError() {
+			test.Errorf("%s: import: %v, want an import that never fails over the data plane", name, importResp.Diagnostics)
+			continue
+		}
+
+		if got := blockAttribute(importResp.State.Raw, dataPlaneAttribute, tftypes.String); !got.IsKnown() || !got.IsNull() {
+			test.Errorf("%s: imported data_plane = %v, want null", name, got)
+		}
+	}
+}
+
+func TestResourceDataPlaneOfTheDryRunOfAReplacedMaterialization(test *testing.T) {
+	var ctx context.Context = context.Background()
+	var configureResp resource.ConfigureResponse
+	var backend *testBackend = &testBackend{
+		live: map[string]any{
+			"endpoint": map[string]any{"connector": map[string]any{"image": testNamedConnector.Image, "config": map[string]any{"host": "db.example.com"}}},
+			"bindings": []any{map[string]any{"resource": map[string]any{"table": "orders", "schema": "public"}, "source": "acmeCo/orders"}},
+		},
+	}
+
+	entry := NewMaterialization[testWarehouseConfig, testWarehouseResource](testNamedConnector)().(*testWarehouseEntry)
+
+	entry.Configure(ctx, resource.ConfigureRequest{ProviderData: &catalog.Session{Backend: backend, Tenant: "acmeCo/", DataPlane: providerDataPlane}}, &configureResp)
+
+	var spec MaterializationSpec[testWarehouseConfig, testWarehouseResource] = MaterializationSpec[testWarehouseConfig, testWarehouseResource]{
+		Endpoint: endpoint.ConnectorSpec[testWarehouseConfig]{Connector: endpoint.Connector[testWarehouseConfig]{Image: testNamedConnector.Image, Config: testWarehouseConfig{Host: "db.example.com"}}},
+		Bindings: []materialization.Binding[testWarehouseResource]{{
+			Resource: testWarehouseResource{Table: "orders_v2", Schema: "public"},
+			Source:   materialization.BindingSource{Name: "acmeCo/orders"},
+		}},
+	}
+
+	state, err := entry.codec.Value("warehouse", spec)
+
+	if err == nil {
+		state, err = withCatalogName(state, entry.catalogName("warehouse"))
+	}
+
+	if err == nil {
+		state, err = withValue(state, dataPlanePath, liveDataPlane)
+	}
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	spec.Bindings[0].Resource.Table = "orders_v3"
+
+	plan, err := entry.codec.Value("lake", spec)
+
+	if err == nil {
+		plan, err = entry.planCatalogName(plan)
+	}
+
+	if err == nil {
+		plan, _, err = entry.planDataPlane(plan, tftypes.Value{}, state)
+	}
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	if got := plannedDataPlane(plan); got != providerDataPlane {
+		test.Fatalf("planned data_plane = %q, want the provider one for the new task", got)
+	}
+
+	if _, err := entry.planResourcePaths(ctx, plan, state); err != nil {
+		test.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(backend.dataPlanes, []string{liveDataPlane}) {
+		test.Errorf("validated on %q, want the live materialization validated once on the data plane it runs in", backend.dataPlanes)
 	}
 }

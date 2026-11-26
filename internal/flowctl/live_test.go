@@ -22,7 +22,7 @@ func liveClient(test *testing.T, variable string) (*Client, string) {
 		test.Skipf("set FLOWCTL_LIVE_BINARY, FLOW_AUTH_TOKEN and %s to run against the real flowctl", variable)
 	}
 
-	return NewClient(binary, os.Getenv("FLOW_AUTH_TOKEN"), os.Getenv("FLOWCTL_LIVE_DATA_PLANE")), value
+	return NewClient(binary, os.Getenv("FLOW_AUTH_TOKEN")), value
 }
 
 // logTree logs the files flowctl wrote and the tree read, so the layout can be checked by eye.
@@ -148,7 +148,7 @@ func TestLiveDiscover(test *testing.T) {
 	}
 
 	err = inWorkspace(map[string][]byte{specFile: content}, func(directory string) error {
-		tree, err := client.discover(context.Background(), directory)
+		tree, err := client.discover(context.Background(), directory, os.Getenv("FLOWCTL_LIVE_DATA_PLANE"))
 
 		if err != nil {
 			return err

@@ -74,3 +74,29 @@ func TestConfigurePrefersSettingsOverTheEnvironment(test *testing.T) {
 		}
 	}
 }
+
+func TestConfigureSetsTheSessionDataPlane(test *testing.T) {
+	test.Setenv("FLOW_AUTH_TOKEN", "ambient-token")
+
+	expectations := map[string]struct {
+		environment string
+		values      map[string]tftypes.Value
+		want        string
+	}{
+		"configured data plane":  {"ops/dp/public/ambient", map[string]tftypes.Value{"data_plane": tftypes.NewValue(tftypes.String, "ops/dp/public/configured")}, "ops/dp/public/configured"},
+		"environment data plane": {"ops/dp/public/ambient", map[string]tftypes.Value{}, "ops/dp/public/ambient"},
+		"no data plane":          {"", map[string]tftypes.Value{}, ""},
+	}
+
+	for name, expected := range expectations {
+		test.Setenv("ESTUARY_DATA_PLANE", expected.environment)
+
+		configureResp := configure(test, expected.values)
+
+		session, _ := configureResp.ResourceData.(*catalog.Session)
+
+		if configureResp.Diagnostics.HasError() || session == nil || session.DataPlane != expected.want {
+			test.Errorf("%s: session = %v (%v), want data plane %q", name, session, configureResp.Diagnostics, expected.want)
+		}
+	}
+}

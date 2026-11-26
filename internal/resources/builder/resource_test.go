@@ -73,23 +73,30 @@ func withValue(value tftypes.Value, path *tftypes.AttributePath, raw any) (tftyp
 
 // testBackend is an in-memory catalog.Backend recording read, deleted, published and validated specs, failing
 // publications with publishErr and validations with validateErr. Validations give each binding its table as path.
+// DataPlanes records the data plane of each publication, discovery and validation, in order. Live entries run in
+// dataPlane, unread when empty or failing with dataPlaneErr.
 type testBackend struct {
-	live        map[string]any
-	reads       []string
-	deletes     []string
-	published   map[string]any
-	validated   []catalog.RawMaterialization
-	discovered  map[string]map[string]any
-	discovers   []catalog.RawCapture
-	discovery   *catalog.Discovery
-	resets      []string
-	publishErr  error
-	validateErr error
+	live         map[string]any
+	dataPlane    string
+	dataPlaneErr error
+	dataPlanes   []string
+	reads        []string
+	deletes      []string
+	published    map[string]any
+	validated    []catalog.RawMaterialization
+	discovered   map[string]map[string]any
+	discovers    []catalog.RawCapture
+	discovery    *catalog.Discovery
+	resets       []string
+	publishErr   error
+	validateErr  error
 }
 
-func (backend *testBackend) ResourcePaths(_ context.Context, _ string, spec catalog.MaterializationSpec) ([][]string, error) {
+func (backend *testBackend) ResourcePaths(_ context.Context, _ string, dataPlane string, spec catalog.MaterializationSpec) ([][]string, error) {
 	var paths [][]string
 	var raw catalog.RawMaterialization = spec.(catalog.RawMaterialization)
+
+	backend.dataPlanes = append(backend.dataPlanes, dataPlane)
 
 	backend.validated = append(backend.validated, raw)
 
@@ -102,7 +109,8 @@ func (backend *testBackend) ResourcePaths(_ context.Context, _ string, spec cata
 	return paths, backend.validateErr
 }
 
-func (backend *testBackend) PublishCapture(_ context.Context, name string, spec catalog.CaptureSpec, resets []string, discovery *catalog.Discovery) error {
+func (backend *testBackend) PublishCapture(_ context.Context, name string, dataPlane string, spec catalog.CaptureSpec, resets []string, discovery *catalog.Discovery) error {
+	backend.dataPlanes = append(backend.dataPlanes, dataPlane)
 	backend.resets = resets
 	backend.discovery = discovery
 
@@ -111,7 +119,8 @@ func (backend *testBackend) PublishCapture(_ context.Context, name string, spec 
 	return backend.publishErr
 }
 
-func (backend *testBackend) PublishMaterialization(_ context.Context, name string, spec catalog.MaterializationSpec) error {
+func (backend *testBackend) PublishMaterialization(_ context.Context, name string, dataPlane string, spec catalog.MaterializationSpec) error {
+	backend.dataPlanes = append(backend.dataPlanes, dataPlane)
 	backend.published = spec.(catalog.RawMaterialization)
 
 	return backend.publishErr
@@ -123,10 +132,15 @@ func (backend *testBackend) DeleteCatalogEntry(_ context.Context, name string) e
 	return nil
 }
 
-func (backend *testBackend) DiscoverCapture(_ context.Context, _ string, spec catalog.CaptureSpec) (map[string]map[string]any, error) {
+func (backend *testBackend) DiscoverCapture(_ context.Context, _ string, dataPlane string, spec catalog.CaptureSpec) (map[string]map[string]any, error) {
+	backend.dataPlanes = append(backend.dataPlanes, dataPlane)
 	backend.discovers = append(backend.discovers, spec.(catalog.RawCapture))
 
 	return backend.discovered, nil
+}
+
+func (backend *testBackend) ReadDataPlane(_ context.Context, _ string) (string, error) {
+	return backend.dataPlane, backend.dataPlaneErr
 }
 
 func (backend *testBackend) ReadSpec(_ context.Context, name string) (map[string]any, error) {

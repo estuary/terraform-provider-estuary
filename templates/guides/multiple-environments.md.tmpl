@@ -102,6 +102,39 @@ With `auto_discover`, loop over the data source's `live_bindings` instead, to in
 
 > **Warning:** Changing `tenant`, or a `name` that changes the catalog name, replaces the capture or materialization: the apply deletes it and creates a new one. Each resource keeps the name it was created under in the read-only `catalog_name`, and the plan warns about each replacement. To manage another prefix alongside, use a second provider configuration with an [alias](https://developer.hashicorp.com/terraform/language/providers/configuration#alias-multiple-provider-configurations).
 
+## Use Several Data Planes
+
+The provider `data_plane` is the default data plane of every capture and materialization the provider creates. To run some of them elsewhere, such as one capture in a private data plane next to its database, set `data_plane` on those resources:
+
+```hcl
+provider "estuary" {
+  tenant     = "acmeCo/prod/"
+  data_plane = "ops/dp/public/example-data-plane" # default for new resources
+}
+
+resource "estuary_source_postgres" "shop" {
+  name = "shop" # created in the provider data plane
+  # ...
+}
+
+resource "estuary_source_postgres" "ledger" {
+  name       = "ledger"
+  data_plane = "ops/dp/private/acmeCo/example-data-plane"
+  # ...
+}
+```
+
+A new capture or materialization is created in its own `data_plane`, else in the provider one, else in the first data plane of your storage mapping. The data plane must be one your storage mapping lists, or Estuary rejects the publication. A capture discovers its source from its data plane, and the collections it creates are created there too.
+
+Estuary can't move a live capture or materialization to another data plane, so the data plane only applies when it's created:
+
+- Each resource shows the data plane it runs in as `data_plane`, read from Estuary on every refresh and on import.
+- Changing the provider `data_plane`, or removing `data_plane` from a resource, changes nothing for the captures and materializations that already exist. Only the ones created afterwards use the new default.
+- Setting a resource's `data_plane` to another one than it runs in fails the plan, and nothing is published or replaced. To move it, ask Estuary support to migrate it, which keeps its state, then set `data_plane` to the data plane it runs in.
+- Replacing a resource by changing its catalog name creates a new capture or materialization, in the data plane a new one gets.
+
+Keep a materialization in the data plane of the collections it reads: Estuary doesn't support reading collections across data planes.
+
 ## Share Pipelines with Modules
 
 Write a repeated pipeline once as a module, and call it once per pipeline:

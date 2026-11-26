@@ -75,17 +75,19 @@ func (estuaryProvider *EstuaryProvider) Schema(_ context.Context, _ provider.Sch
 				Optional:    true,
 			},
 			"data_plane": schema.StringAttribute{
-				Description: "Data plane that new captures and materializations are created in, and that capture discovery runs on " +
-					"(e.g., ops/dp/public/example-data-plane). Required for BYOC or a non-default public data plane. Defaults to " +
-					"the first data plane of your storage mapping. Existing entries keep their data plane. Can also be set through " +
-					"ESTUARY_DATA_PLANE.",
+				Description: "Data plane that new captures and materializations are created in, unless they set their own data_plane " +
+					"(e.g., ops/dp/public/example-data-plane). Required for BYOC or a non-default public data plane, unless every " +
+					"resource sets its own. Defaults to the first data plane of your storage mapping. Existing captures and " +
+					"materializations keep their data plane, so changing this affects only the ones created afterwards. Can also be " +
+					"set through ESTUARY_DATA_PLANE.",
 				Optional: true,
 			},
 		},
 	}
 }
 
-// Configure builds the catalog.Session, holding the backend and tenant, shared by every resource and data source.
+// Configure builds the catalog.Session, holding the backend, tenant and data plane, shared by every resource and data
+// source.
 func (estuaryProvider *EstuaryProvider) Configure(ctx context.Context, configureReq provider.ConfigureRequest, configureResp *provider.ConfigureResponse) {
 	var providerConfig EstuaryProviderModel
 
@@ -138,7 +140,6 @@ func (estuaryProvider *EstuaryProvider) Configure(ctx context.Context, configure
 	catalogBackend, err := newBackend(backend, backendOptions{
 		flowctlPath: flowctlPath,
 		token:       token,
-		dataPlane:   dataPlane,
 	})
 
 	if err != nil {
@@ -147,8 +148,9 @@ func (estuaryProvider *EstuaryProvider) Configure(ctx context.Context, configure
 	}
 
 	var session *catalog.Session = &catalog.Session{
-		Backend: catalogBackend,
-		Tenant:  catalog.Tenant(tenant),
+		Backend:   catalogBackend,
+		Tenant:    catalog.Tenant(tenant),
+		DataPlane: dataPlane,
 	}
 
 	configureResp.ResourceData = session

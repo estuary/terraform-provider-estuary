@@ -20,7 +20,9 @@ import (
 
 // publication is what publishing an entry does besides its spec: allDiscovered adds every discovered binding, matched
 // through identifier, liveBindings are the live ones it replaces, and resets lists the collections it dataflow resets.
+// DataPlane is the one of the entry, see plannedDataPlane, which the specs it creates are created in.
 type publication struct {
+	dataPlane     string
 	allDiscovered bool
 	identifier    catalog.BindingsIdentifier
 	liveBindings  []any
@@ -68,9 +70,10 @@ func (entryResource *entryResource[D, S]) Configure(_ context.Context, configure
 	entryResource.configure(configureReq.ProviderData, &configureResp.Diagnostics)
 }
 
-// ModifyPlan plans secret hashes, binding targets, names and resource paths, and validates backfill triggers. It replaces the entry
-// only when its catalog name changes, with or without tenant and connector name being the same entry, warning when
-// a provider tenant change is what moves it.
+// ModifyPlan plans secret hashes, the data plane, binding targets, names and resource paths, and validates backfill
+// triggers. It replaces the entry only when its catalog name changes, with or without tenant and connector name being
+// the same entry, warning when a provider tenant change is what moves it. A data plane change fails instead, see
+// planDataPlane.
 func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modifyPlanReq resource.ModifyPlanRequest, modifyPlanResp *resource.ModifyPlanResponse) {
 	var stateName types.String
 	var planName types.String
@@ -87,6 +90,17 @@ func (entryResource *entryResource[D, S]) ModifyPlan(ctx context.Context, modify
 	modifyPlanResp.Diagnostics.Append(diagnostics...)
 
 	planned, err := entryResource.planCatalogName(planned)
+
+	// Before the targets and resource paths, whose discovery and dry run use the planned data plane.
+	if err == nil {
+		planned, diagnostics, err = entryResource.planDataPlane(planned, modifyPlanReq.Config.Raw, modifyPlanReq.State.Raw)
+
+		modifyPlanResp.Diagnostics.Append(diagnostics...)
+
+		if diagnostics.HasError() {
+			return
+		}
+	}
 
 	// Shards go first: targets discover from the planned spec, which converts only once no computed value is unknown.
 	if err == nil {
@@ -231,6 +245,10 @@ func (entryResource *entryResource[D, S]) readState(ctx context.Context, name st
 
 	if err == nil {
 		refreshed, err = withCatalogName(refreshed, catalogName)
+	}
+
+	if err == nil {
+		refreshed, err = entryResource.withLiveDataPlane(ctx, refreshed, catalogName)
 	}
 
 	if err != nil {
@@ -384,6 +402,10 @@ func (entryResource *entryResource[D, S]) ImportState(ctx context.Context, impor
 		value, err = withCatalogName(value, catalogName)
 	}
 
+	if err == nil {
+		value, err = entryResource.withLiveDataPlane(ctx, value, catalogName)
+	}
+
 	if err != nil {
 		importResp.Diagnostics.AddError("Importing "+entryResource.catalogType.name+" "+catalogName, err.Error())
 		return
@@ -445,7 +467,7 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 
 	ctx = catalog.WithSecrets(ctx, entryResource.codec.secrets.values(planned)...)
 
-	var publication publication = publication{allDiscovered: prior == nil && addsNewBindings(spec)}
+	var publication publication = publication{dataPlane: plannedDataPlane(plan.Raw), allDiscovered: prior == nil && addsNewBindings(spec)}
 
 	publication.identifier, _ = any(spec).(catalog.BindingsIdentifier)
 
@@ -492,6 +514,10 @@ func (entryResource *entryResource[D, S]) apply(ctx context.Context, plan tfsdk.
 
 	if err == nil {
 		stored, err = entryResource.publishedResourcePaths(ctx, catalogName, stored)
+	}
+
+	if err == nil {
+		stored, err = entryResource.publishedDataPlane(ctx, catalogName, stored)
 	}
 
 	if err != nil {

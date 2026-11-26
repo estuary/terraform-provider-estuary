@@ -44,9 +44,10 @@ resource "estuary_source_postgres" "shop" {
   ]
 }
 
-# Server in a private network, reached through an SSH tunnel.
+# Server in a private network, reached through an SSH tunnel, captured from its own data plane instead of the provider one.
 resource "estuary_source_postgres" "private" {
-  name = "postgres/private"
+  name       = "postgres/private"
+  data_plane = "ops/dp/private/acmeCo/example-data-plane"
 
   config = {
     address      = "123.4.567.91:5432"

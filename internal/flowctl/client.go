@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
@@ -22,7 +23,9 @@ const specFile string = "flow.yaml"
 type Client struct {
 	binaryPath string
 	apiToken   string
-	dataPlane  string
+
+	// dataPlaneNames caches data plane names by ID, see ReadDataPlane, as resources refresh in parallel.
+	dataPlaneNames sync.Map
 }
 
 var _ catalog.Backend = (*Client)(nil)
@@ -109,12 +112,13 @@ func (client *Client) execCommandIn(ctx context.Context, environment []string, a
 	return stdout.Bytes(), nil
 }
 
-func (client *Client) withDataPlane(arguments []string, flag string) []string {
-	if client.dataPlane == "" {
+// withDataPlane returns arguments with flag naming dataPlane, unchanged without one, leaving the choice to Estuary.
+func withDataPlane(arguments []string, flag string, dataPlane string) []string {
+	if dataPlane == "" {
 		return arguments
 	}
 
-	return append(arguments, flagValue(flag, client.dataPlane))
+	return append(arguments, flagValue(flag, dataPlane))
 }
 
 // rewriteSpec replaces the workspace spec file content with what rewrite returns for it.
@@ -147,11 +151,10 @@ func (client *Client) connectorContext(ctx context.Context, message string, file
 	return ctx, cancel
 }
 
-// NewClient creates a flowctl Client, an empty dataPlane using the account default. Catalog names include the tenant.
-func NewClient(binaryPath, apiToken, dataPlane string) *Client {
+// NewClient creates a flowctl Client. Catalog names include the tenant.
+func NewClient(binaryPath, apiToken string) *Client {
 	return &Client{
 		binaryPath: binaryPath,
 		apiToken:   apiToken,
-		dataPlane:  dataPlane,
 	}
 }

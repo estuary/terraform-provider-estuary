@@ -131,7 +131,7 @@ func (entryResource *entryResource[D, S]) validatedResourcePaths(ctx context.Con
 		catalog.KeepResourceMeta(live, binding)
 	}
 
-	validated, err := backend.ResourcePaths(ctx, catalogName, catalog.RawMaterialization(document))
+	validated, err := backend.ResourcePaths(ctx, catalogName, plannedDataPlane(plan), catalog.RawMaterialization(document))
 
 	if err != nil {
 		return nil, fmt.Errorf("validating the planned bindings of %s to read their resource paths: %w", catalogName, err)

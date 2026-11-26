@@ -20,9 +20,10 @@ func discoveredResources(tree *catalogTree, name string) map[string]map[string]a
 	return resources
 }
 
-// discover runs flowctl discover on the workspace spec file and reads the discovered catalog tree back.
-func (client *Client) discover(ctx context.Context, directory string) (*catalogTree, error) {
-	var arguments []string = client.withDataPlane([]string{"discover"}, "--data-plane")
+// discover runs flowctl discover on the workspace spec file, on dataPlane, and reads the discovered catalog tree back.
+// Without a data plane, flowctl discovers a live capture on its own and a new one on the default.
+func (client *Client) discover(ctx context.Context, directory string, dataPlane string) (*catalogTree, error) {
+	var arguments []string = withDataPlane([]string{"discover"}, "--data-plane", dataPlane)
 
 	if _, err := client.execCommand(ctx, append(arguments, "--source", filepath.Join(directory, specFile))...); err != nil {
 		return nil, err
@@ -31,8 +32,8 @@ func (client *Client) discover(ctx context.Context, directory string) (*catalogT
 	return readCatalogTree(directory)
 }
 
-// DiscoverCapture discovers the capture on the client data plane, returning each binding resource by target.
-func (client *Client) DiscoverCapture(ctx context.Context, name string, spec catalog.CaptureSpec) (map[string]map[string]any, error) {
+// DiscoverCapture discovers the capture on dataPlane, see discover, returning each binding resource by target.
+func (client *Client) DiscoverCapture(ctx context.Context, name string, dataPlane string, spec catalog.CaptureSpec) (map[string]map[string]any, error) {
 	var resources map[string]map[string]any
 
 	files, err := captureFiles(name, spec)
@@ -46,7 +47,7 @@ func (client *Client) DiscoverCapture(ctx context.Context, name string, spec cat
 	defer cancel()
 
 	err = inWorkspace(files, func(directory string) error {
-		tree, err := client.discover(ctx, directory)
+		tree, err := client.discover(ctx, directory, dataPlane)
 
 		if err == nil {
 			resources = discoveredResources(tree, name)

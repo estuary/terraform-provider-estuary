@@ -14,6 +14,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcedynamodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcefacebookmarketing"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcegoogleplay"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcehttpingest"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcekafka"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemongodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemysql"
@@ -56,6 +57,7 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	sourcedynamodb.New,
 	sourcefacebookmarketing.New,
 	sourcegoogleplay.New,
+	sourcehttpingest.New,
 	sourcekafka.New,
 	sourcemongodb.New,
 	sourcemysql.New,
@@ -78,6 +80,7 @@ var dataSources []func() datasource.DataSource = []func() datasource.DataSource{
 	sourcedynamodb.NewDataSource,
 	sourcefacebookmarketing.NewDataSource,
 	sourcegoogleplay.NewDataSource,
+	sourcehttpingest.NewDataSource,
 	sourcekafka.NewDataSource,
 	sourcemongodb.NewDataSource,
 	sourcemysql.NewDataSource,

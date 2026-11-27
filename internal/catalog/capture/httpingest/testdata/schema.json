@@ -1,0 +1,271 @@
+{
+  "endpoint": {
+    "$schema": "https://json-schema.org/draft/2019-09/schema",
+    "properties": {
+      "allowedCorsOrigins": {
+        "default": [
+          "*"
+        ],
+        "description": "List of allowed CORS origins.\nEach item will be interpreted as a specific request origin permitted by the Access-Control-Allow-Origin header.\nDefaults to [\"*\"], which allows all origins.\nSet to an empty array to disable CORS.\nMust not include \"*\" when an authentication token is configured.\nSee: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin",
+        "items": {
+          "type": "string"
+        },
+        "order": 3,
+        "title": "CORS Allowed Origins",
+        "type": "array"
+      },
+      "paths": {
+        "default": [
+          "/webhook-data"
+        ],
+        "description": "List of URL paths to accept requests at.\n\nDiscovery will return a separate collection for each given path. Paths\nmust be provided without any percent encoding, and should not include\nany query parameters or fragment.\n\nPaths can include path parameters, following the syntax of OpenAPI path\ntemplating. For example, `/vendors/{vendorId}/products/{productId}`,\nwhich would accept a request to `/vendors/abc/products/123`. This would\nresult in captured data with\n`\"_meta\": { \"pathParams\": { \"vendorId\": \"abc\", \"productId\": \"123\"}, ...}`",
+        "items": {
+          "pattern": "/.+",
+          "type": "string"
+        },
+        "order": 1,
+        "title": "URL paths",
+        "type": "array"
+      },
+      "requireAuthToken": {
+        "default": null,
+        "description": "Optional bearer token to authenticate webhook requests.\n\nWARNING: If this is empty or unset, then anyone who knows the URL of the connector\nwill be able to write data to your collections.",
+        "order": 2,
+        "secret": true,
+        "title": "Authentication token",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "signatureConfig": {
+        "default": {
+          "provider": "none"
+        },
+        "description": "Configuration for verifying webhook signatures.\nIf set, incoming requests must include valid signature headers.",
+        "discriminator": {
+          "propertyName": "provider"
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "provider": {
+                "const": "none",
+                "default": "none",
+                "order": 0,
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider"
+            ],
+            "title": "None"
+          },
+          {
+            "properties": {
+              "maxSignatureAge": {
+                "default": 300,
+                "description": "Maximum age of a signed request in seconds before it is rejected. Defaults to 300 (5 minutes).",
+                "maximum": 259200,
+                "minimum": 1,
+                "order": 2,
+                "title": "Max Signature Age",
+                "type": "integer"
+              },
+              "provider": {
+                "const": "twilio",
+                "default": "twilio",
+                "order": 0,
+                "type": "string"
+              },
+              "publicKey": {
+                "description": "PEM-encoded ECDSA public key from Twilio SendGrid Event Webhook settings.",
+                "multiline": true,
+                "order": 1,
+                "secret": true,
+                "title": "Public Key",
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "publicKey"
+            ],
+            "title": "Twilio SendGrid"
+          },
+          {
+            "properties": {
+              "maxSignatureAge": {
+                "default": 300,
+                "description": "Maximum age of a signed request in seconds before it is rejected. Defaults to 300 (5 minutes).",
+                "maximum": 259200,
+                "minimum": 1,
+                "order": 2,
+                "title": "Max Signature Age",
+                "type": "integer"
+              },
+              "provider": {
+                "const": "zoom",
+                "default": "zoom",
+                "order": 0,
+                "type": "string"
+              },
+              "publicKey": {
+                "description": "Zoom webhook secret token used as the HMAC-SHA256 key.",
+                "order": 1,
+                "secret": true,
+                "title": "Secret Token",
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "publicKey"
+            ],
+            "title": "Zoom"
+          },
+          {
+            "properties": {
+              "maxSignatureAge": {
+                "default": 300,
+                "description": "Maximum age of a signed request in seconds before it is rejected. Defaults to 300 (5 minutes).",
+                "maximum": 259200,
+                "minimum": 1,
+                "order": 2,
+                "title": "Max Signature Age",
+                "type": "integer"
+              },
+              "provider": {
+                "const": "knock",
+                "default": "knock",
+                "order": 0,
+                "type": "string"
+              },
+              "publicKey": {
+                "description": "Knock webhook signing key used as the HMAC-SHA256 secret.",
+                "order": 1,
+                "secret": true,
+                "title": "Signing Key",
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "publicKey"
+            ],
+            "title": "Knock"
+          },
+          {
+            "properties": {
+              "algorithm": {
+                "default": "hmac_sha256",
+                "enum": [
+                  "hmac_sha256",
+                  "ecdsa"
+                ],
+                "order": 1,
+                "title": "Algorithm",
+                "type": "string"
+              },
+              "maxSignatureAge": {
+                "default": 300,
+                "description": "Maximum age of a signed request in seconds before it is rejected. Only applies when a Timestamp Header is configured. Defaults to 300 (5 minutes).",
+                "maximum": 259200,
+                "minimum": 1,
+                "order": 7,
+                "title": "Max Signature Age",
+                "type": "integer"
+              },
+              "provider": {
+                "const": "custom",
+                "default": "custom",
+                "order": 0,
+                "type": "string"
+              },
+              "publicKey": {
+                "description": "PEM-encoded public key for ECDSA, or shared secret for HMAC.",
+                "multiline": true,
+                "order": 2,
+                "secret": true,
+                "title": "Public Key",
+                "type": "string"
+              },
+              "signatureEncoding": {
+                "default": "hex",
+                "description": "Encoding of the signature value in the header. Defaults to hex.",
+                "enum": [
+                  "hex",
+                  "base64"
+                ],
+                "order": 4,
+                "title": "Signature Encoding",
+                "type": "string"
+              },
+              "signatureHeader": {
+                "description": "HTTP header containing the signature.",
+                "order": 3,
+                "title": "Signature Header",
+                "type": "string"
+              },
+              "signingStringTemplate": {
+                "description": "Template used to construct the string that is signed. Must include {PAYLOAD}, may include {TIMESTAMP}. Example: \"{TIMESTAMP}:{PAYLOAD}\".",
+                "order": 5,
+                "title": "Signing String Template",
+                "type": "string"
+              },
+              "timestampHeader": {
+                "description": "Optional HTTP header containing the timestamp.",
+                "order": 6,
+                "title": "Timestamp Header",
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "algorithm",
+              "publicKey",
+              "signatureHeader",
+              "signingStringTemplate"
+            ],
+            "title": "Custom"
+          }
+        ],
+        "order": 4,
+        "title": "Signature Verification",
+        "type": "object"
+      }
+    },
+    "title": "EndpointConfig",
+    "type": "object"
+  },
+  "resource": {
+    "$schema": "https://json-schema.org/draft/2019-09/schema",
+    "properties": {
+      "idFromHeader": {
+        "default": null,
+        "description": "Set the /_meta/webhookId from the given HTTP header in each request.\n\nIf not set, then a random id will be generated automatically. If set, then each request will be required\nto have the header, and the header value will be used as the value of `/_meta/webhookId`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "path": {
+        "default": null,
+        "description": "The URL path to use for adding documents to this binding. Defaults to the name of the collection.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "stream": {
+        "default": null,
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "title": "ResourceConfig",
+    "type": "object"
+  }
+}

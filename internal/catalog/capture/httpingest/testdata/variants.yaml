@@ -1,0 +1,86 @@
+captures:
+  acmeCo/webhooks/open:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-http-ingest:v1
+        config:
+          paths:
+            - /webhook-data
+    bindings:
+      - resource: { stream: /webhook-data, path: /webhook-data }
+        target: acmeCo/webhooks/webhook-data
+
+  acmeCo/webhooks/auth-token:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-http-ingest:v1
+        config:
+          paths:
+            - /orders
+            - /vendors/{vendorId}/products
+          allowedCorsOrigins: []
+          requireAuthToken: <token>
+    bindings:
+      - resource: { stream: /orders, path: /orders }
+        target: acmeCo/webhooks/orders
+
+      - resource: { stream: "/vendors/{vendorId}/products", path: "/vendors/{vendorId}/products" }
+        target: acmeCo/webhooks/vendor-products
+
+  acmeCo/webhooks/zoom-signature:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-http-ingest:v1
+        config:
+          paths:
+            - /zoom
+          signatureConfig:
+            provider: zoom
+            publicKey: <secret-token>
+    bindings:
+      - resource: { stream: /zoom, path: /zoom }
+        target: acmeCo/webhooks/zoom
+
+  acmeCo/webhooks/twilio-signature:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-http-ingest:v1
+        config:
+          paths:
+            - /sendgrid
+          signatureConfig:
+            provider: twilio
+            publicKey: |
+              -----BEGIN PUBLIC KEY-----
+              <public-key>
+              -----END PUBLIC KEY-----
+            maxSignatureAge: 600
+    bindings:
+      - resource: { stream: /sendgrid, path: /sendgrid }
+        target: acmeCo/webhooks/sendgrid
+
+  acmeCo/webhooks/knock-signature:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-http-ingest:v1
+        config:
+          paths:
+            - /knock
+          signatureConfig:
+            provider: knock
+            publicKey: <signing-key>
+    bindings:
+      - resource: { stream: /knock, path: /knock }
+        target: acmeCo/webhooks/knock
+
+  acmeCo/webhooks/no-signature:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-http-ingest:v1
+        config:
+          paths: []
+          signatureConfig:
+            provider: none
+    bindings:
+      - resource: { stream: events, path: /events }
+        target: acmeCo/webhooks/events

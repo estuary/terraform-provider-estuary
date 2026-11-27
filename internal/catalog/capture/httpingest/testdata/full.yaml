@@ -1,0 +1,39 @@
+captures:
+  acmeCo/webhooks/all-options:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-http-ingest:v1
+        config:
+          paths:
+            - /github
+            - /shopify/orders
+          allowedCorsOrigins:
+            - https://app.acme.example
+            - https://admin.acme.example
+          requireAuthToken: <token>
+          signatureConfig:
+            provider: custom
+            algorithm: hmac_sha256
+            publicKey: <shared-secret>
+            signatureHeader: X-Signature
+            signatureEncoding: base64
+            signingStringTemplate: "{TIMESTAMP}:{PAYLOAD}"
+            timestampHeader: X-Timestamp
+            maxSignatureAge: 120
+    bindings:
+      - resource:
+          stream: /github
+          path: /github
+          idFromHeader: X-GitHub-Delivery
+        target: acmeCo/webhooks/github
+
+      - resource:
+          stream: /shopify/orders
+          path: /shopify/orders
+        target: acmeCo/webhooks/shopify-orders
+        backfill: 1
+
+      - resource:
+          stream: legacy
+        target: acmeCo/webhooks/legacy
+        disable: true

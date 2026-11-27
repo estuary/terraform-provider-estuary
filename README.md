@@ -76,6 +76,7 @@ Connectors configured the same way share one page, with examples and every attri
 | [Apple App Store](internal/resources/sourceappleappstore/README.md) | `estuary_source_apple_app_store` |
 | [Facebook Marketing](internal/resources/sourcefacebookmarketing/README.md) | `estuary_source_facebook_marketing` |
 | [Google Play](internal/resources/sourcegoogleplay/README.md) | `estuary_source_google_play` |
+| [HTTP Ingest (Webhook)](internal/resources/sourcehttpingest/README.md) | `estuary_source_http_ingest` |
 | [MongoDB and Amazon DocumentDB](internal/resources/sourcemongodb/README.md) | `estuary_source_mongodb`, `estuary_source_amazon_documentdb` |
 | [MySQL](internal/resources/sourcemysql/README.md) | `estuary_source_mysql`, `estuary_source_aurora_mysql`, `estuary_source_rds_mysql` |
 | [MySQL and Amazon Redshift (batch)](internal/resources/sourcesqlbatch/README.md) | `estuary_source_mysql_batch`, `estuary_source_redshift_batch` |

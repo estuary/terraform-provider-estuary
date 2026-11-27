@@ -2,6 +2,8 @@ package builder
 
 import (
 	"context"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
@@ -18,6 +20,13 @@ import (
 type connectorEntry[D Document[D, S], S any] struct {
 	*entryResource[D, S]
 	backend *testBackend
+}
+
+// newConnectorCapture returns the capture resource of connector over the sealed live spec, a YAML document.
+func newConnectorCapture[C, R any](test *testing.T, connector Connector, live string) connectorEntry[captureDocument[C, R], CaptureSpec[C, R]] {
+	test.Helper()
+
+	return configuredConnector(test, NewCapture[C, R](connector)().(*entryResource[captureDocument[C, R], CaptureSpec[C, R]]), live)
 }
 
 // newConnectorMaterialization returns the materialization resource of connector over the sealed live spec, a YAML
@@ -193,10 +202,9 @@ func (entry connectorEntry[D, S]) assertPlansNoChanges(test *testing.T, name str
 	}
 }
 
-// assertAppliesWithoutPublishing checks that applying the configured spec over the imported state leaves the live
-// spec as it is, publishing nothing. Unlike assertPlansNoChanges, the spec may declare bindings, which the apply takes
-// over from the live ones.
-func (entry connectorEntry[D, S]) assertAppliesWithoutPublishing(test *testing.T, name string, configured S, state tftypes.Value) diag.Diagnostics {
+// apply applies the configured spec named name over state, as terraform apply does, returning the spec it published,
+// nil when it left the live one as it is, and the plan warnings.
+func (entry connectorEntry[D, S]) apply(test *testing.T, name string, configured S, state tftypes.Value) (map[string]any, diag.Diagnostics) {
 	test.Helper()
 
 	config, modifyPlanResp := entry.plan(test, name, configured, state)
@@ -215,13 +223,20 @@ func (entry connectorEntry[D, S]) assertAppliesWithoutPublishing(test *testing.T
 		test.Fatalf("apply: %v", updateResp.Diagnostics)
 	}
 
-	if entry.backend.published != nil {
-		content, _ := yaml.Marshal(entry.backend.published)
+	return entry.backend.published, modifyPlanResp.Diagnostics.Warnings()
+}
+
+// assertAppliesWithoutPublishing checks that applying the configured spec over the imported state leaves the live
+// spec as it is, publishing nothing. Unlike assertPlansNoChanges, the spec may declare bindings, which the apply takes
+// over from the live ones.
+func (entry connectorEntry[D, S]) assertAppliesWithoutPublishing(test *testing.T, name string, configured S, state tftypes.Value) {
+	test.Helper()
+
+	if published, _ := entry.apply(test, name, configured, state); published != nil {
+		content, _ := yaml.Marshal(published)
 
 		test.Errorf("the apply published a spec, want the live one left as it is:\n%s", content)
 	}
-
-	return modifyPlanResp.Diagnostics.Warnings()
 }
 
 // valueDifferences lists the attributes whose value differs between got and want, one per line.
@@ -298,6 +313,49 @@ func assertWriteOnly(test *testing.T, secrets secrets, config tftypes.Value, pat
 
 		if stored, err := attributeValue(state, hashPath); err != nil || stored.As(&hash) != nil || !verifySecret(secret, hash) {
 			test.Errorf("%s of the state = %v (%v), want the salted hash of the secret", hashPath, stored, err)
+		}
+	}
+}
+
+// assertCaptureSamplesRoundTrip checks each capture sample in directory converts to a Terraform value and back
+// unchanged.
+func assertCaptureSamplesRoundTrip[C, R any](test *testing.T, connector Connector, directory string) {
+	test.Helper()
+
+	codec, err := newCodec[captureDocument[C, R]](connector, captureType[R]())
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	files, err := filepath.Glob(filepath.Join(directory, "*.yaml"))
+
+	if err != nil || len(files) == 0 {
+		test.Fatalf("no samples in %s: %v", directory, err)
+	}
+
+	for _, file := range files {
+		for name, spec := range spectest.DecodeCaptures[CaptureSpec[C, R]](test, file) {
+			// The Terraform shape holds backfill triggers, not the counters Estuary keeps.
+			for index := range spec.Bindings {
+				spec.Bindings[index].Backfill = 0
+			}
+
+			value, err := codec.Value(name, spec)
+
+			if err != nil {
+				test.Fatalf("%s %s: converting to a Terraform value: %v", file, name, err)
+			}
+
+			gotName, got, err := codec.Spec(value)
+
+			if err != nil {
+				test.Fatalf("%s %s: converting back to a spec: %v", file, name, err)
+			}
+
+			if gotName != name || !reflect.DeepEqual(got, spec) {
+				test.Errorf("%s %s: round trip = %s %+v, want %+v", file, name, gotName, got, spec)
+			}
 		}
 	}
 }

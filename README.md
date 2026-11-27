@@ -75,6 +75,7 @@ Connectors configured the same way share one page, with examples and every attri
 | [MongoDB](internal/resources/sourcemongodb/README.md) | `estuary_source_mongodb` |
 | [MySQL](internal/resources/sourcemysql/README.md) | `estuary_source_mysql`, `estuary_source_aurora_mysql`, `estuary_source_rds_mysql` |
 | [PostgreSQL](internal/resources/sourcepostgres/README.md) | `estuary_source_postgres`, `estuary_source_aurora_postgres`, `estuary_source_rds_postgres` |
+| [Salesforce](internal/resources/sourcesalesforce/README.md) | `estuary_source_salesforce` |
 
 ### Materializations
 

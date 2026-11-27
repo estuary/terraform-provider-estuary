@@ -1,0 +1,45 @@
+captures:
+  acmeCo/salesforce/client-credentials:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-salesforce-native:v1
+        config:
+          credentials:
+            credentials_title: Client Credentials
+            client_id: <consumer-key>
+            client_secret: <consumer-secret>
+          my_domain: acme.my.salesforce.com
+    bindings:
+      - resource: { name: Account, interval: PT5M }
+        target: acmeCo/salesforce/Account
+
+  acmeCo/salesforce/oauth:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-salesforce-native:v1
+        config:
+          credentials:
+            credentials_title: OAuth Credentials
+            client_id: <client-id>
+            client_secret: <client-secret>
+            refresh_token: <refresh-token>
+            instance_url: https://acme.my.salesforce.com
+    bindings:
+      - resource: { name: Account, interval: PT5M, schedule: "55 23 * * *" }
+        target: acmeCo/salesforce/Account
+
+  acmeCo/salesforce/dashboard-login:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-salesforce-native:v1
+        config:
+          credentials:
+            credentials_title: OAuth Credentials
+            instance_url: https://acme.my.salesforce.com
+          advanced:
+            window_size:
+              window_type: days
+              days: 30
+    bindings:
+      - resource: { name: Contact }
+        target: acmeCo/salesforce/Contact

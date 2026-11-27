@@ -1,0 +1,39 @@
+captures:
+  acmeCo/salesforce/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-salesforce-native:v1
+        config:
+          credentials:
+            credentials_title: Client Credentials
+            client_id: <consumer-key>
+            client_secret: <consumer-secret>
+          start_date: "2024-01-01T00:00:00Z"
+          is_sandbox: true
+          my_domain: acme--uat.sandbox.my.salesforce.com
+          advanced:
+            window_size:
+              window_type: interval
+              interval: PT6H
+    bindings:
+      - resource:
+          name: Account
+          interval: PT5M
+          schedule: "55 23 * * *"
+        target: acmeCo/salesforce/Account
+
+      - resource:
+          name: Opportunity
+          interval: PT15M
+        target: acmeCo/salesforce/Opportunity
+        backfill: 2
+
+      - resource:
+          name: Invoice__c
+          interval: PT1H
+          schedule: "0 6 * * 1"
+        target: acmeCo/salesforce/Invoice__c
+        disable: true

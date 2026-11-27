@@ -13,6 +13,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemongodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemysql"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcepostgres"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcesalesforce"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 )
@@ -47,6 +48,7 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	sourcepostgres.New,
 	sourcemysql.NewRDS,
 	sourcepostgres.NewRDS,
+	sourcesalesforce.New,
 }
 
 // dataSources lists every supported connector data source, sorted by Terraform type name.
@@ -59,4 +61,5 @@ var dataSources []func() datasource.DataSource = []func() datasource.DataSource{
 	sourcepostgres.NewDataSource,
 	sourcemysql.NewRDSDataSource,
 	sourcepostgres.NewRDSDataSource,
+	sourcesalesforce.NewDataSource,
 }

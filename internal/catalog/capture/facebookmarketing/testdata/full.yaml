@@ -1,0 +1,48 @@
+captures:
+  acmeCo/facebook/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-facebook-marketing-native:v1
+        config:
+          account_ids: "123456789,987654321"
+          start_date: "2024-01-01T00:00:00Z"
+          insights_lookback_window: 14
+          custom_insights:
+            - name: spend_by_age
+              level: campaign
+              fields: account_id,campaign_id,impressions,clicks,spend
+              breakdowns: age,gender
+              action_breakdowns: action_type
+              start_date: "2024-06-01T00:00:00Z"
+              insights_lookback_window: 7
+            - name: ad_spend
+              fields: account_id,ad_id,spend
+              breakdowns: ""
+          advanced:
+            include_deleted: true
+            fetch_thumbnail_images: true
+            feature_flags: use_batch_api
+          credentials:
+            credentials_title: OAuth Credentials
+            client_id: <app-id>
+            client_secret: <app-secret>
+            access_token: <access-token>
+    bindings:
+      - resource:
+          name: campaigns
+          interval: PT1H
+        target: acmeCo/facebook/campaigns
+
+      - resource:
+          name: spend_by_age
+          interval: PT1H
+        target: acmeCo/facebook/spend_by_age
+        backfill: 1
+
+      - resource:
+          name: ad_creatives
+        target: acmeCo/facebook/ad_creatives
+        disable: true

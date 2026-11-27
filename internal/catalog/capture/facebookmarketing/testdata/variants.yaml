@@ -1,0 +1,27 @@
+captures:
+  acmeCo/facebook/access-token:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-facebook-marketing-native:v1
+        config:
+          account_ids: "123456789"
+          credentials:
+            credentials_title: OAuth Credentials
+            client_id: <app-id>
+            client_secret: <app-secret>
+            access_token: <access-token>
+    bindings:
+      - resource: { name: campaigns, interval: PT1H }
+        target: acmeCo/facebook/campaigns
+
+  acmeCo/facebook/dashboard-login:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-facebook-marketing-native:v1
+        config:
+          account_ids: "123456789,987654321"
+          credentials:
+            credentials_title: OAuth Credentials
+    bindings:
+      - resource: { name: ads_insights }
+        target: acmeCo/facebook/ads_insights

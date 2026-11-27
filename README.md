@@ -72,6 +72,7 @@ Connectors configured the same way share one page, with examples and every attri
 | Connector | Resources |
 |---|---|
 | [Amazon DynamoDB](internal/resources/sourcedynamodb/README.md) | `estuary_source_dynamodb` |
+| [Apple App Store](internal/resources/sourceappleappstore/README.md) | `estuary_source_apple_app_store` |
 | [Facebook Marketing](internal/resources/sourcefacebookmarketing/README.md) | `estuary_source_facebook_marketing` |
 | [Google Play](internal/resources/sourcegoogleplay/README.md) | `estuary_source_google_play` |
 | [MongoDB](internal/resources/sourcemongodb/README.md) | `estuary_source_mongodb` |

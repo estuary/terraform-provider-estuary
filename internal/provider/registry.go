@@ -9,6 +9,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializations3iceberg"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationsnowflake"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationwebhook"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/sourceappleappstore"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcedynamodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcefacebookmarketing"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcegoogleplay"
@@ -44,6 +45,7 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	materializations3iceberg.New,
 	materializationsnowflake.New,
 	materializationwebhook.New,
+	sourceappleappstore.New,
 	sourcemysql.NewAurora,
 	sourcepostgres.NewAurora,
 	sourcedynamodb.New,
@@ -61,6 +63,7 @@ var resources []func() resource.Resource = []func() resource.Resource{
 
 // dataSources lists every supported connector data source, sorted by Terraform type name.
 var dataSources []func() datasource.DataSource = []func() datasource.DataSource{
+	sourceappleappstore.NewDataSource,
 	sourcemysql.NewAuroraDataSource,
 	sourcepostgres.NewAuroraDataSource,
 	sourcedynamodb.NewDataSource,

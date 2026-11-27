@@ -1,0 +1,28 @@
+captures:
+  acmeCo/app-store/api-key:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-apple-app-store:v1
+        config:
+          credentials:
+            credentials_title: Private App Credentials
+            private_key: |
+              -----BEGIN PRIVATE KEY-----
+              <private-key>
+              -----END PRIVATE KEY-----
+            key_id: <key-id>
+            issuer_id: <issuer-id>
+    bindings:
+      - resource: { name: app_reviews, interval: PT1H }
+        target: acmeCo/app-store/app_reviews
+
+  acmeCo/app-store/imported:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-apple-app-store:v1
+        config:
+          credentials:
+            credentials_title: Private App Credentials
+    bindings:
+      - resource: { name: app_reviews }
+        target: acmeCo/app-store/app_reviews

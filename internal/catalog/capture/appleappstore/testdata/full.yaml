@@ -1,0 +1,37 @@
+captures:
+  acmeCo/app-store/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-apple-app-store:v1
+        config:
+          credentials:
+            credentials_title: Private App Credentials
+            private_key: |
+              -----BEGIN PRIVATE KEY-----
+              <private-key>
+              -----END PRIVATE KEY-----
+            key_id: <key-id>
+            issuer_id: <issuer-id>
+            access_token: <access-token>
+          app_ids:
+            - "1234567890"
+            - "9876543210"
+    bindings:
+      - resource:
+          name: app_reviews
+          interval: PT1H
+        target: acmeCo/app-store/app_reviews
+
+      - resource:
+          name: app_sessions
+          interval: PT6H
+        target: acmeCo/app-store/app_sessions
+        backfill: 1
+
+      - resource:
+          name: app_crashes
+        target: acmeCo/app-store/app_crashes
+        disable: true

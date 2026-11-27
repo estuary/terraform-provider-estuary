@@ -1,0 +1,31 @@
+captures:
+  acmeCo/google-play/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-google-play:v1
+        config:
+          bucket: pubsite_prod_1234567890123456789
+          start_date: "2024-01-01T00:00:00Z"
+          credentials:
+            credentials_title: Google Service Account
+            service_account: |
+              { "type": "service_account", "project_id": "acme-play", "private_key": "<private-key>" }
+    bindings:
+      - resource:
+          name: installs
+          interval: PT1H
+        target: acmeCo/google-play/installs
+
+      - resource:
+          name: crashes
+          interval: PT6H
+        target: acmeCo/google-play/crashes
+        backfill: 1
+
+      - resource:
+          name: reviews
+        target: acmeCo/google-play/reviews
+        disable: true

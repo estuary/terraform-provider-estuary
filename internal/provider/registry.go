@@ -11,6 +11,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationwebhook"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcedynamodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcefacebookmarketing"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcegoogleplay"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemongodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemysql"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcepostgres"
@@ -47,6 +48,7 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	sourcepostgres.NewAurora,
 	sourcedynamodb.New,
 	sourcefacebookmarketing.New,
+	sourcegoogleplay.New,
 	sourcemongodb.New,
 	sourcemysql.New,
 	sourcepostgres.New,
@@ -63,6 +65,7 @@ var dataSources []func() datasource.DataSource = []func() datasource.DataSource{
 	sourcepostgres.NewAuroraDataSource,
 	sourcedynamodb.NewDataSource,
 	sourcefacebookmarketing.NewDataSource,
+	sourcegoogleplay.NewDataSource,
 	sourcemongodb.NewDataSource,
 	sourcemysql.NewDataSource,
 	sourcepostgres.NewDataSource,

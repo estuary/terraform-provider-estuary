@@ -1,0 +1,31 @@
+captures:
+  acmeCo/zendesk/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-zendesk-support-native:v1
+        config:
+          subdomain: acme-support
+          start_date: "2024-01-01T00:00:00Z"
+          credentials:
+            credentials_title: Email & API Token
+            username: support-bot@acme.example
+            password: <api-token>
+    bindings:
+      - resource:
+          name: tickets
+          interval: PT5M
+        target: acmeCo/zendesk/tickets
+
+      - resource:
+          name: ticket_metrics
+          interval: PT1H
+        target: acmeCo/zendesk/ticket_metrics
+        backfill: 1
+
+      - resource:
+          name: organizations
+        target: acmeCo/zendesk/organizations
+        disable: true

@@ -1,0 +1,53 @@
+materializations:
+  acmeCo/analytics/materialize-databricks:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-databricks:v3
+        config:
+          address: dbc-abcdef12-3456.cloud.databricks.com:443
+          http_path: /sql/1.0/warehouses/abcdef1234567890
+          catalog_name: acmeCo_catalog
+          schema_name: acmeCo_flow_schema
+          hardDelete: true
+          credentials:
+            auth_type: OAuth2 M2M
+            client_id: <client-id>
+            client_secret: <client-secret>
+          syncSchedule:
+            syncFrequency: 1h
+            timezone: America/New_York
+            fastSyncStartTime: "09:00"
+            fastSyncStopTime: "17:00"
+            fastSyncEnabledDays: M-F
+          dbt_job_trigger:
+            job_id: "12345"
+            account_id: "67890"
+            api_key: <dbt-api-key>
+            access_url: https://cloud.getdbt.com
+            cause: Estuary
+            mode: replace
+            interval: 30m
+          advanced:
+            no_flow_document: true
+            feature_flags: allow_existing_tables_for_new_bindings
+    bindings:
+      - resource:
+          table: orders
+        source: acmeCo/orders
+        fields:
+          recommended: true
+
+      - resource:
+          table: customers
+          schema: crm
+          additional_table_create_sql: ALTER TABLE crm.customers SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
+        source: acmeCo/customers
+
+      - resource:
+          table: events
+          delta_updates: true
+        source: acmeCo/events
+        fields:
+          recommended: true
+          exclude:
+            - payload

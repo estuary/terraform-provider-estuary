@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationdatabricks"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationdekaf"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationiceberg"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationmysql"
@@ -20,6 +21,7 @@ import (
 var resources []func() resource.Resource = []func() resource.Resource{
 	materializationmysql.NewAurora,
 	materializationpostgres.NewAurora,
+	materializationdatabricks.New,
 	materializationdekaf.NewBytewax,
 	materializationdekaf.NewClickHouse,
 	materializationdekaf.NewGeneric,

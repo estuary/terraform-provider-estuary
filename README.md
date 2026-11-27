@@ -82,6 +82,7 @@ Connectors configured the same way share one page, with examples and every attri
 |---|---|
 | [Apache Iceberg](internal/resources/materializationiceberg/README.md) | `estuary_materialization_iceberg` |
 | [Apache Iceberg Tables in Amazon S3 (delta updates)](internal/resources/materializations3iceberg/README.md) | `estuary_materialization_s3_iceberg` |
+| [Databricks](internal/resources/materializationdatabricks/README.md) | `estuary_materialization_databricks` |
 | [Dekaf](internal/resources/materializationdekaf/README.md) | `estuary_materialization_dekaf_generic`, `estuary_materialization_dekaf_bytewax`, `estuary_materialization_dekaf_clickhouse`, `estuary_materialization_dekaf_imply_polaris`, `estuary_materialization_dekaf_materialize`, `estuary_materialization_dekaf_risingwave`, `estuary_materialization_dekaf_singlestore`, `estuary_materialization_dekaf_startree`, `estuary_materialization_dekaf_tinybird` |
 | [HTTP Webhook](internal/resources/materializationwebhook/README.md) | `estuary_materialization_webhook` |
 | [MySQL](internal/resources/materializationmysql/README.md) | `estuary_materialization_mysql`, `estuary_materialization_aurora_mysql`, `estuary_materialization_rds_mysql` |

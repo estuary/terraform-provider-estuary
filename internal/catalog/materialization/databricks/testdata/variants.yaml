@@ -1,0 +1,52 @@
+materializations:
+  acmeCo/databricks/personal-access-token:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-databricks:v3
+        config:
+          address: dbc-abcdef12-3456.cloud.databricks.com
+          http_path: /sql/1.0/warehouses/abcdef1234567890
+          catalog_name: acmeCo_catalog
+          schema_name: default
+          credentials:
+            auth_type: PAT
+            personal_access_token: <personal-access-token>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/databricks/service-principal:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-databricks:v3
+        config:
+          address: dbc-abcdef12-3456.cloud.databricks.com
+          http_path: /sql/1.0/warehouses/abcdef1234567890
+          catalog_name: acmeCo_catalog
+          schema_name: default
+          credentials:
+            auth_type: OAuth2 M2M
+            client_id: <client-id>
+            client_secret: <client-secret>
+    bindings:
+      - resource: { table: orders }
+        source: acmeCo/orders
+
+  acmeCo/databricks/delta-updates:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-databricks:v3
+        config:
+          address: dbc-abcdef12-3456.cloud.databricks.com
+          http_path: /sql/1.0/warehouses/abcdef1234567890
+          catalog_name: acmeCo_catalog
+          schema_name: default
+          credentials:
+            auth_type: PAT
+            personal_access_token: <personal-access-token>
+    bindings:
+      - resource: { table: events, schema: raw, delta_updates: true }
+        source: acmeCo/events
+
+      - resource: { table: orders, schema: raw }
+        source: acmeCo/orders

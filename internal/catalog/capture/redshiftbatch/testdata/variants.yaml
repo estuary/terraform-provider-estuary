@@ -1,0 +1,49 @@
+captures:
+  acmeCo/redshift-batch/tables:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-redshift-batch:v1
+        config:
+          address: acme.abc123.us-east-1.redshift.amazonaws.com:5439
+          user: flow_capture
+          password: <secret>
+          database: analytics
+    bindings:
+      - resource: { name: orders, schema: shop, table: orders, cursor: [updated_at] }
+        target: acmeCo/redshift-batch/orders
+
+      - resource: { name: countries, schema: shop, table: countries }
+        target: acmeCo/redshift-batch/countries
+
+  acmeCo/redshift-batch/ssh-tunnel:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-redshift-batch:v1
+        config:
+          address: acme.abc123.us-east-1.redshift.amazonaws.com:5439
+          user: flow_capture
+          password: <secret>
+          database: analytics
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-51-100-7.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+              knownHosts: "ec2-198-51-100-7.compute-1.amazonaws.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
+    bindings:
+      - resource: { name: orders, schema: shop, table: orders, cursor: [updated_at], poll: 15m }
+        target: acmeCo/redshift-batch/orders
+
+  acmeCo/redshift-batch/imported:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-redshift-batch:v1
+        config:
+          address: acme.abc123.us-east-1.redshift.amazonaws.com:5439
+          user: flow_capture
+          database: analytics
+    bindings:
+      - resource: { name: orders, schema: shop, table: orders }
+        target: acmeCo/redshift-batch/orders

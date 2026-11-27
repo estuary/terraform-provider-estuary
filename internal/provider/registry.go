@@ -19,6 +19,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemysql"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcepostgres"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcesalesforce"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcesqlbatch"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcestripe"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcezendesksupport"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -57,9 +58,11 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	sourcekafka.New,
 	sourcemongodb.New,
 	sourcemysql.New,
+	sourcesqlbatch.NewMySQL,
 	sourcepostgres.New,
 	sourcemysql.NewRDS,
 	sourcepostgres.NewRDS,
+	sourcesqlbatch.NewRedshift,
 	sourcesalesforce.New,
 	sourcestripe.New,
 	sourcezendesksupport.New,
@@ -76,9 +79,11 @@ var dataSources []func() datasource.DataSource = []func() datasource.DataSource{
 	sourcekafka.NewDataSource,
 	sourcemongodb.NewDataSource,
 	sourcemysql.NewDataSource,
+	sourcesqlbatch.NewMySQLDataSource,
 	sourcepostgres.NewDataSource,
 	sourcemysql.NewRDSDataSource,
 	sourcepostgres.NewRDSDataSource,
+	sourcesqlbatch.NewRedshiftDataSource,
 	sourcesalesforce.NewDataSource,
 	sourcestripe.NewDataSource,
 	sourcezendesksupport.NewDataSource,

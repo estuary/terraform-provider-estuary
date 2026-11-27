@@ -1,0 +1,72 @@
+captures:
+  acmeCo/mysql-batch/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-mysql-batch:v1
+        config:
+          address: mysql.example.com:3306
+          user: flow_capture
+          password: <secret>
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-51-100-7.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+              knownHosts: "ec2-198-51-100-7.compute-1.amazonaws.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
+              skipHostKeyVerification: true
+          advanced:
+            poll: 6h
+            discover_schemas:
+              - shop
+              - billing
+            discover_views: true
+            source_tag: primary
+            feature_flags: emit_sourced_schemas
+            dbname: shop
+            sslmode: verify_ca
+            ssl_server_ca: |
+              -----BEGIN CERTIFICATE-----
+              <server-ca>
+              -----END CERTIFICATE-----
+            ssl_client_cert: |
+              -----BEGIN CERTIFICATE-----
+              <client-cert>
+              -----END CERTIFICATE-----
+            ssl_client_key: |
+              -----BEGIN PRIVATE KEY-----
+              <client-key>
+              -----END PRIVATE KEY-----
+    bindings:
+      - resource:
+          name: orders
+          schema: shop
+          table: orders
+          cursor:
+            - updated_at
+            - id
+          poll: 15m
+        target: acmeCo/mysql-batch/orders
+
+      - resource:
+          name: countries
+          schema: shop
+          table: countries
+          poll: daily at 02:00Z
+        target: acmeCo/mysql-batch/countries
+        backfill: 1
+
+      - resource:
+          name: revenue_by_day
+          cursor:
+            - day
+          template: |
+            SELECT day, SUM(total) AS revenue FROM shop.orders
+            {{if not .IsFirstQuery}}WHERE day > @flow_cursor_value[0]{{end}}
+            GROUP BY day ORDER BY day
+        target: acmeCo/mysql-batch/revenue_by_day
+        disable: true

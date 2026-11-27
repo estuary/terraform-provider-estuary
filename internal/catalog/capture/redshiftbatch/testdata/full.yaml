@@ -1,0 +1,60 @@
+captures:
+  acmeCo/redshift-batch/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-redshift-batch:v1
+        config:
+          address: acme.abc123.us-east-1.redshift.amazonaws.com:5439
+          user: flow_capture
+          password: <secret>
+          database: analytics
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-51-100-7.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+              knownHosts: "ec2-198-51-100-7.compute-1.amazonaws.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
+              skipHostKeyVerification: true
+          advanced:
+            poll: 6h
+            discover_schemas:
+              - shop
+              - billing
+            discover_views: true
+            source_tag: primary
+            feature_flags: emit_sourced_schemas
+            sslmode: verify-full
+    bindings:
+      - resource:
+          name: orders
+          schema: shop
+          table: orders
+          cursor:
+            - updated_at
+            - id
+          poll: 15m
+        target: acmeCo/redshift-batch/orders
+
+      - resource:
+          name: countries
+          schema: shop
+          table: countries
+          poll: daily at 02:00Z
+        target: acmeCo/redshift-batch/countries
+        backfill: 1
+
+      - resource:
+          name: revenue_by_day
+          cursor:
+            - day
+          template: |
+            SELECT day, SUM(total) AS revenue FROM shop.orders
+            {{if not .IsFirstQuery}}WHERE day > @flow_cursor_value[0]{{end}}
+            GROUP BY day ORDER BY day
+        target: acmeCo/redshift-batch/revenue_by_day
+        disable: true

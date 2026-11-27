@@ -78,6 +78,7 @@ Connectors configured the same way share one page, with examples and every attri
 | [Google Play](internal/resources/sourcegoogleplay/README.md) | `estuary_source_google_play` |
 | [MongoDB](internal/resources/sourcemongodb/README.md) | `estuary_source_mongodb` |
 | [MySQL](internal/resources/sourcemysql/README.md) | `estuary_source_mysql`, `estuary_source_aurora_mysql`, `estuary_source_rds_mysql` |
+| [MySQL and Amazon Redshift (batch)](internal/resources/sourcesqlbatch/README.md) | `estuary_source_mysql_batch`, `estuary_source_redshift_batch` |
 | [PostgreSQL](internal/resources/sourcepostgres/README.md) | `estuary_source_postgres`, `estuary_source_aurora_postgres`, `estuary_source_rds_postgres` |
 | [Salesforce](internal/resources/sourcesalesforce/README.md) | `estuary_source_salesforce` |
 | [Stripe](internal/resources/sourcestripe/README.md) | `estuary_source_stripe` |

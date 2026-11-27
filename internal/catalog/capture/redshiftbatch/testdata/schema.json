@@ -1,0 +1,192 @@
+{
+  "endpoint": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "address": {
+        "description": "The host or host:port at which the database can be reached.",
+        "order": 0,
+        "title": "Server Address",
+        "type": "string"
+      },
+      "advanced": {
+        "additionalProperties": false,
+        "advanced": true,
+        "description": "Options for advanced users. You should not typically need to modify these.",
+        "properties": {
+          "discover_schemas": {
+            "description": "If this is specified only tables in the selected schema(s) will be automatically discovered. Omit all entries to discover tables from all schemas.",
+            "items": {
+              "type": "string"
+            },
+            "nonsensitive": true,
+            "title": "Discovery Schema Selection",
+            "type": "array"
+          },
+          "discover_views": {
+            "description": "When set views will be automatically discovered as resources. If unset only tables will be discovered.",
+            "nonsensitive": true,
+            "title": "Discover Views",
+            "type": "boolean"
+          },
+          "feature_flags": {
+            "description": "This property is intended for Estuary internal use. You should only modify this field as directed by Estuary support.",
+            "nonsensitive": true,
+            "title": "Feature Flags",
+            "type": "string"
+          },
+          "poll": {
+            "description": "When and how often to execute fetch queries. Accepts a Go duration string like '5m' or '6h' for frequency-based polling or a string like 'daily at 12:34Z' to poll at a specific time (specified in UTC) every day. Defaults to '24h' if unset.",
+            "nonsensitive": true,
+            "pattern": "^([+]?([0-9]+([.][0-9]+)?(h|m|s|ms))+|daily at [0-9][0-9]?:[0-9]{2}Z)$",
+            "title": "Default Polling Schedule",
+            "type": "string"
+          },
+          "source_tag": {
+            "description": "When set the capture will add this value as the property 'tag' in the source metadata of each document.",
+            "nonsensitive": true,
+            "title": "Source Tag",
+            "type": "string"
+          },
+          "sslmode": {
+            "description": "Overrides SSL connection behavior by setting the 'sslmode' parameter.",
+            "enum": [
+              "disable",
+              "allow",
+              "prefer",
+              "require",
+              "verify-ca",
+              "verify-full"
+            ],
+            "title": "SSL Mode",
+            "type": "string"
+          }
+        },
+        "title": "Advanced Options",
+        "type": "object"
+      },
+      "database": {
+        "default": "dev",
+        "description": "Logical database name to capture from.",
+        "order": 3,
+        "type": "string"
+      },
+      "networkTunnel": {
+        "additionalProperties": false,
+        "description": "Connect to your system through an SSH server that acts as a bastion host for your network.",
+        "properties": {
+          "sshForwarding": {
+            "additionalProperties": false,
+            "properties": {
+              "knownHosts": {
+                "description": "Host keys of the SSH server in OpenSSH known_hosts format, one per line: the output of `ssh-keyscan -p 2222 bastion.example.com`, for example `[bastion.example.com]:2222 ssh-ed25519 AAAA...`.",
+                "multiline": true,
+                "title": "SSH Known Hosts",
+                "type": "string"
+              },
+              "privateKey": {
+                "description": "Private key to connect to the remote SSH server.",
+                "multiline": true,
+                "secret": true,
+                "title": "SSH Private Key",
+                "type": "string"
+              },
+              "skipHostKeyVerification": {
+                "description": "Connect without verifying the SSH server's host key.",
+                "nonsensitive": true,
+                "title": "Skip Host Key Verification",
+                "type": "boolean",
+                "x-hidden-field": true
+              },
+              "sshEndpoint": {
+                "description": "Endpoint of the remote SSH server that supports tunneling (in the form of ssh://user@hostname[:port])",
+                "pattern": "^ssh://.+@.+$",
+                "title": "SSH Endpoint",
+                "type": "string"
+              }
+            },
+            "required": [
+              "sshEndpoint",
+              "privateKey"
+            ],
+            "title": "SSH Forwarding",
+            "type": "object"
+          }
+        },
+        "title": "Network Tunnel",
+        "type": "object"
+      },
+      "password": {
+        "description": "Password for the specified database user.",
+        "order": 2,
+        "secret": true,
+        "type": "string"
+      },
+      "user": {
+        "default": "flow_capture",
+        "description": "The database user to authenticate as.",
+        "order": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "address",
+      "user",
+      "password",
+      "database"
+    ],
+    "title": "Batch SQL",
+    "type": "object"
+  },
+  "resource": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "properties": {
+      "cursor": {
+        "description": "The names of columns which should be persisted between query executions as a cursor.",
+        "items": {
+          "type": "string"
+        },
+        "order": 3,
+        "title": "Cursor Columns",
+        "type": "array"
+      },
+      "name": {
+        "description": "The unique name of this resource.",
+        "order": 0,
+        "title": "Name",
+        "type": "string"
+      },
+      "poll": {
+        "description": "When and how often to execute the fetch query (overrides the connector default setting). Accepts a Go duration string like '5m' or '6h' for frequency-based polling or a string like 'daily at 12:34Z' to poll at a specific time (specified in UTC) every day.",
+        "nonsensitive": true,
+        "order": 4,
+        "pattern": "^([+]?([0-9]+([.][0-9]+)?(h|m|s|ms))+|daily at [0-9][0-9]?:[0-9]{2}Z)$",
+        "title": "Polling Schedule",
+        "type": "string"
+      },
+      "schema": {
+        "description": "The name of the schema in which the captured table lives. The query template must be overridden if this is unset.",
+        "order": 1,
+        "title": "Schema Name",
+        "type": "string"
+      },
+      "table": {
+        "description": "The name of the table to be captured. The query template must be overridden if this is unset.",
+        "order": 2,
+        "title": "Table Name",
+        "type": "string"
+      },
+      "template": {
+        "description": "Optionally overrides the query template which will be rendered and then executed. Consult documentation for examples.",
+        "multiline": true,
+        "order": 5,
+        "title": "Query Template Override",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "title": "Batch SQL Resource Spec",
+    "type": "object"
+  }
+}

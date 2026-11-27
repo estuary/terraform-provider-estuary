@@ -72,6 +72,7 @@ Connectors configured the same way share one page, with examples and every attri
 | Connector | Resources |
 |---|---|
 | [Amazon DynamoDB](internal/resources/sourcedynamodb/README.md) | `estuary_source_dynamodb` |
+| [Apache Kafka](internal/resources/sourcekafka/README.md) | `estuary_source_kafka` |
 | [Apple App Store](internal/resources/sourceappleappstore/README.md) | `estuary_source_apple_app_store` |
 | [Facebook Marketing](internal/resources/sourcefacebookmarketing/README.md) | `estuary_source_facebook_marketing` |
 | [Google Play](internal/resources/sourcegoogleplay/README.md) | `estuary_source_google_play` |
@@ -88,6 +89,7 @@ Connectors configured the same way share one page, with examples and every attri
 |---|---|
 | [Apache Iceberg](internal/resources/materializationiceberg/README.md) | `estuary_materialization_iceberg` |
 | [Apache Iceberg Tables in Amazon S3 (delta updates)](internal/resources/materializations3iceberg/README.md) | `estuary_materialization_s3_iceberg` |
+| [Apache Kafka](internal/resources/materializationkafka/README.md) | `estuary_materialization_kafka` |
 | [Databricks](internal/resources/materializationdatabricks/README.md) | `estuary_materialization_databricks` |
 | [Dekaf](internal/resources/materializationdekaf/README.md) | `estuary_materialization_dekaf_generic`, `estuary_materialization_dekaf_bytewax`, `estuary_materialization_dekaf_clickhouse`, `estuary_materialization_dekaf_imply_polaris`, `estuary_materialization_dekaf_materialize`, `estuary_materialization_dekaf_risingwave`, `estuary_materialization_dekaf_singlestore`, `estuary_materialization_dekaf_startree`, `estuary_materialization_dekaf_tinybird` |
 | [HTTP Webhook](internal/resources/materializationwebhook/README.md) | `estuary_materialization_webhook` |

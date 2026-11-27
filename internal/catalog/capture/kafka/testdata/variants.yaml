@@ -1,0 +1,57 @@
+captures:
+  acmeCo/kafka/sasl-with-registry:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-kafka:v1
+        config:
+          bootstrap_servers: broker-1.example.com:9092,broker-2.example.com:9092
+          tls: system_certificates
+          credentials:
+            auth_type: user_password
+            mechanism: SCRAM-SHA-512
+            username: flow_capture
+            password: <secret>
+          schema_registry:
+            schema_registry_type: confluent_schema_registry
+            endpoint: https://psrc-12345.us-east-2.aws.confluent.cloud
+            username: <registry-key>
+            password: <registry-secret>
+    bindings:
+      - resource: { topic: orders }
+        target: acmeCo/kafka/orders
+
+  acmeCo/kafka/msk-json-only:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-kafka:v1
+        config:
+          bootstrap_servers: b-1.acme.abc123.c2.kafka.us-east-1.amazonaws.com:9098
+          credentials:
+            auth_type: AWS
+            aws_access_key_id: AKIAIOSFODNN7EXAMPLE
+            aws_secret_access_key: <secret>
+            region: us-east-1
+          schema_registry:
+            schema_registry_type: no_schema_registry
+            enable_json_only: true
+    bindings:
+      - resource: { topic: clicks }
+        target: acmeCo/kafka/clicks
+
+  acmeCo/kafka/sasl-plain:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-kafka:v1
+        config:
+          bootstrap_servers: broker-1.example.com:9092
+          credentials:
+            auth_type: user_password
+            mechanism: PLAIN
+            username: flow_capture
+            password: <secret>
+          schema_registry:
+            schema_registry_type: no_schema_registry
+            enable_json_only: true
+    bindings:
+      - resource: { topic: orders }
+        target: acmeCo/kafka/orders

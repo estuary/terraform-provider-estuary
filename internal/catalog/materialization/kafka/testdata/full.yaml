@@ -1,0 +1,36 @@
+materializations:
+  acmeCo/analytics/materialize-kafka:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/materialize-kafka:v1
+        config:
+          bootstrap_servers: broker-1.example.com:9092,broker-2.example.com:9092
+          tls: system_certificates
+          credentials:
+            auth_type: user_password
+            mechanism: SCRAM-SHA-512
+            username: flow_materialize
+            password: <secret>
+          message_format: Avro
+          schema_registry:
+            endpoint: https://psrc-12345.us-east-2.aws.confluent.cloud
+            username: <registry-key>
+            password: <registry-secret>
+          compression: zstd
+          avro_logical_types: false
+          topic_partitions: 12
+          topic_replication_factor: 2
+    bindings:
+      - resource:
+          topic: orders
+        source: acmeCo/orders
+        fields:
+          recommended: true
+
+      - resource:
+          topic: customers
+        source: acmeCo/customers
+        fields:
+          recommended: true
+          exclude:
+            - payload

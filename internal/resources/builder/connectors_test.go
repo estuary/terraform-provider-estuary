@@ -4,10 +4,12 @@ import (
 	"context"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/estuary/terraform-provider-estuary/internal/catalog"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/builder/translator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -309,7 +311,7 @@ func assertWriteOnly(test *testing.T, secrets secrets, config tftypes.Value, pat
 
 		var steps []tftypes.AttributePathStep = path.Steps()
 		var name tftypes.AttributeName = steps[len(steps)-1].(tftypes.AttributeName)
-		var hashPath *tftypes.AttributePath = tftypes.NewAttributePathWithSteps(steps[:len(steps)-1]).WithAttributeName(string(name) + "_hash")
+		var hashPath *tftypes.AttributePath = tftypes.NewAttributePathWithSteps(steps[:len(steps)-1]).WithAttributeName(string(name) + translator.HashSuffix)
 
 		if stored, err := attributeValue(state, hashPath); err != nil || stored.As(&hash) != nil || !verifySecret(secret, hash) {
 			test.Errorf("%s of the state = %v (%v), want the salted hash of the secret", hashPath, stored, err)
@@ -357,5 +359,45 @@ func assertCaptureSamplesRoundTrip[C, R any](test *testing.T, connector Connecto
 				test.Errorf("%s %s: round trip = %s %+v, want %+v", file, name, gotName, got, spec)
 			}
 		}
+	}
+}
+
+// assertPlansOnlySecretHashes checks that the configured spec, which sets the secrets at paths, plans the imported
+// state plus the hash of each secret, so terraform plan shows those hashes as its only changes. Secrets aren't
+// imported, so the first apply publishes the configured ones.
+func (entry connectorEntry[D, S]) assertPlansOnlySecretHashes(test *testing.T, name string, configured S, state tftypes.Value, paths ...*tftypes.AttributePath) {
+	test.Helper()
+
+	_, modifyPlanResp := entry.plan(test, name, configured, state)
+
+	differences, err := modifyPlanResp.Plan.Raw.Diff(state)
+
+	if err != nil {
+		test.Fatal(err)
+	}
+
+	var changed []string
+	var want []string
+
+	for _, difference := range differences {
+		changed = append(changed, difference.Path.String())
+
+		if difference.Value1 == nil || difference.Value1.IsKnown() {
+			test.Errorf("planned %s = %v, want it known after apply", difference.Path, difference.Value1)
+		}
+	}
+
+	for _, path := range paths {
+		var steps []tftypes.AttributePathStep = path.Steps()
+		var secret tftypes.AttributeName = steps[len(steps)-1].(tftypes.AttributeName)
+
+		want = append(want, tftypes.NewAttributePathWithSteps(steps[:len(steps)-1]).WithAttributeName(string(secret)+translator.HashSuffix).String())
+	}
+
+	slices.Sort(changed)
+	slices.Sort(want)
+
+	if !slices.Equal(changed, want) {
+		test.Errorf("plan changes %v, want only the hashes of the configured secrets, %v", changed, want)
 	}
 }

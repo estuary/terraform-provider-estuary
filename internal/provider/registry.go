@@ -4,6 +4,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationdatabricks"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationdekaf"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationiceberg"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationkafka"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationmysql"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializationpostgres"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/materializations3iceberg"
@@ -13,6 +14,7 @@ import (
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcedynamodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcefacebookmarketing"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcegoogleplay"
+	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcekafka"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemongodb"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcemysql"
 	"github.com/estuary/terraform-provider-estuary/internal/resources/sourcepostgres"
@@ -38,6 +40,7 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	materializationdekaf.NewStarTree,
 	materializationdekaf.NewTinybird,
 	materializationiceberg.New,
+	materializationkafka.New,
 	materializationmysql.New,
 	materializationpostgres.New,
 	materializationmysql.NewRDS,
@@ -51,6 +54,7 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	sourcedynamodb.New,
 	sourcefacebookmarketing.New,
 	sourcegoogleplay.New,
+	sourcekafka.New,
 	sourcemongodb.New,
 	sourcemysql.New,
 	sourcepostgres.New,
@@ -69,6 +73,7 @@ var dataSources []func() datasource.DataSource = []func() datasource.DataSource{
 	sourcedynamodb.NewDataSource,
 	sourcefacebookmarketing.NewDataSource,
 	sourcegoogleplay.NewDataSource,
+	sourcekafka.NewDataSource,
 	sourcemongodb.NewDataSource,
 	sourcemysql.NewDataSource,
 	sourcepostgres.NewDataSource,

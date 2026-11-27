@@ -1,0 +1,35 @@
+captures:
+  acmeCo/kafka/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-kafka:v1
+        config:
+          bootstrap_servers: broker-1.example.com:9092,broker-2.example.com:9092
+          tls: system_certificates
+          credentials:
+            auth_type: user_password
+            mechanism: SCRAM-SHA-256
+            username: flow_capture
+            password: <secret>
+          schema_registry:
+            schema_registry_type: confluent_schema_registry
+            endpoint: https://psrc-12345.us-east-2.aws.confluent.cloud
+            username: <registry-key>
+            password: <registry-secret>
+    bindings:
+      - resource:
+          topic: orders
+        target: acmeCo/kafka/orders
+
+      - resource:
+          topic: payments
+        target: acmeCo/kafka/payments
+        backfill: 2
+
+      - resource:
+          topic: audit-log
+        target: acmeCo/kafka/audit-log
+        disable: true

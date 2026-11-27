@@ -1,0 +1,195 @@
+{
+  "endpoint": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "bootstrap_servers": {
+        "description": "The initial servers in the Kafka cluster to initially connect to, separated by commas. The Kafka client will be informed of the rest of the cluster nodes by connecting to one of these nodes.",
+        "order": 0,
+        "title": "Bootstrap Servers",
+        "type": "string"
+      },
+      "credentials": {
+        "description": "The connection details for authenticating a client connection to Kafka via SASL. When not provided, the client connection will attempt to use PLAINTEXT (insecure) protocol. This must only be used in dev/test environments.",
+        "discriminator": {
+          "propertyName": "auth_type"
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "auth_type": {
+                "const": "user_password",
+                "default": "user_password",
+                "order": 0,
+                "type": "string"
+              },
+              "mechanism": {
+                "default": "PLAIN",
+                "description": "The SASL Mechanism describes how to exchange and authenticate clients/servers.",
+                "enum": [
+                  "PLAIN",
+                  "SCRAM-SHA-256",
+                  "SCRAM-SHA-512"
+                ],
+                "order": 1,
+                "title": "SASL Mechanism",
+                "type": "string"
+              },
+              "password": {
+                "order": 3,
+                "secret": true,
+                "title": "Password",
+                "type": "string"
+              },
+              "username": {
+                "order": 2,
+                "title": "Username",
+                "type": "string"
+              }
+            },
+            "required": [
+              "auth_type",
+              "mechanism",
+              "password",
+              "username"
+            ],
+            "title": "SASL (User & Password)"
+          },
+          {
+            "properties": {
+              "auth_type": {
+                "const": "AWS",
+                "default": "AWS",
+                "order": 0,
+                "type": "string"
+              },
+              "aws_access_key_id": {
+                "order": 1,
+                "title": "AWS Access Key ID",
+                "type": "string"
+              },
+              "aws_secret_access_key": {
+                "order": 2,
+                "secret": true,
+                "title": "AWS Secret Access Key",
+                "type": "string"
+              },
+              "region": {
+                "order": 3,
+                "title": "AWS Region",
+                "type": "string"
+              }
+            },
+            "required": [
+              "auth_type",
+              "aws_access_key_id",
+              "aws_secret_access_key",
+              "region"
+            ],
+            "title": "AWS MSK IAM"
+          }
+        ],
+        "order": 1,
+        "title": "Credentials",
+        "type": "object"
+      },
+      "schema_registry": {
+        "description": "Connection details for interacting with a schema registry.",
+        "discriminator": {
+          "propertyName": "schema_registry_type"
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "endpoint": {
+                "description": "Schema registry API endpoint. For example: https://registry-id.us-east-2.aws.confluent.cloud",
+                "order": 1,
+                "title": "Schema Registry Endpoint",
+                "type": "string"
+              },
+              "password": {
+                "description": "Schema registry password to use for authentication. If you are using Confluent Cloud, this will be the 'Secret' from your schema registry API key.",
+                "order": 3,
+                "secret": true,
+                "title": "Schema Registry Password",
+                "type": "string"
+              },
+              "schema_registry_type": {
+                "const": "confluent_schema_registry",
+                "default": "confluent_schema_registry",
+                "order": 0,
+                "type": "string"
+              },
+              "username": {
+                "description": "Schema registry username to use for authentication. If you are using Confluent Cloud, this will be the 'Key' from your schema registry API key.",
+                "order": 2,
+                "title": "Schema Registry Username",
+                "type": "string"
+              }
+            },
+            "required": [
+              "endpoint",
+              "password",
+              "username"
+            ],
+            "title": "Confluent Schema Registry"
+          },
+          {
+            "properties": {
+              "enable_json_only": {
+                "description": "If no schema registry is configured the capture will attempt to parse all data as JSON, and discovered collections will use a key of the message partition & offset. All available topics will be discovered, but if their messages are not encoded as JSON attempting to capture them will result in errors. If your topics contain messages encoded with a schema, you should configure the connector to use the schema registry for optimal results.",
+                "order": 1,
+                "title": "Capture Messages in JSON Format Only",
+                "type": "boolean"
+              },
+              "schema_registry_type": {
+                "const": "no_schema_registry",
+                "default": "no_schema_registry",
+                "order": 0,
+                "type": "string"
+              }
+            },
+            "required": [
+              "enable_json_only"
+            ],
+            "title": "No Schema Registry"
+          }
+        ],
+        "order": 3,
+        "title": "Schema Registry",
+        "type": "object"
+      },
+      "tls": {
+        "default": "system_certificates",
+        "description": "Controls how should TLS certificates be found or used.",
+        "enum": [
+          "system_certificates"
+        ],
+        "order": 2,
+        "title": "TLS Settings",
+        "type": "string"
+      }
+    },
+    "required": [
+      "bootstrap_servers",
+      "credentials",
+      "schema_registry"
+    ],
+    "title": "Kafka Source Configuration",
+    "type": "object"
+  },
+  "resource": {
+    "$schema": "https://json-schema.org/draft/2019-09/schema",
+    "properties": {
+      "topic": {
+        "description": "Kafka topic to capture messages from.",
+        "title": "Topic",
+        "type": "string"
+      }
+    },
+    "required": [
+      "topic"
+    ],
+    "title": "Resource",
+    "type": "object"
+  }
+}

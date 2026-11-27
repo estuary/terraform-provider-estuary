@@ -4,6 +4,8 @@
 
 This resource manages a [MongoDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/) capture connector. Each binding captures one MongoDB collection into an Estuary collection, using change streams by default or batch polling for views, time series collections and deployments without change streams.
 
+[`estuary_source_amazon_documentdb`](#amazon-documentdb) manages Amazon DocumentDB captures with the same attributes.
+
 ## Table of Contents
 
 - [Example Usage](#example-usage)
@@ -16,6 +18,7 @@ This resource manages a [MongoDB](https://docs.estuary.dev/reference/Connectors/
   - [`bindings`](#bindings)
   - [`bindings.backfill`](#bindingsbackfill)
   - [`bindings.resource`](#bindingsresource)
+- [Amazon DocumentDB](#amazon-documentdb)
 - [Data Source](#data-source)
 
 ## Example Usage
@@ -247,9 +250,95 @@ Backfill control of the binding. See [Backfill Control](../../../docs/guides/bac
 | `cursor_field` | String | No | Field used as the cursor of batch capture modes, which require it. It should be indexed. With `Batch Incremental`, every document must have it and its values must strictly increase. |
 | `poll_schedule` | String | No | Polling schedule of a batch binding, overriding `config.poll_schedule`. Same format, defaults to `config.poll_schedule`. |
 
+## Amazon DocumentDB
+
+`estuary_source_amazon_documentdb` manages an [Amazon DocumentDB](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/amazon-documentdb/) capture connector. Its `config` and binding `resource` schemas are the MongoDB connector's, so every attribute above applies, with these differences:
+
+| | `estuary_source_mongodb` | `estuary_source_amazon_documentdb` |
+|---|---|---|
+| Default image | `ghcr.io/estuary/source-mongodb:v3` | `ghcr.io/estuary/source-amazon-documentdb:v3` |
+| Connector name | `source-mongodb` | `source-amazon-documentdb` |
+| Capture modes | Change streams and batch | Batch only: set `capture_mode` to `Batch Snapshot` or `Batch Incremental` on every binding, with its `cursor_field` |
+
+The change stream settings (`batch_and_change_stream` and the `advanced` options) have no use without change streams. See [Capture Modes](https://docs.estuary.dev/reference/Connectors/capture-connectors/MongoDB/amazon-documentdb/#capture-modes).
+
+A capture of two collections through an SSH bastion host, as DocumentDB clusters are only reachable from their VPC:
+
+```hcl
+variable "documentdb_password" {
+  type      = string
+  sensitive = true
+}
+
+variable "ssh_private_key" {
+  type      = string
+  sensitive = true
+}
+
+resource "estuary_source_amazon_documentdb" "shop" {
+  name = "documentdb"
+
+  config = {
+    address       = "mongodb://acme.cluster-abc123.us-east-1.docdb.amazonaws.com:27017"
+    user          = "flow_capture"
+    password      = var.documentdb_password
+    database      = "shop"
+    poll_schedule = "6h"
+
+    network_tunnel = {
+      ssh_forwarding = {
+        ssh_endpoint = "ssh://ec2-user@ec2-198-51-100-7.compute-1.amazonaws.com:22"
+        private_key  = var.ssh_private_key
+      }
+    }
+  }
+
+  bindings = [
+    {
+      resource = {
+        database      = "shop"
+        collection    = "orders"
+        capture_mode  = "Batch Incremental"
+        cursor_field  = "updatedAt"
+        poll_schedule = "15m"
+      }
+    },
+    {
+      resource = {
+        database     = "shop"
+        collection   = "countries"
+        capture_mode = "Batch Snapshot"
+        cursor_field = "_id"
+      }
+    },
+  ]
+}
+```
+
+With `tenant = "acmeCo/"` set on the provider, this creates the capture `acmeCo/documentdb/source-amazon-documentdb`.
+
+### Importing
+
+```bash
+terraform import estuary_source_amazon_documentdb.shop acmeCo/documentdb/source-amazon-documentdb
+```
+
+Secrets and bindings aren't imported, see [Existing Pipelines](../../../docs/guides/existing-pipelines.md). `password` is required, so the first plan after the import shows `password_hash`, and `private_key_hash` behind an SSH tunnel. The apply then publishes the endpoint with the configured secrets and leaves the bindings as they are.
+
+### Differences from the connector schema
+
+The `:v3` schema of the connector has two settings under `networkTunnel.sshForwarding` that the resource doesn't have:
+
+| Setting | What it does | How the resource handles it |
+|---|---|---|
+| `knownHosts` | Host keys the connector verifies the SSH server against | Not an attribute. The import names it in a warning, and the first apply, which publishes the endpoint, removes it |
+| `skipHostKeyVerification` | Connects without verifying the SSH server's host key | Same |
+
+The MongoDB connector's schema has the same two settings, and `estuary_source_mongodb` handles them the same way.
+
 ## Data Source
 
-`data "estuary_source_mongodb"` reads every live binding of a capture by name: the declared ones, those discovery (`auto_discover`) adds and those added in the dashboard. Terraform doesn't manage live bindings, so the resource neither stores them nor shows them in plans: read them here, for a capture of this configuration or one managed elsewhere:
+`data "estuary_source_mongodb"` and `data "estuary_source_amazon_documentdb"` read every live binding of a capture by name: the declared ones, those discovery (`auto_discover`) adds and those added in the dashboard. Terraform doesn't manage live bindings, so the resource neither stores them nor shows them in plans: read them here, for a capture of this configuration or one managed elsewhere:
 
 ```hcl
 # A capture of this configuration

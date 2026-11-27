@@ -14,6 +14,12 @@ const Image string = "ghcr.io/estuary/source-mongodb:v3"
 // ConnectorName is the catalog name suffix of the connector's tasks, as the dashboard names them.
 const ConnectorName string = "source-mongodb"
 
+// ImageAmazonDocumentDB is the Amazon DocumentDB connector image, whose config and resource are MongoDB's.
+const ImageAmazonDocumentDB string = "ghcr.io/estuary/source-amazon-documentdb:v3"
+
+// ConnectorNameAmazonDocumentDB is the catalog name suffix of the Amazon DocumentDB connector's tasks.
+const ConnectorNameAmazonDocumentDB string = "source-amazon-documentdb"
+
 const (
 	CaptureModeChangeStream     CaptureMode = "Change Stream Incremental"
 	CaptureModeBatchSnapshot    CaptureMode = "Batch Snapshot"

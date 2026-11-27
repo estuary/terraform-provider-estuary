@@ -1,0 +1,36 @@
+captures:
+  acmeCo/documentdb/batch:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-documentdb:v3
+        config:
+          address: mongodb://acme.cluster-abc123.us-east-1.docdb.amazonaws.com:27017
+          user: flow_capture
+          password: <secret>
+          database: shop
+          pollSchedule: 6h
+    bindings:
+      - resource: { database: shop, collection: orders, captureMode: Batch Incremental, cursorField: updatedAt, pollSchedule: 15m }
+        target: acmeCo/documentdb/orders
+
+      - resource: { database: shop, collection: countries, captureMode: Batch Snapshot, cursorField: _id }
+        target: acmeCo/documentdb/countries
+
+  acmeCo/documentdb/ssh-tunnel:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-amazon-documentdb:v3
+        config:
+          address: mongodb://acme.cluster-abc123.us-east-1.docdb.amazonaws.com:27017
+          user: flow_capture
+          password: <secret>
+          networkTunnel:
+            sshForwarding:
+              sshEndpoint: ssh://ec2-user@ec2-198-51-100-7.compute-1.amazonaws.com:22
+              privateKey: |
+                -----BEGIN RSA PRIVATE KEY-----
+                <private-key>
+                -----END RSA PRIVATE KEY-----
+    bindings:
+      - resource: { database: shop, collection: orders, captureMode: Batch Snapshot, cursorField: _id }
+        target: acmeCo/documentdb/orders

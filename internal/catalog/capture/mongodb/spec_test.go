@@ -1,19 +1,35 @@
 package mongodb
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/estuary/terraform-provider-estuary/internal/catalog/capture/sqlbatch"
 	"github.com/estuary/terraform-provider-estuary/internal/catalog/spectest"
 )
 
+// documentDBConfig is Config as the Amazon DocumentDB schema snapshot declares it. Its SSH tunnel has the two host key
+// settings of the batch SQL captures' tunnel, knownHosts and skipHostKeyVerification, which the spec doesn't map.
+type documentDBConfig struct {
+	Config        `yaml:",inline"`
+	NetworkTunnel *sqlbatch.NetworkTunnel `yaml:"networkTunnel,omitempty"`
+}
+
 func TestSpec(test *testing.T) {
-	spectest.RunCaptureSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName})
+	spectest.RunCaptureSuite[Spec](test, spectest.Connector{Image: Image, Name: ConnectorName}, spectest.Connector{Image: ImageAmazonDocumentDB, Name: ConnectorNameAmazonDocumentDB})
 }
 
 func TestSchemaConformance(test *testing.T) {
 	spectest.AssertConformsToSchema[Config, Resource](test)
+}
+
+// The Amazon DocumentDB snapshot is under testdata/documentdb, where the check finds it once the test runs there.
+func TestDocumentDBSchemaConformance(test *testing.T) {
+	test.Chdir(filepath.Join("testdata", "documentdb"))
+
+	spectest.AssertConformsToSchema[documentDBConfig, Resource](test)
 }
 
 func TestEnumTagsMatchLists(test *testing.T) {
@@ -63,6 +79,57 @@ func TestSampleVariants(test *testing.T) {
 
 			if (config.NetworkTunnel != nil) != expected.sshTunnel {
 				test.Errorf("networkTunnel = %+v, want present = %v", config.NetworkTunnel, expected.sshTunnel)
+			}
+		})
+	}
+}
+
+func TestSampleDocumentDB(test *testing.T) {
+	var specs map[string]Spec = spectest.DecodeCaptures[Spec](test, "testdata/documentdb.yaml")
+
+	expectations := map[string]struct {
+		sshTunnel bool
+		bindings  []Resource
+	}{
+		"acmeCo/documentdb/batch": {false, []Resource{
+			{Database: "shop", Collection: "orders", CaptureMode: CaptureModeBatchIncremental, CursorField: "updatedAt", PollSchedule: "15m"},
+			{Database: "shop", Collection: "countries", CaptureMode: CaptureModeBatchSnapshot, CursorField: "_id"},
+		}},
+		"acmeCo/documentdb/ssh-tunnel": {true, []Resource{
+			{Database: "shop", Collection: "orders", CaptureMode: CaptureModeBatchSnapshot, CursorField: "_id"},
+		}},
+	}
+
+	if len(specs) != len(expectations) {
+		test.Fatalf("got %d captures, want %d", len(specs), len(expectations))
+	}
+
+	for name, expected := range expectations {
+		test.Run(name, func(test *testing.T) {
+			spec, found := specs[name]
+
+			if !found {
+				test.Fatal("capture missing from sample")
+			}
+
+			var config Config = spec.Endpoint.Connector.Config
+
+			if spec.Endpoint.Connector.Image != ImageAmazonDocumentDB || !strings.Contains(config.Address, ".docdb.amazonaws.com:27017") {
+				test.Errorf("image = %q, address = %q, want the DocumentDB image and a cluster endpoint", spec.Endpoint.Connector.Image, config.Address)
+			}
+
+			if (config.NetworkTunnel != nil) != expected.sshTunnel {
+				test.Errorf("networkTunnel = %+v, want present = %v", config.NetworkTunnel, expected.sshTunnel)
+			}
+
+			var resources []Resource
+
+			for _, binding := range spec.Bindings {
+				resources = append(resources, binding.Resource)
+			}
+
+			if !slices.Equal(resources, expected.bindings) {
+				test.Errorf("resources = %+v, want %+v", resources, expected.bindings)
 			}
 		})
 	}

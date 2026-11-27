@@ -49,6 +49,7 @@ var resources []func() resource.Resource = []func() resource.Resource{
 	materializations3iceberg.New,
 	materializationsnowflake.New,
 	materializationwebhook.New,
+	sourcemongodb.NewDocumentDB,
 	sourceappleappstore.New,
 	sourcemysql.NewAurora,
 	sourcepostgres.NewAurora,
@@ -70,6 +71,7 @@ var resources []func() resource.Resource = []func() resource.Resource{
 
 // dataSources lists every supported connector data source, sorted by Terraform type name.
 var dataSources []func() datasource.DataSource = []func() datasource.DataSource{
+	sourcemongodb.NewDocumentDBDataSource,
 	sourceappleappstore.NewDataSource,
 	sourcemysql.NewAuroraDataSource,
 	sourcepostgres.NewAuroraDataSource,

@@ -76,6 +76,7 @@ Connectors configured the same way share one page, with examples and every attri
 | [MySQL](internal/resources/sourcemysql/README.md) | `estuary_source_mysql`, `estuary_source_aurora_mysql`, `estuary_source_rds_mysql` |
 | [PostgreSQL](internal/resources/sourcepostgres/README.md) | `estuary_source_postgres`, `estuary_source_aurora_postgres`, `estuary_source_rds_postgres` |
 | [Salesforce](internal/resources/sourcesalesforce/README.md) | `estuary_source_salesforce` |
+| [Stripe](internal/resources/sourcestripe/README.md) | `estuary_source_stripe` |
 | [Zendesk Support](internal/resources/sourcezendesksupport/README.md) | `estuary_source_zendesk_support` |
 
 ### Materializations

@@ -6,8 +6,13 @@ package native
 // Each connector lists the variants it offers.
 type CredentialsTitle string
 
-// CredentialsTitleOAuth is the variant holding the credentials of an OAuth app.
-const CredentialsTitleOAuth CredentialsTitle = "OAuth Credentials"
+const (
+	// CredentialsTitleOAuth is the variant holding the credentials of an OAuth app.
+	CredentialsTitleOAuth CredentialsTitle = "OAuth Credentials"
+
+	// CredentialsTitlePrivateApp is the variant holding an API key the user creates in the source.
+	CredentialsTitlePrivateApp CredentialsTitle = "Private App Credentials"
+)
 
 // OAuthClient is the OAuth app of a credentials variant. Both fields are optional, so an import can leave out the app
 // of a dashboard login, which is Estuary's.

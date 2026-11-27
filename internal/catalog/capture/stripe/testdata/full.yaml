@@ -1,0 +1,34 @@
+captures:
+  acmeCo/stripe/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-stripe-native:v1
+        config:
+          credentials:
+            credentials_title: Private App Credentials
+            access_token: <api-key>
+          start_date: "2024-01-01T00:00:00Z"
+          capture_connected_accounts: true
+          advanced:
+            api_version: "2024-06-20"
+            incremental_window_size: PT1H
+    bindings:
+      - resource:
+          name: Charges
+          interval: PT5M
+        target: acmeCo/stripe/Charges
+
+      - resource:
+          name: Accounts
+          interval: PT5M
+          schedule: "0 0 * * *"
+        target: acmeCo/stripe/Accounts
+        backfill: 3
+
+      - resource:
+          name: Customers
+        target: acmeCo/stripe/Customers
+        disable: true

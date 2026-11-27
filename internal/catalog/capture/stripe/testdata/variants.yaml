@@ -1,0 +1,23 @@
+captures:
+  acmeCo/stripe/api-key:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-stripe-native:v1
+        config:
+          credentials:
+            credentials_title: Private App Credentials
+            access_token: <api-key>
+    bindings:
+      - resource: { name: Charges, interval: PT5M }
+        target: acmeCo/stripe/Charges
+
+  acmeCo/stripe/imported:
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-stripe-native:v1
+        config:
+          credentials:
+            credentials_title: Private App Credentials
+    bindings:
+      - resource: { name: Accounts, interval: PT5M, schedule: "0 0 * * *" }
+        target: acmeCo/stripe/Accounts

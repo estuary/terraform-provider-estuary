@@ -1,0 +1,126 @@
+{
+  "endpoint": {
+    "$defs": {
+      "AccessToken": {
+        "properties": {
+          "access_token": {
+            "secret": true,
+            "title": "Access Token",
+            "type": "string"
+          },
+          "credentials_title": {
+            "const": "Private App Credentials",
+            "default": "Private App Credentials",
+            "title": "Credentials Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token"
+        ],
+        "title": "AccessToken",
+        "type": "object"
+      },
+      "Advanced": {
+        "properties": {
+          "api_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The Stripe API version to use for all requests, e.g. \"2024-06-20\". If left blank, the account's default API version is used. Streams that require a newer API version than the one in effect are disabled.",
+            "nonsensitive": true,
+            "title": "API Version"
+          },
+          "incremental_window_size": {
+            "description": "Maximum time window to process in a single incremental sweep. This bounds how much catch-up work is done at once and helps prevent the connector from falling behind when there are a large number of changes in a short time frame. Uses ISO 8601 duration format (e.g. PT1H for 1 hour, PT30M for 30 minutes).",
+            "format": "duration",
+            "title": "Max Incremental Window Size",
+            "type": "string"
+          }
+        },
+        "title": "Advanced",
+        "type": "object"
+      }
+    },
+    "properties": {
+      "advanced": {
+        "$ref": "#/$defs/Advanced",
+        "advanced": true,
+        "description": "Advanced settings for the connector.",
+        "title": "Advanced Config"
+      },
+      "capture_connected_accounts": {
+        "default": false,
+        "description": "Whether to capture data from connected accounts.",
+        "nonsensitive": true,
+        "title": "Capture Connected Accounts",
+        "type": "boolean"
+      },
+      "credentials": {
+        "$ref": "#/$defs/AccessToken",
+        "title": "API Key"
+      },
+      "start_date": {
+        "description": "UTC data and time in the format YYYY-MM-DDTHH:MM:SSZ. Any data generated before this date will not be replicated. If left blank, the start date will be set to 30 days before the present date. ",
+        "format": "date-time",
+        "title": "Start Date",
+        "type": "string"
+      }
+    },
+    "required": [
+      "credentials"
+    ],
+    "title": "EndpointConfig",
+    "type": "object"
+  },
+  "resource": {
+    "additionalProperties": false,
+    "properties": {
+      "_meta": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Meta"
+      },
+      "interval": {
+        "default": "PT0S",
+        "description": "Interval between updates for this resource",
+        "format": "duration",
+        "nonsensitive": true,
+        "title": "Interval",
+        "type": "string"
+      },
+      "name": {
+        "description": "Name of this resource",
+        "title": "Name",
+        "type": "string"
+      },
+      "schedule": {
+        "default": "",
+        "description": "Schedule to automatically rebackfill this binding. Accepts a cron expression.",
+        "nonsensitive": true,
+        "pattern": "^((?:[0-5]?\\d(?:-[0-5]?\\d)?|\\*(?:/[0-5]?\\d)?)(?:,(?:[0-5]?\\d(?:-[0-5]?\\d)?|\\*(?:/[0-5]?\\d)?))*)\\s+((?:[01]?\\d|2[0-3]|(?:[01]?\\d|2[0-3])-(?:[01]?\\d|2[0-3])|\\*(?:/[01]?\\d|/2[0-3])?)(?:,(?:[01]?\\d|2[0-3]|(?:[01]?\\d|2[0-3])-(?:[01]?\\d|2[0-3])|\\*(?:/[01]?\\d|/2[0-3])?))*)\\s+((?:0?[1-9]|[12]\\d|3[01]|(?:0?[1-9]|[12]\\d|3[01])-(?:0?[1-9]|[12]\\d|3[01])|\\*(?:/[0-9]|/1[0-9]|/2[0-9]|/3[01])?)(?:,(?:0?[1-9]|[12]\\d|3[01]|(?:0?[1-9]|[12]\\d|3[01])-(?:0?[1-9]|[12]\\d|3[01])|\\*(?:/[0-9]|/1[0-9]|/2[0-9]|/3[01])?))*)\\s+((?:[1-9]|1[0-2]|(?:[1-9]|1[0-2])-(?:[1-9]|1[0-2])|\\*(?:/[1-9]|/1[0-2])?)(?:,(?:[1-9]|1[0-2]|(?:[1-9]|1[0-2])-(?:[1-9]|1[0-2])|\\*(?:/[1-9]|/1[0-2])?))*)\\s+((?:[0-6]|(?:[0-6])-(?:[0-6])|\\*(?:/[0-6])?)(?:,(?:[0-6]|(?:[0-6])-(?:[0-6])|\\*(?:/[0-6])?))*)$|^$",
+        "title": "Schedule",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "title": "ResourceConfigWithSchedule",
+    "type": "object"
+  }
+}

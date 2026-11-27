@@ -1,0 +1,42 @@
+captures:
+  acmeCo/search-console/all-options:
+    autoDiscover:
+      addNewBindings: true
+      evolveIncompatibleCollections: true
+    endpoint:
+      connector:
+        image: ghcr.io/estuary/source-google-search-console:v2
+        config:
+          site_urls:
+            - https://www.acme.example/
+            - sc-domain:acme.example
+          start_date: "2024-01-01"
+          end_date: "2024-12-31"
+          custom_reports: '[{"name": "by_country_and_device", "dimensions": ["date", "country", "device"]}]'
+          credentials:
+            auth_type: Service
+            service_account_info: |
+              { "type": "service_account", "project_id": "acme-search", "private_key": "<private-key>" }
+            email: admin@acme.example
+    bindings:
+      - resource:
+          stream: search_analytics_by_date
+          syncMode: incremental
+          cursorField:
+            - date
+        target: acmeCo/search-console/search_analytics_by_date
+
+      - resource:
+          stream: by_country_and_device
+          syncMode: incremental
+          namespace: reports
+          cursorField:
+            - date
+        target: acmeCo/search-console/by_country_and_device
+        backfill: 1
+
+      - resource:
+          stream: sitemaps
+          syncMode: full_refresh
+        target: acmeCo/search-console/sitemaps
+        disable: true
